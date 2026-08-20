@@ -51,6 +51,8 @@ function rateLimit(ip, bucket, limit, windowMs) {
 }
 const RL_RULES = [
   { re: /^\/v1\/auth\/exchange$/, limit: 20, windowMs: 600_000 },      // 20 sign-ins / 10 min
+  { re: /^\/v1\/auth\/email\/request$/, limit: 5, windowMs: 600_000 }, // 5 codes / 10 min (email cost + abuse)
+  { re: /^\/v1\/auth\/email\/verify$/, limit: 20, windowMs: 600_000 },
   { re: /^\/v1\/generation-jobs$/, m: 'POST', limit: 40, windowMs: 600_000 },
   { re: /^\/v1\/purchases\/verify$/, limit: 30, windowMs: 600_000 },
   { re: /^\/v1\/assets\/upload-intents$/, limit: 60, windowMs: 600_000 },

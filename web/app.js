@@ -2,7 +2,7 @@
 // Onboarding → Discover → Exhibition → Styles → Preview settings → Progress → Result,
 // plus Projects, Profile, Paywall. Vanilla DOM, no build step.
 import { ensureSession, setToken, get, post, put, del, assetUrl, apiUrl, track } from './api.js';
-import { deviceId, getAuthConfig, nativeSignIn, nativePurchase, isNative, platform } from './native.js';
+import { deviceId, getAuthConfig, nativeSignIn, nativePurchase, isNative, platform, emailRequestCode, emailVerifyCode } from './native.js';
 
 // ---------- tiny DOM helper ----------
 function h(tag, attrs, ...children) {
@@ -764,18 +764,20 @@ function ProfileScreen() {
         const cfg = S.authConfig || {};
         const showGoogle = !signedIn && cfg.google?.enabled;
         const showApple = !signedIn && cfg.apple?.enabled && platform() === 'ios';
+        const showEmail = !signedIn && cfg.email?.enabled;
         return h('div', { style: { paddingBottom: '18px' } },
           h('div', { style: { display: 'flex', alignItems: 'center', gap: '14px' } },
             h('div', { style: { width: '54px', height: '54px', borderRadius: '999px', background: 'var(--ink)', color: 'var(--canvas)', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '600 22px var(--serif)' } }, (name[0] || 'G').toUpperCase()),
             h('div', null,
               h('div', { style: { font: '600 16px var(--sans)' } }, name),
               h('div', { style: { font: '400 12px var(--sans)', color: 'var(--ink-muted)' } },
-                signedIn ? 'Signed in — works follow your account' : 'Works are saved on this device'))),
+                signedIn ? '已登录 — 作品与权益跨设备同步' : '作品当前保存在本设备'))),
           (showGoogle || showApple) && h('div', { style: { display: 'flex', gap: '10px', paddingTop: '14px' } },
             showGoogle && h('button', { class: 'btn secondary small', style: { flex: 1 }, onClick: () => signIn('google') }, '使用 Google 登录'),
             showApple && h('button', { class: 'btn secondary small', style: { flex: 1 }, onClick: () => signIn('apple') }, '通过 Apple 登录')),
-          !signedIn && !showGoogle && !showApple && isNative() && h('div', { style: { font: '400 11.5px var(--sans)', color: 'var(--ink-muted)', paddingTop: '10px' } },
-            '第三方登录开通后，可跨设备同步你的作品与权益。'),
+          showEmail && EmailLoginBox(),
+          !signedIn && !showGoogle && !showApple && !showEmail && isNative() && h('div', { style: { font: '400 11.5px var(--sans)', color: 'var(--ink-muted)', paddingTop: '10px' } },
+            '登录开通后，可跨设备同步你的作品与权益。'),
         );
       })(),
       h('div', { class: 'panel', style: { padding: '16px' } },
@@ -972,13 +974,16 @@ async function bootApp() {
 bootApp();
 
 // ---------- sign-in ----------
+function afterSignIn(res) {
+  setToken(res.accessToken);
+  S.user = res.user;
+  localStorage.setItem('mf.userName', res.user.displayName || res.user.email || '');
+  localStorage.setItem('mf.signedIn', '1');
+}
 async function signIn(provider) {
   try {
     const res = await nativeSignIn(provider);
-    setToken(res.accessToken);
-    S.user = res.user;
-    localStorage.setItem('mf.userName', res.user.displayName || '');
-    localStorage.setItem('mf.signedIn', '1');
+    afterSignIn(res);
     await refreshEnt();
     await loadProfile();
     toast(`欢迎，${res.user.displayName || '创作者'}`);
@@ -986,4 +991,44 @@ async function signIn(provider) {
   } catch (e) {
     toast(e.userMessage || '登录失败，请重试');
   }
+}
+
+// Email verification-code login (inline in Profile).
+function EmailLoginBox() {
+  const st = S.emailLogin || (S.emailLogin = { stage: 'email', email: '', busy: false });
+  const input = (ph, val, oninput, extra) => h('input', {
+    type: extra?.type || 'text', inputmode: extra?.inputmode, placeholder: ph, value: val,
+    style: { width: '100%', padding: '11px 12px', border: '1px solid var(--line)', borderRadius: '10px', font: '15px var(--sans)', background: 'var(--surface)', marginBottom: '8px' },
+    onInput: (e) => oninput(e.target.value),
+  });
+  const wrap = (...kids) => h('div', { style: { paddingTop: '14px' } }, kids);
+  if (st.stage === 'email') {
+    return wrap(
+      input('输入邮箱登录', st.email, (v) => { st.email = v; }, { type: 'email', inputmode: 'email' }),
+      h('button', { class: 'btn', disabled: st.busy, onClick: async () => {
+        const email = st.email.trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('请输入有效的邮箱地址'); return; }
+        st.busy = true; render();
+        try { await emailRequestCode(email); st.stage = 'code'; st.code = ''; toast('验证码已发送到邮箱'); }
+        catch (e) { toast(e.code === 'PROVIDER_NOT_CONFIGURED' ? '邮箱登录暂未开通' : '发送失败，请稍后重试'); }
+        finally { st.busy = false; render(); }
+      } }, st.busy ? '发送中…' : '获取验证码'),
+    );
+  }
+  return wrap(
+    h('div', { style: { font: '400 12px var(--sans)', color: 'var(--ink-muted)', paddingBottom: '6px' } }, `验证码已发送至 ${st.email}`),
+    input('6 位验证码', st.code || '', (v) => { st.code = v; }, { inputmode: 'numeric' }),
+    h('button', { class: 'btn', disabled: st.busy, onClick: async () => {
+      st.busy = true; render();
+      try {
+        const res = await emailVerifyCode(st.email.trim(), (st.code || '').trim());
+        afterSignIn(res); S.emailLogin = null;
+        await refreshEnt(); await loadProfile();
+        toast('登录成功'); render(); renderOverlay();
+      } catch (e) {
+        toast(e.message || '验证码不正确'); st.busy = false; render();
+      }
+    } }, st.busy ? '验证中…' : '登录'),
+    h('button', { class: 'linkbtn', style: { width: '100%', textAlign: 'center', paddingTop: '10px' }, onClick: () => { S.emailLogin = { stage: 'email', email: st.email, busy: false }; render(); } }, '换个邮箱'),
+  );
 }

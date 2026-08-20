@@ -241,6 +241,15 @@ ensureColumn('products', 'apple_product_id', 'apple_product_id TEXT');
 // missing from the original CREATE — without this a real sign-in throws.
 ensureColumn('auth_identities', 'email_normalized', 'email_normalized TEXT');
 
+// Email verification codes for passwordless email login.
+db.exec(`CREATE TABLE IF NOT EXISTS email_codes (
+  email TEXT PRIMARY KEY,
+  code_hash TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+)`);
+
 export const uuid = () => randomUUID();
 export const now = () => new Date().toISOString();
 

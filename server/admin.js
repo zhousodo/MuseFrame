@@ -6,6 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { db, q, q1, run, ASSET_DIR } from './db.js';
 import { cfg, setCfg, listCfg, SECRET_KEYS } from './configStore.js';
+import { sendMail } from './email.js';
 
 export function registerAdminRoutes(route, deps) {
   const { ApiError } = deps;
@@ -88,7 +89,9 @@ export function registerAdminRoutes(route, deps) {
     return {
       jobs: q(`SELECT j.id, j.status, j.stage, j.error_code, j.attempt_count, j.cost_minor, j.created_at,
                       CAST((julianday(COALESCE(j.finished_at, j.updated_at))-julianday(j.created_at))*86400 AS INTEGER) AS seconds,
-                      substr(j.user_id,1,8) AS user, s.public_name AS style,
+                      substr(j.user_id,1,8) AS user,
+                      (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=j.user_id AND ai.email_normalized IS NOT NULL LIMIT 1) AS email,
+                      s.public_name AS style,
                       j.source_asset_id AS sourceAssetId,
                       (SELECT c.asset_id FROM generation_candidates c WHERE c.job_id=j.id LIMIT 1) AS candidateAssetId
                FROM generation_jobs j
@@ -112,9 +115,38 @@ export function registerAdminRoutes(route, deps) {
   route('GET', '/v1/admin/purchases', (ctx) => {
     requireAdmin(ctx);
     return {
-      purchases: q(`SELECT pu.amount_minor, pu.currency, pu.purchased_at, pu.status, p.display_name AS product, substr(pu.user_id,1,8) AS user
+      purchases: q(`SELECT pu.amount_minor, pu.currency, pu.purchased_at, pu.status, p.display_name AS product, substr(pu.user_id,1,8) AS user,
+                           (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=pu.user_id AND ai.email_normalized IS NOT NULL LIMIT 1) AS email
                     FROM purchases pu JOIN products p ON p.id=pu.product_id ORDER BY pu.purchased_at DESC LIMIT 100`),
     };
+  });
+
+  // 用户列表：id、邮箱、登录方式、身份、点数余额、生成数（spec §19 运营可见性）。
+  route('GET', '/v1/admin/users', (ctx) => {
+    requireAdmin(ctx);
+    const limit = Math.min(200, Number(ctx.url.searchParams.get('limit')) || 100);
+    return {
+      users: q(`SELECT substr(u.id,1,8) AS id, u.display_name AS displayName, u.is_guest AS isGuest, u.created_at AS createdAt,
+                       (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=u.id AND ai.email_normalized IS NOT NULL LIMIT 1) AS email,
+                       (SELECT group_concat(DISTINCT ai.provider) FROM auth_identities ai WHERE ai.user_id=u.id) AS providers,
+                       (SELECT COALESCE(SUM(l.units),0) FROM credit_ledger l WHERE l.user_id=u.id) AS units,
+                       (SELECT COUNT(*) FROM generation_jobs j WHERE j.user_id=u.id) AS jobs
+                FROM users u WHERE u.deleted_at IS NULL ORDER BY u.created_at DESC LIMIT ?`, limit),
+    };
+  });
+
+  // 发送测试邮件：验证 SMTP 配置是否可用（换服务商后一键自检）。
+  route('POST', '/v1/admin/email/test', async (ctx) => {
+    requireAdmin(ctx);
+    const to = String(ctx.body?.to || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw new ApiError(422, 'VALIDATION', '请输入有效的收件邮箱。');
+    try {
+      const r = await sendMail({ to, subject: 'MuseFrame 邮件配置测试', text: '这是一封来自 MuseFrame 管理后台的测试邮件，收到即说明 SMTP 配置正常。' });
+      return { ok: true, accepted: r.accepted };
+    } catch (e) {
+      if (e.code === 'SMTP_NOT_CONFIGURED') throw new ApiError(400, 'SMTP_NOT_CONFIGURED', 'SMTP 未配置。');
+      throw new ApiError(502, 'EMAIL_SEND_FAILED', '发送失败：' + e.message);
+    }
   });
 
   // Explicit, token-gated image access for spot checks (spec §19.2: not shown by default).

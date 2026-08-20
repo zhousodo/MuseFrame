@@ -10,6 +10,7 @@ import { verifyGoogleIdToken, verifyAppleIdToken, verifyPlayPurchase, verifyConf
 import { enqueueJob } from './jobs.js';
 import { decodeJpeg, analyzeImage, recommendStyles } from './engine/styleEngine.js';
 import { cfg } from './configStore.js';
+import { sendLoginCode, smtpConfigured } from './email.js';
 import { registerAdminRoutes } from './admin.js';
 
 const MAX_UPLOAD = 25 * 1024 * 1024;
@@ -159,18 +160,28 @@ route('POST', '/v1/auth/exchange', async (ctx) => {
     if (!verifyConfig.allowGuest) throw new ApiError(403, 'AUTH_REQUIRED', 'Sign in to continue.');
     userId = createUser(displayName || null, true, locale);
     maybeGrantFree(userId, true, deviceId);
-  } else if (provider === 'google' || provider === 'apple') {
+  } else if (provider === 'google' || provider === 'apple' || provider === 'dev') {
     // Cryptographically verify the ID token with the issuer's public keys.
     // A forged or replayed token cannot pass — identity is the provider's `sub`.
-    let claims;
-    try {
-      claims = provider === 'google' ? await verifyGoogleIdToken(identityToken) : await verifyAppleIdToken(identityToken);
-    } catch (e) {
-      if (e.code === 'PROVIDER_NOT_CONFIGURED') throw new ApiError(501, 'PROVIDER_NOT_CONFIGURED', `${provider} sign-in is not configured on the server.`);
-      throw new ApiError(401, 'AUTH_INVALID', 'Sign-in could not be verified.');
+    let claims, storedProvider = provider;
+    if (provider === 'dev') {
+      // DEV-ONLY test login (ALLOW_TEST_LOGIN=true, off in production). Exercises
+      // the email-capture / guest-merge / admin-display path without live OAuth.
+      if (process.env.ALLOW_TEST_LOGIN !== 'true') throw new ApiError(403, 'AUTH_INVALID', 'Test login disabled.');
+      const email = String(ctx.body.email || '').trim().toLowerCase();
+      if (!email) throw new ApiError(422, 'VALIDATION', 'email required for test login.');
+      claims = { subject: 'dev:' + createHash('sha256').update(email).digest('hex').slice(0, 16), email, name: ctx.body.displayName || email.split('@')[0] };
+      storedProvider = 'google'; // record under a real provider row so it lists normally
+    } else {
+      try {
+        claims = provider === 'google' ? await verifyGoogleIdToken(identityToken) : await verifyAppleIdToken(identityToken);
+      } catch (e) {
+        if (e.code === 'PROVIDER_NOT_CONFIGURED') throw new ApiError(501, 'PROVIDER_NOT_CONFIGURED', `${provider} sign-in is not configured on the server.`);
+        throw new ApiError(401, 'AUTH_INVALID', 'Sign-in could not be verified.');
+      }
     }
     const subject = claims.subject;
-    const existing = q1('SELECT user_id FROM auth_identities WHERE provider = ? AND provider_subject = ?', provider, subject);
+    const existing = q1('SELECT user_id FROM auth_identities WHERE provider = ? AND provider_subject = ?', storedProvider, subject);
     if (existing) {
       userId = existing.user_id;
     } else {
@@ -184,7 +195,7 @@ route('POST', '/v1/auth/exchange', async (ctx) => {
         userId = createUser(displayName || claims.name || claims.email || null, false, locale);
       }
       run('INSERT INTO auth_identities (id, user_id, provider, provider_subject, email_normalized, created_at) VALUES (?,?,?,?,?,?)',
-        uuid(), userId, provider, subject, claims.email || null, now());
+        uuid(), userId, storedProvider, subject, claims.email || null, now());
     }
     maybeGrantFree(userId, false, deviceId);
   } else {
@@ -194,6 +205,82 @@ route('POST', '/v1/auth/exchange', async (ctx) => {
   const token = createSession(userId, deviceId);
   const user = q1('SELECT id, is_guest, display_name FROM users WHERE id = ?', userId);
   return { accessToken: token, user: { id: user.id, isGuest: !!user.is_guest, displayName: user.display_name } };
+});
+
+// Resolve a verified provider identity to a user id, merging an in-flight guest
+// account (its projects + purchased units) into it. Shared by OAuth and email.
+function resolveIdentity({ provider, subject, email, name, ctxUser, locale, deviceId }) {
+  const existing = q1('SELECT user_id FROM auth_identities WHERE provider = ? AND provider_subject = ?', provider, subject);
+  let userId;
+  if (existing) {
+    userId = existing.user_id;
+    if (email) run('UPDATE auth_identities SET email_normalized = ? WHERE provider = ? AND provider_subject = ?', email, provider, subject);
+  } else {
+    const guest = ctxUser && ctxUser.is_guest ? ctxUser : null;
+    if (guest) {
+      userId = guest.id;
+      run('UPDATE users SET is_guest = 0, display_name = ?, updated_at = ? WHERE id = ?', name || email || null, now(), userId);
+    } else {
+      userId = createUser(name || email || null, false, locale);
+    }
+    run('INSERT INTO auth_identities (id, user_id, provider, provider_subject, email_normalized, created_at) VALUES (?,?,?,?,?,?)',
+      uuid(), userId, provider, subject, email || null, now());
+  }
+  maybeGrantFree(userId, false, deviceId);
+  return userId;
+}
+
+// ---- email verification-code login ----------------------------------------
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+route('POST', '/v1/auth/email/request', async (ctx) => {
+  if (!cfg('email_login_enabled')) throw new ApiError(501, 'PROVIDER_NOT_CONFIGURED', '邮箱登录未开启。');
+  const email = String(ctx.body?.email || '').trim().toLowerCase();
+  if (!EMAIL_RE.test(email)) throw new ApiError(422, 'VALIDATION', '请输入有效的邮箱地址。');
+  // 6-digit code, hashed at rest; one active code per email.
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const codeHash = createHash('sha256').update(email + ':' + code).digest('hex');
+  const t = now();
+  run(`INSERT INTO email_codes (email, code_hash, expires_at, attempts, created_at) VALUES (?,?,?,0,?)
+       ON CONFLICT(email) DO UPDATE SET code_hash=excluded.code_hash, expires_at=excluded.expires_at, attempts=0, created_at=excluded.created_at`,
+    email, codeHash, new Date(Date.now() + 10 * 60000).toISOString(), t);
+  const testMode = process.env.ALLOW_TEST_LOGIN === 'true';
+  try {
+    await sendLoginCode(email, code);
+  } catch (e) {
+    if (e.code === 'SMTP_NOT_CONFIGURED') throw new ApiError(501, 'PROVIDER_NOT_CONFIGURED', '邮件服务未配置。');
+    console.error('[email] send failed:', e.message);
+    // In test mode a delivery failure (e.g. unauthorized sending IP) must not
+    // block flow verification — the code is still returned below.
+    if (!testMode) throw new ApiError(502, 'EMAIL_SEND_FAILED', '验证码发送失败，请稍后重试。');
+  }
+  const body = { ok: true, expiresInSeconds: 600 };
+  if (testMode) body.devCode = code;
+  return body;
+});
+
+route('POST', '/v1/auth/email/verify', (ctx) => {
+  if (!cfg('email_login_enabled')) throw new ApiError(501, 'PROVIDER_NOT_CONFIGURED', '邮箱登录未开启。');
+  const email = String(ctx.body?.email || '').trim().toLowerCase();
+  const code = String(ctx.body?.code || '').trim();
+  const deviceId = ctx.body?.deviceId;
+  const rec = q1('SELECT * FROM email_codes WHERE email = ?', email);
+  if (!rec) throw new ApiError(422, 'CODE_INVALID', '请先获取验证码。');
+  if (new Date(rec.expires_at) < new Date()) throw new ApiError(422, 'CODE_EXPIRED', '验证码已过期，请重新获取。');
+  if (rec.attempts >= 5) throw new ApiError(429, 'CODE_LOCKED', '尝试次数过多，请重新获取验证码。');
+  const codeHash = createHash('sha256').update(email + ':' + code).digest('hex');
+  if (codeHash !== rec.code_hash) {
+    run('UPDATE email_codes SET attempts = attempts + 1 WHERE email = ?', email);
+    throw new ApiError(422, 'CODE_INVALID', '验证码不正确。');
+  }
+  run('DELETE FROM email_codes WHERE email = ?', email); // single-use
+  const userId = resolveIdentity({
+    provider: 'email', subject: 'email:' + email, email, name: email.split('@')[0],
+    ctxUser: ctx.user, locale: ctx.body?.locale, deviceId,
+  });
+  const token = createSession(userId, deviceId);
+  const user = q1('SELECT id, is_guest, display_name FROM users WHERE id = ?', userId);
+  return { accessToken: token, user: { id: user.id, isGuest: !!user.is_guest, displayName: user.display_name, email } };
 });
 
 // What sign-in / billing options this deployment supports. The packaged app
@@ -207,6 +294,7 @@ route('GET', '/v1/auth/config', () => ({
     webClientId: (process.env.GOOGLE_WEB_CLIENT_ID || (process.env.GOOGLE_CLIENT_IDS || '').split(',')[0] || '').trim() || null,
   },
   apple: { enabled: verifyConfig.appleSignIn },
+  email: { enabled: !!cfg('email_login_enabled') && smtpConfigured() },
   billing: {
     google: verifyConfig.playBilling,
     apple: false, // App Store Server API verification not yet configured

@@ -72,6 +72,14 @@ export async function nativeSignIn(provider) {
   });
 }
 
+// ---- email verification-code login ----
+export async function emailRequestCode(email) {
+  return await post('/v1/auth/email/request', { email });
+}
+export async function emailVerifyCode(email, code) {
+  return await post('/v1/auth/email/verify', { email, code, deviceId: await deviceId(), locale: navigator.language });
+}
+
 // ---- in-app purchases ----
 /**
  * Buy a product through the store. Returns the token/receipt payload to send

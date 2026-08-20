@@ -30,6 +30,13 @@ const REGISTRY = {
   google_client_ids: { type: 'string', envVar: 'GOOGLE_CLIENT_IDS', default: '', description: 'Google 登录 OAuth Client IDs(逗号分隔)' },
   apple_bundle_ids: { type: 'string', envVar: 'APPLE_BUNDLE_IDS', default: '', description: 'Sign in with Apple Bundle IDs(逗号分隔)' },
   google_package_name: { type: 'string', envVar: 'GOOGLE_PACKAGE_NAME', default: 'com.museframe.app', description: 'Google Play 包名' },
+  // 邮件（SMTP）— 支持邮箱验证码登录，可随时在后台切换服务商
+  smtp_host: { type: 'string', envVar: 'SMTP_HOST', default: '', description: 'SMTP 服务器地址' },
+  smtp_port: { type: 'number', envVar: 'SMTP_PORT', default: 587, description: 'SMTP 端口' },
+  smtp_user: { type: 'string', envVar: 'SMTP_USER', default: '', description: 'SMTP 登录用户名' },
+  smtp_pass: { type: 'string', envVar: 'SMTP_PASS', default: '', description: 'SMTP 登录密码/密钥', secret: true },
+  smtp_from: { type: 'string', envVar: 'SMTP_FROM', default: 'MuseFrame <no-reply@lenscript.cn>', description: '发件人地址' },
+  email_login_enabled: { type: 'boolean', envVar: 'EMAIL_LOGIN_ENABLED', default: false, description: '开启邮箱验证码登录' },
 };
 
 // In-memory cache of DB overrides, loaded once at boot and kept in sync by setCfg.
