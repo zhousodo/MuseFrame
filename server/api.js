@@ -9,7 +9,7 @@ import { releaseUnits } from './ledger.js';
 import { enqueueJob } from './jobs.js';
 import { decodeJpeg, analyzeImage, recommendStyles } from './engine/styleEngine.js';
 
-const FREE_UNITS = 1;
+const FREE_UNITS = Number(process.env.FREE_UNITS || 1);
 const MAX_UPLOAD = 25 * 1024 * 1024;
 
 export class ApiError extends Error {

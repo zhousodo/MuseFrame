@@ -531,8 +531,15 @@ export const PRODUCTS = [
 ];
 
 export function seedProducts({ q1, run, uuid }) {
+  // Upsert: edit PRODUCTS above and restart to change units/pricing in place.
+  // (Past purchases keep the units they were granted — the ledger is append-only.)
   for (const p of PRODUCTS) {
-    if (q1('SELECT id FROM products WHERE internal_key = ?', p.internalKey)) continue;
+    const existing = q1('SELECT id FROM products WHERE internal_key = ?', p.internalKey);
+    if (existing) {
+      run('UPDATE products SET display_name = ?, granted_units = ?, price_minor = ?, period = ?, feature_flags = ?, active = 1 WHERE id = ?',
+        p.displayName, p.grantedUnits, p.priceMinor, p.period, JSON.stringify(p.featureFlags), existing.id);
+      continue;
+    }
     run(`INSERT INTO products (id, internal_key, product_type, display_name, granted_units, price_minor, currency, period, feature_flags, active)
          VALUES (?,?,?,?,?,?,?,?,?,1)`,
       uuid(), p.internalKey, p.productType, p.displayName, p.grantedUnits, p.priceMinor, 'USD', p.period, JSON.stringify(p.featureFlags));

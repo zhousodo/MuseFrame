@@ -1,4 +1,34 @@
-# MuseFrame 后端部署（上架前必须完成）
+# MuseFrame 后端部署与运维
+
+## 日常运维速查
+
+### 更换模型接口 / API 密钥（不用重发 APK）
+
+客户端从不接触模型供应商和密钥（spec §9.3 适配器架构），一切都在服务端 `.env`：
+
+```bash
+ssh ubuntu@43.155.234.117
+vim /opt/museframe/.env        # 改 IMAGE_PROVIDER_BASE_URL / IMAGE_PROVIDER_API_KEY / IMAGE_PROVIDER_MODEL
+sudo systemctl restart museframe
+curl -s https://museframe.lenscript.cn/v1/health   # 确认服务回来了
+```
+
+生效范围：重启后的所有新生成任务。已排队任务会用旧配置跑完或失败重试。
+换供应商时若模型名不同，同步改 `IMAGE_PROVIDER_MODEL`（图生图）和
+`PROMPT_COMPILER_MODEL`（vision 编译，需支持 chat + 图片输入）。
+
+### 调整用户配额 / 定价
+
+| 想改什么 | 改哪里 | 生效方式 |
+|---|---|---|
+| 新用户免费张数 | `.env` 的 `FREE_UNITS`（默认 1）| 重启后对**新注册用户**生效 |
+| 订阅/点数包的张数与价格 | `server/styles.js` 的 `PRODUCTS` | 重启后自动 upsert 商品表 |
+| 每张消耗几 unit | `server/api.js` 生成路由的 `units` | 重启 |
+
+账本是 append-only 的：已购用户保留已发放的 units，改动只影响之后的发放。
+
+---
+
 
 APK 内置的 API 地址是 `http://43.156.121.139:8787`（见 `web/config.js`）。
 把本包部署到该服务器后，APK 即可在任何网络环境使用。
