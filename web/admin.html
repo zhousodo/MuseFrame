@@ -30,7 +30,11 @@
   .refresh { width:auto; margin:0; padding:7px 16px; font-size:12.5px; }
   #viewer { position:fixed; inset:0; background:rgba(23,23,23,.85); display:none; align-items:center; justify-content:center; cursor:zoom-out; z-index:50; }
   #viewer img { max-width:92vw; max-height:92vh; border-radius:8px; }
-  .wrap { overflow-x:auto; }
+  .wrap { overflow-x:auto; scrollbar-width:thin; scrollbar-color:var(--line) transparent; }
+  .wrap::-webkit-scrollbar { height:10px; }
+  .wrap::-webkit-scrollbar-track { background:transparent; }
+  .wrap::-webkit-scrollbar-thumb { background:var(--line); border-radius:6px; }
+  .wrap::-webkit-scrollbar-thumb:hover { background:var(--muted); }
 
   .topbar { position:sticky; top:0; background:var(--canvas); z-index:20; padding-top:20px; padding-bottom:2px; }
   .tabbar { display:flex; gap:0; margin-top:14px; border-bottom:1px solid var(--line); }
@@ -67,7 +71,7 @@
   .dbitem:hover { background:#F2F0E9; }
   .dbitem.active { background:rgba(28,73,216,.1); color:var(--cobalt); font-weight:600; }
   .dbmain { flex:1; min-width:0; }
-  td.trunc { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  td.trunc { max-width:420px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .pagination { display:flex; align-items:center; gap:10px; }
   .pagination button { margin:0; }
 
@@ -92,6 +96,7 @@
     </div>
     <div class="tabbar" id="tabbar">
       <button class="tabbtn" data-tab="overview">概览</button>
+      <button class="tabbtn" data-tab="users">用户</button>
       <button class="tabbtn" data-tab="stats">统计</button>
       <button class="tabbtn" data-tab="db">数据库</button>
       <button class="tabbtn" data-tab="config">配置</button>
@@ -106,6 +111,11 @@
     <div class="wrap"><table id="purchases"></table></div>
     <h2>用户反馈</h2>
     <div class="wrap"><table id="feedback"></table></div>
+  </section>
+
+  <section id="tab-users" class="tabpane" style="display:none">
+    <h2 style="margin-top:20px">用户列表</h2>
+    <div class="wrap"><table id="usersTable"></table></div>
   </section>
 
   <section id="tab-stats" class="tabpane" style="display:none">
@@ -127,6 +137,7 @@
   </section>
 
   <section id="tab-db" class="tabpane" style="display:none">
+    <div class="muted" style="font-size:11px">表格较宽，可左右滚动查看全部列 →</div>
     <div class="dblayout">
       <div class="dbsidebar" id="dbTableList">加载中…</div>
       <div class="dbmain" id="dbTableView"><p class="muted">请选择左侧的表</p></div>
@@ -145,6 +156,14 @@
     <div class="wrap" id="productsTable">加载中…</div>
     <h2>风格管理</h2>
     <div class="wrap" id="stylesTable">加载中…</div>
+    <h2>邮件测试</h2>
+    <div class="cfgrow">
+      <div class="cfgmeta"><b>发送测试邮件</b><div class="muted">修改 SMTP 相关配置后，用于验证邮件发送是否正常。</div></div>
+      <div class="cfgctrl">
+        <input id="testEmailTo" type="email" placeholder="收件邮箱地址" style="width:220px">
+        <button class="small" id="sendTestEmail">发送测试邮件</button>
+      </div>
+    </div>
   </section>
 </main>
 <div id="viewer" onclick="this.style.display='none'"><img id="viewerImg"></div>
@@ -152,8 +171,8 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let TOK = localStorage.getItem('mf.admin') || '';
-const TABS = ['overview','stats','db','config'];
-const tabState = { overview:false, stats:false, db:false, config:false };
+const TABS = ['overview','users','stats','db','config'];
+const tabState = { overview:false, users:false, stats:false, db:false, config:false };
 let statsDays = 30;
 const dbState = { tables:[], selected:null, offset:0, limit:50, total:0 };
 
@@ -248,18 +267,19 @@ async function loadOverview(){
 
   try {
     const jobs = (await api('/v1/admin/jobs')).jobs || [];
-    $('jobs').innerHTML = '<tr><th>原图</th><th>结果</th><th>风格</th><th>状态</th><th>耗时</th><th>尝试</th><th>用户</th><th>时间</th></tr>' +
+    $('jobs').innerHTML = '<tr><th>原图</th><th>结果</th><th>风格</th><th>邮箱</th><th>状态</th><th>耗时</th><th>尝试</th><th>用户</th><th>时间</th></tr>' +
       (jobs.length ? jobs.map(x=>`<tr><td>${thumb(x.sourceAssetId)}</td><td>${thumb(x.candidateAssetId)}</td><td>${escapeHtml(x.style||'')}</td>
+        <td class="muted">${escapeHtml(x.email||'—')}</td>
         <td class="${x.status==='succeeded'?'ok':x.status==='failed'?'bad':'muted'}">${escapeHtml(x.status)}${x.error_code?'<br><span class=muted>'+escapeHtml(x.error_code)+'</span>':''}</td>
-        <td>${x.seconds!=null?x.seconds+'s':'—'}</td><td>${x.attempt_count}</td><td class="muted">${escapeHtml(x.user||'')}</td><td class="muted">${ago(x.created_at)}</td></tr>`).join('') : '<tr><td colspan=8 class=muted>暂无任务</td></tr>');
+        <td>${x.seconds!=null?x.seconds+'s':'—'}</td><td>${x.attempt_count}</td><td class="muted">${escapeHtml(x.user||'')}</td><td class="muted">${ago(x.created_at)}</td></tr>`).join('') : '<tr><td colspan=9 class=muted>暂无任务</td></tr>');
   } catch(e) {
     if (e.status !== 401) $('jobs').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
   }
 
   try {
     const pu = (await api('/v1/admin/purchases')).purchases || [];
-    $('purchases').innerHTML = '<tr><th>商品</th><th>金额</th><th>状态</th><th>用户</th><th>时间</th></tr>' +
-      (pu.length ? pu.map(p=>`<tr><td>${escapeHtml(p.product)}</td><td>${fmt$(p.amount_minor)}</td><td>${escapeHtml(p.status)}</td><td class="muted">${escapeHtml(p.user||'')}</td><td class="muted">${ago(p.purchased_at)}</td></tr>`).join('') : '<tr><td colspan=5 class=muted>暂无购买</td></tr>');
+    $('purchases').innerHTML = '<tr><th>商品</th><th>邮箱</th><th>金额</th><th>状态</th><th>用户</th><th>时间</th></tr>' +
+      (pu.length ? pu.map(p=>`<tr><td>${escapeHtml(p.product)}</td><td class="muted">${escapeHtml(p.email||'—')}</td><td>${fmt$(p.amount_minor)}</td><td>${escapeHtml(p.status)}</td><td class="muted">${escapeHtml(p.user||'')}</td><td class="muted">${ago(p.purchased_at)}</td></tr>`).join('') : '<tr><td colspan=6 class=muted>暂无购买</td></tr>');
   } catch(e) {
     if (e.status !== 401) $('purchases').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
   }
@@ -270,6 +290,28 @@ async function loadOverview(){
       (fb.length ? fb.map(f=>{ let reasons=[]; try{ reasons = JSON.parse(f.reason_codes||'[]'); }catch(_){} return `<tr><td>${f.rating==='positive'?'👍':'👎'}</td><td>${escapeHtml(reasons.join(', ')||'—')}</td><td>${escapeHtml(f.style||'—')}</td><td class="muted">${ago(f.created_at)}</td></tr>`; }).join('') : '<tr><td colspan=4 class=muted>暂无反馈</td></tr>');
   } catch(e) {
     if (e.status !== 401) $('feedback').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
+  }
+}
+
+/* ---------- 用户 ---------- */
+async function loadUsers(){
+  $('usersTable').innerHTML = '加载中…';
+  try {
+    const users = (await api('/v1/admin/users')).users || [];
+    $('usersTable').innerHTML = '<tr><th>邮箱</th><th>显示名</th><th>登录方式</th><th>身份</th><th>点数</th><th>生成数</th><th>ID</th><th>注册时间</th></tr>' +
+      (users.length ? users.map(u=>`<tr>
+        <td>${u.email ? escapeHtml(u.email) : '<span class="muted">—</span>'}</td>
+        <td>${escapeHtml(u.displayName||'')}</td>
+        <td>${u.providers ? escapeHtml(u.providers) : '<span class="muted">—</span>'}</td>
+        <td>${u.isGuest ? '<span class="badge badge-gray">游客</span>' : '<span class="badge badge-cobalt">已登录</span>'}</td>
+        <td>${u.units ?? 0}</td>
+        <td>${u.jobs ?? 0}</td>
+        <td class="muted">${escapeHtml(u.id)}</td>
+        <td class="muted">${ago(u.createdAt)}</td>
+      </tr>`).join('') : '<tr><td colspan=8 class=muted>暂无用户</td></tr>');
+  } catch(e) {
+    if (e.status === 401) return;
+    $('usersTable').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
   }
 }
 
@@ -598,6 +640,17 @@ async function toggleStyleStatus(btn){
   }
 }
 
+async function sendTestEmail(){
+  const to = $('testEmailTo').value.trim();
+  if (!to) { toast('请输入收件邮箱地址', true); return; }
+  try {
+    const r = await api('/v1/admin/email/test', { method:'POST', body:{ to } });
+    toast('测试邮件已发送: ' + (r.accepted||[]).join(', '));
+  } catch(e) {
+    if (e.status !== 401) toast(e.message, true);
+  }
+}
+
 async function loadConfig(){
   $('configForm').innerHTML = '加载中…';
   $('productsTable').innerHTML = '加载中…';
@@ -620,6 +673,7 @@ async function loadConfig(){
 function currentTab(){ const h = (location.hash||'').replace('#',''); return TABS.includes(h) ? h : 'overview'; }
 function loadTabByName(name){
   if (name === 'overview') return loadOverview();
+  if (name === 'users') return loadUsers();
   if (name === 'stats') return loadStats();
   if (name === 'db') return loadDb();
   if (name === 'config') return loadConfig();
@@ -639,6 +693,7 @@ function bindStaticEvents(){
   window.addEventListener('hashchange', () => showTab(currentTab()));
   document.querySelectorAll('#rangebtns [data-days]').forEach(btn => btn.addEventListener('click', () => { statsDays = Number(btn.dataset.days); loadStats(); }));
   $('sqlRun').addEventListener('click', runSql);
+  $('sendTestEmail').addEventListener('click', sendTestEmail);
 }
 
 async function boot(){

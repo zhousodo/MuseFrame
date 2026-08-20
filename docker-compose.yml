@@ -1,0 +1,33 @@
+# MuseFrame — runs isolated from the LensCript stack on the same host.
+# Binds only to 127.0.0.1:8787 (Caddy fronts it); data + secrets are mounted,
+# never baked into the image. Memory-capped so it can't starve other services.
+name: museframe
+
+services:
+  api:
+    build: .
+    image: museframe-api:latest
+    container_name: museframe-api
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      # SQLite DB + uploaded/generated images persist across rebuilds.
+      - ./data:/app/data
+      # Style-card sample covers written by tools live under web/covers.
+      - ./web/covers:/app/web/covers
+      # Play service-account JSON, when configured, mounts read-only.
+      - ./secrets:/app/secrets:ro
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

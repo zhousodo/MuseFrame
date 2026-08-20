@@ -1,0 +1,10 @@
+node_modules
+data
+android
+.skills
+.git
+*.log
+secrets
+.env.prod
+icon-1024.png
+store-assets
