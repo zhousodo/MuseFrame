@@ -1,0 +1,34 @@
+# 个人博客（Hugo 静态站）与代码托管（Gitea）。独立文件，不改动既有站点。
+# nip.io 入口即时可用；lenscript.cn 子域在 Cloudflare 加 A 记录后自动生效。
+
+http://blog.43.155.234.117.nip.io {
+	root * /srv/apps/blog/public
+	encode zstd gzip
+	file_server
+}
+
+http://git.43.155.234.117.nip.io {
+	reverse_proxy 127.0.0.1:3000
+}
+
+http://blog.lenscript.cn {
+	root * /srv/apps/blog/public
+	encode zstd gzip
+	file_server
+}
+
+blog.lenscript.cn {
+	tls internal
+	root * /srv/apps/blog/public
+	encode zstd gzip
+	file_server
+}
+
+http://git.lenscript.cn {
+	reverse_proxy 127.0.0.1:3000
+}
+
+git.lenscript.cn {
+	tls internal
+	reverse_proxy 127.0.0.1:3000
+}

@@ -1,0 +1,25 @@
+# MuseFrame API（新增服务，独立文件，不改动 LensCript 任何配置）
+# 后端进程只监听 127.0.0.1:8787；ufw 不放行 8787，公网入口仅此文件。
+#
+# 注意：http://43.155.234.117 已被 lenscript.caddy 用作直连健康检查入口，
+# 不能重复声明。当前 APK 走 nip.io 魔法域名（自动解析到本机 IP，无需配 DNS）；
+# museframe.lenscript.cn 的 DNS 在 Cloudflare 添加后即自动生效（橙云 + Full，
+# 与主站一致 tls internal）。
+
+http://museframe.43.155.234.117.nip.io {
+	reverse_proxy 127.0.0.1:8787 {
+		transport http {
+			dial_timeout 3s
+			response_header_timeout 60s
+		}
+	}
+}
+
+http://museframe.lenscript.cn {
+	reverse_proxy 127.0.0.1:8787
+}
+
+museframe.lenscript.cn {
+	tls internal
+	reverse_proxy 127.0.0.1:8787
+}

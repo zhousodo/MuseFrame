@@ -1,0 +1,15 @@
+[Unit]
+Description=MuseFrame API
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/opt/museframe
+ExecStart=/usr/bin/node server/index.js
+Restart=always
+Environment=PORT=8787
+# 2GB box shared with production LensCript — cap memory so a runaway can't hurt it
+MemoryMax=600M
+
+[Install]
+WantedBy=multi-user.target

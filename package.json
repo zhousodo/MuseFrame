@@ -1,0 +1,24 @@
+{
+  "name": "museframe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MuseFrame — curated-gallery AI photo app (MVP, per implementation spec v1.0)",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "seed": "node server/db.js --reset",
+    "test": "node --test server/test"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "dependencies": {
+    "jpeg-js": "0.4.4",
+    "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0"
+  }
+}

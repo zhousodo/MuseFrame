@@ -1,0 +1,8 @@
+{
+  "appId": "com.museframe.app",
+  "appName": "MuseFrame",
+  "webDir": "web",
+  "android": {
+    "allowMixedContent": true
+  }
+}

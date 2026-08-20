@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MuseFrame</string>
+    <string name="title_activity_main">MuseFrame</string>
+    <string name="package_name">com.museframe.app</string>
+    <string name="custom_url_scheme">com.museframe.app</string>
+</resources>
