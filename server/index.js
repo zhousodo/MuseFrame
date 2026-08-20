@@ -37,9 +37,29 @@ function readBody(req, limit) {
   });
 }
 
+// Lightweight sliding-window rate limiter keyed by client IP + bucket. Blunts
+// automated abuse of account creation, generation and purchase endpoints.
+const rlHits = new Map();
+setInterval(() => { const now = Date.now(); for (const [k, v] of rlHits) if (v.reset < now) rlHits.delete(k); }, 60_000).unref?.();
+function rateLimit(ip, bucket, limit, windowMs) {
+  const key = `${bucket}:${ip}`;
+  const now = Date.now();
+  let e = rlHits.get(key);
+  if (!e || e.reset < now) { e = { count: 0, reset: now + windowMs }; rlHits.set(key, e); }
+  e.count++;
+  return e.count <= limit ? 0 : Math.ceil((e.reset - now) / 1000);
+}
+const RL_RULES = [
+  { re: /^\/v1\/auth\/exchange$/, limit: 20, windowMs: 600_000 },      // 20 sign-ins / 10 min
+  { re: /^\/v1\/generation-jobs$/, m: 'POST', limit: 40, windowMs: 600_000 },
+  { re: /^\/v1\/purchases\/verify$/, limit: 30, windowMs: 600_000 },
+  { re: /^\/v1\/assets\/upload-intents$/, limit: 60, windowMs: 600_000 },
+];
+
 const server = http.createServer(async (req, res) => {
   const requestId = `req_${uuid().slice(0, 8)}`;
   const url = new URL(req.url, `http://${req.headers.host}`);
+  const clientIp = (req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
   // CORS: the packaged mobile app calls from a WebView origin.
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
@@ -47,6 +67,11 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
   try {
     if (url.pathname.startsWith('/v1/')) {
+      for (const rule of RL_RULES) {
+        if ((rule.m && rule.m !== req.method) || !rule.re.test(url.pathname)) continue;
+        const retry = rateLimit(clientIp, rule.re.source, rule.limit, rule.windowMs);
+        if (retry) { res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': retry }); res.end(JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'Too many requests.', requestId, details: { retryAfterSeconds: retry } } })); return; }
+      }
       for (const r of routes) {
         if (r.method !== req.method) continue;
         const m = url.pathname.match(r.pattern);

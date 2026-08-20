@@ -6,6 +6,7 @@ import path from 'node:path';
 import { ASSET_DIR, q, q1, run, tx, uuid, now } from './db.js';
 import { grantUnits, reserveUnits, availableUnits } from './ledger.js';
 import { releaseUnits } from './ledger.js';
+import { verifyGoogleIdToken, verifyAppleIdToken, verifyPlayPurchase, verifyConfig } from './verify.js';
 import { enqueueJob } from './jobs.js';
 import { decodeJpeg, analyzeImage, recommendStyles } from './engine/styleEngine.js';
 
@@ -25,8 +26,18 @@ function createUser(displayName, isGuest, locale) {
   const id = uuid(), t = now();
   run('INSERT INTO users (id, is_guest, display_name, locale, created_at, updated_at) VALUES (?,?,?,?,?,?)',
     id, isGuest ? 1 : 0, displayName, locale || 'en', t, t);
-  grantUnits(id, FREE_UNITS, 'free_grant', id);
   return id;
+}
+
+// Free grant is deliberate and idempotent per identity — NOT handed out on every
+// createUser (which would let reinstall-farming mint infinite free generations).
+// When freeRequiresAuth is on, guests get nothing until they sign in with a
+// real provider identity; the grant is keyed to that identity so it fires once.
+function maybeGrantFree(userId, isGuest) {
+  if (FREE_UNITS <= 0) return;
+  if (isGuest && verifyConfig.freeRequiresAuth) return;
+  const already = q1(`SELECT id FROM credit_ledger WHERE user_id = ? AND reference_key = ?`, userId, `grant:free_grant:${userId}`);
+  if (!already) grantUnits(userId, FREE_UNITS, 'free_grant', userId);
 }
 
 function createSession(userId, deviceId) {
@@ -135,22 +146,46 @@ function runAnalysis(assetId) {
 export const routes = [];
 const route = (method, pattern, handler) => routes.push({ method, pattern: new RegExp(`^${pattern}$`), handler });
 
-route('POST', '/v1/auth/exchange', (ctx) => {
-  const { provider, deviceId, locale, displayName } = ctx.body || {};
+route('POST', '/v1/auth/exchange', async (ctx) => {
+  const { provider, deviceId, locale, displayName, identityToken } = ctx.body || {};
   let userId;
+
   if (provider === 'guest' || !provider) {
+    if (!verifyConfig.allowGuest) throw new ApiError(403, 'AUTH_REQUIRED', 'Sign in to continue.');
     userId = createUser(displayName || null, true, locale);
-  } else {
-    // Fake provider adapter for dev (spec PR-004): subject derived from token.
-    const subject = createHash('sha256').update(String(ctx.body.identityToken || deviceId || 'anon')).digest('hex').slice(0, 24);
-    const existing = q1('SELECT user_id FROM auth_identities WHERE provider = ? AND provider_subject = ?', provider, subject);
-    if (existing) userId = existing.user_id;
-    else {
-      userId = createUser(displayName || (provider === 'apple' ? 'Apple user' : 'Google user'), false, locale);
-      run('INSERT INTO auth_identities (id, user_id, provider, provider_subject, created_at) VALUES (?,?,?,?,?)',
-        uuid(), userId, provider, subject, now());
+    maybeGrantFree(userId, true);
+  } else if (provider === 'google' || provider === 'apple') {
+    // Cryptographically verify the ID token with the issuer's public keys.
+    // A forged or replayed token cannot pass — identity is the provider's `sub`.
+    let claims;
+    try {
+      claims = provider === 'google' ? await verifyGoogleIdToken(identityToken) : await verifyAppleIdToken(identityToken);
+    } catch (e) {
+      if (e.code === 'PROVIDER_NOT_CONFIGURED') throw new ApiError(501, 'PROVIDER_NOT_CONFIGURED', `${provider} sign-in is not configured on the server.`);
+      throw new ApiError(401, 'AUTH_INVALID', 'Sign-in could not be verified.');
     }
+    const subject = claims.subject;
+    const existing = q1('SELECT user_id FROM auth_identities WHERE provider = ? AND provider_subject = ?', provider, subject);
+    if (existing) {
+      userId = existing.user_id;
+    } else {
+      // Merge an in-flight guest session into the new real account (spec §10.2):
+      // its projects and any purchased units follow the user, never a free grant.
+      const guest = ctx.user && ctx.user.is_guest ? ctx.user : null;
+      if (guest) {
+        userId = guest.id;
+        run('UPDATE users SET is_guest = 0, display_name = ?, updated_at = ? WHERE id = ?', displayName || claims.name || claims.email || null, now(), userId);
+      } else {
+        userId = createUser(displayName || claims.name || claims.email || null, false, locale);
+      }
+      run('INSERT INTO auth_identities (id, user_id, provider, provider_subject, email_normalized, created_at) VALUES (?,?,?,?,?,?)',
+        uuid(), userId, provider, subject, claims.email || null, now());
+    }
+    maybeGrantFree(userId, false);
+  } else {
+    throw new ApiError(422, 'VALIDATION', 'Unknown provider.');
   }
+
   const token = createSession(userId, deviceId);
   const user = q1('SELECT id, is_guest, display_name FROM users WHERE id = ?', userId);
   return { accessToken: token, user: { id: user.id, isGuest: !!user.is_guest, displayName: user.display_name } };
@@ -443,23 +478,58 @@ route('GET', '/v1/products', () => ({
   })),
 }));
 
-// Mock purchase verification (spec §10.10 shape; web platform stands in for stores).
-route('POST', '/v1/purchases/verify', (ctx) => {
+// Purchase verification (spec §10.10). Entitlements are granted ONLY after the
+// platform's own signed record confirms the purchase — the client's claim of
+// "I bought Creator" is never sufficient. Server is the source of truth.
+route('POST', '/v1/purchases/verify', async (ctx) => {
   const user = requireUser(ctx);
-  const { platform = 'web', productKey, transactionId } = ctx.body || {};
+  const { productKey, purchaseToken, transactionId } = ctx.body || {};
+  const platform = ctx.body?.platform || 'web';
   const product = q1('SELECT * FROM products WHERE internal_key = ? AND active = 1', productKey);
   if (!product) throw new ApiError(404, 'NOT_FOUND', 'Unknown product.');
-  const txId = transactionId || `mock_${uuid()}`;
-  const existing = q1('SELECT * FROM purchases WHERE platform = ? AND external_transaction_id = ?', platform, txId);
+
+  // The Play/App Store product ID actually purchased (falls back to internalKey).
+  const storeProductId = platform === 'apple'
+    ? product.internal_key // wire apple_product_id column when store IDs differ
+    : product.internal_key;
+
+  let verified = false, expiresAt = null, externalTxId = transactionId || purchaseToken;
+  if (platform === 'google') {
+    if (!verifyConfig.playBilling) throw new ApiError(501, 'PROVIDER_NOT_CONFIGURED', 'Google Play verification is not configured on the server.');
+    if (!purchaseToken) throw new ApiError(422, 'VALIDATION', 'purchaseToken is required.');
+    let r;
+    try {
+      r = await verifyPlayPurchase({ productId: storeProductId, purchaseToken, kind: product.product_type === 'subscription' ? 'subscription' : 'product' });
+    } catch (e) {
+      if (e.code === 'PROVIDER_NOT_CONFIGURED') throw new ApiError(501, e.code, e.message);
+      throw new ApiError(402, 'PURCHASE_INVALID', 'This purchase could not be verified.');
+    }
+    if (!r.valid) throw new ApiError(402, 'PURCHASE_INVALID', 'This purchase is not active.');
+    verified = true; expiresAt = r.expiresAt;
+    externalTxId = purchaseToken; // Play purchase tokens are globally unique
+  } else if (platform === 'apple') {
+    // App Store Server API verification plugs in here (needs the .p8 signing key).
+    throw new ApiError(501, 'PROVIDER_NOT_CONFIGURED', 'App Store verification is not configured on the server.');
+  } else if (verifyConfig.allowMockPurchases) {
+    // DEV ONLY — never enabled in production (ALLOW_MOCK_PURCHASES=true required).
+    verified = true;
+    externalTxId = transactionId || `mock_${uuid()}`;
+    expiresAt = product.period ? new Date(Date.now() + (product.period === 'month' ? 30 : 365) * 86400000).toISOString() : null;
+  } else {
+    throw new ApiError(422, 'VALIDATION', 'Unsupported platform for verification.');
+  }
+  if (!verified) throw new ApiError(402, 'PURCHASE_INVALID', 'Purchase not verified.');
+
+  // Idempotent on the external transaction — replays never double-grant.
+  const existing = q1('SELECT * FROM purchases WHERE platform = ? AND external_transaction_id = ?', platform, externalTxId);
   if (existing) return { purchaseId: existing.id, status: existing.status, entitlements: entitlements(user.id) };
+
   const purchaseId = uuid(), t = now();
-  const expires = product.period
-    ? new Date(Date.now() + (product.period === 'month' ? 30 : 365) * 86400000).toISOString()
-    : null;
+  const expires = expiresAt || (product.period ? new Date(Date.now() + (product.period === 'month' ? 30 : 365) * 86400000).toISOString() : null);
   tx(() => {
     run(`INSERT INTO purchases (id, user_id, product_id, platform, external_transaction_id, status, amount_minor, currency, purchased_at, expires_at, created_at)
          VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-      purchaseId, user.id, product.id, platform, txId, 'verified', product.price_minor, product.currency, t, expires, t);
+      purchaseId, user.id, product.id, platform, externalTxId, 'verified', product.price_minor, product.currency, t, expires, t);
   });
   const unitExpiry = product.product_type === 'pack' ? new Date(Date.now() + 90 * 86400000).toISOString() : expires;
   grantUnits(user.id, product.granted_units, 'purchase', purchaseId, unitExpiry);

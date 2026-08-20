@@ -8,3 +8,4 @@ server.log
 *.log
 .skills/
 android/keystore.properties
+.env.prod
