@@ -5,8 +5,7 @@
 // call on the same provider compiles the final image-edit instruction.
 // Falls back to the static promptAssembly when the call fails.
 import { remoteConfig } from './remoteAdapter.js';
-
-const COMPILER_MODEL = process.env.PROMPT_COMPILER_MODEL || 'gpt-5.4-mini';
+import { cfg } from '../configStore.js';
 
 // Condensed compiler profiles, adapted from the MIT-licensed skills'
 // style-system + prompt-compiler references (reworded for MuseFrame).
@@ -91,7 +90,7 @@ export async function compileInstruction({ spec, controls, subjectType, photoFac
       method: 'POST',
       headers: { Authorization: `Bearer ${remoteConfig.apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: COMPILER_MODEL,
+        model: cfg('prompt_compiler_model'),
         messages: [
           { role: 'system', content: profile },
           { role: 'user', content },

@@ -9,8 +9,9 @@ import { releaseUnits } from './ledger.js';
 import { verifyGoogleIdToken, verifyAppleIdToken, verifyPlayPurchase, verifyConfig } from './verify.js';
 import { enqueueJob } from './jobs.js';
 import { decodeJpeg, analyzeImage, recommendStyles } from './engine/styleEngine.js';
+import { cfg } from './configStore.js';
+import { registerAdminRoutes } from './admin.js';
 
-const FREE_UNITS = Number(process.env.FREE_UNITS || 1);
 const MAX_UPLOAD = 25 * 1024 * 1024;
 
 export class ApiError extends Error {
@@ -35,12 +36,13 @@ function createUser(displayName, isGuest, locale) {
 // The lookup is GLOBAL (across users): a device or identity that has ever
 // claimed the free image can never mint another one via a fresh account.
 function maybeGrantFree(userId, isGuest, deviceId) {
-  if (FREE_UNITS <= 0) return;
+  const freeUnits = cfg('free_units');
+  if (freeUnits <= 0) return;
   if (isGuest && verifyConfig.freeRequiresAuth) return;
   const deviceHash = deviceId ? createHash('sha256').update(String(deviceId)).digest('hex').slice(0, 24) : null;
   const dedupeId = isGuest ? (deviceHash || userId) : userId;
   const already = q1(`SELECT id FROM credit_ledger WHERE reference_key = ? LIMIT 1`, `grant:free_grant:${dedupeId}`);
-  if (!already) grantUnits(userId, FREE_UNITS, 'free_grant', dedupeId);
+  if (!already) grantUnits(userId, freeUnits, 'free_grant', dedupeId);
 }
 
 function createSession(userId, deviceId) {
@@ -117,7 +119,7 @@ function entitlements(userId) {
   return {
     plan,
     availableUnits: availableUnits(userId),
-    freeCompletedImagesRemaining: plan === 'free' ? Math.max(0, FREE_UNITS - savedFree) : 0,
+    freeCompletedImagesRemaining: plan === 'free' ? Math.max(0, cfg('free_units') - savedFree) : 0,
     features: { premiumStyles: isCreator, priorityQueue: isCreator, highResolution: isCreator },
   };
 }
@@ -579,82 +581,8 @@ route('POST', '/v1/events', (ctx) => {
 route('GET', '/v1/health', () => ({ ok: true, service: 'museframe-api', time: now() }));
 
 // ---- Admin back office (spec §19) --------------------------------------
-// Token-gated read-only visibility: users, jobs, revenue, feedback. Image
-// bytes are served only through the explicitly token-gated asset route.
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
-function requireAdmin(ctx) {
-  const t = ctx.req.headers['x-admin-token'] || ctx.url.searchParams.get('admin_token');
-  if (!ADMIN_TOKEN || t !== ADMIN_TOKEN) throw new ApiError(401, 'AUTH_REQUIRED', 'Admin token required.');
-}
-
-route('GET', '/v1/admin/overview', (ctx) => {
-  requireAdmin(ctx);
-  const jobsByStatus = {};
-  for (const r of q('SELECT status, COUNT(*) AS n FROM generation_jobs GROUP BY status')) jobsByStatus[r.status] = r.n;
-  const dur = q1(`SELECT COUNT(*) AS n, AVG((julianday(finished_at)-julianday(created_at))*86400) AS avg_s
-                  FROM generation_jobs WHERE status='succeeded' AND finished_at IS NOT NULL`);
-  return {
-    users: q1('SELECT COUNT(*) AS n FROM users').n,
-    usersToday: q1(`SELECT COUNT(*) AS n FROM users WHERE created_at >= datetime('now','-1 day')`).n,
-    jobsByStatus,
-    succeededAvgSeconds: dur.avg_s ? Math.round(dur.avg_s) : null,
-    unitsGranted: q1(`SELECT COALESCE(SUM(units),0) AS n FROM credit_ledger WHERE entry_type='grant'`).n,
-    unitsConsumed: q1(`SELECT COUNT(*) AS n FROM credit_ledger WHERE entry_type='commit'`).n,
-    revenueMinor: q1(`SELECT COALESCE(SUM(amount_minor),0) AS n FROM purchases WHERE status='verified'`).n,
-    purchases: q(`SELECT p.display_name AS product, COUNT(*) AS n FROM purchases pu JOIN products p ON p.id=pu.product_id WHERE pu.status='verified' GROUP BY p.id`),
-    feedback: {
-      positive: q1(`SELECT COUNT(*) AS n FROM user_feedback WHERE rating='positive'`).n,
-      negative: q1(`SELECT COUNT(*) AS n FROM user_feedback WHERE rating='negative'`).n,
-    },
-    topStyles: q(`SELECT s.public_name AS name, COUNT(*) AS jobs FROM generation_jobs j
-                  JOIN style_versions v ON v.id=j.style_version_id JOIN styles s ON s.id=v.style_id
-                  GROUP BY s.id ORDER BY jobs DESC LIMIT 8`),
-  };
-});
-
-route('GET', '/v1/admin/jobs', (ctx) => {
-  requireAdmin(ctx);
-  const limit = Math.min(200, Number(ctx.url.searchParams.get('limit')) || 60);
-  return {
-    jobs: q(`SELECT j.id, j.status, j.stage, j.error_code, j.attempt_count, j.cost_minor, j.created_at,
-                    CAST((julianday(COALESCE(j.finished_at, j.updated_at))-julianday(j.created_at))*86400 AS INTEGER) AS seconds,
-                    substr(j.user_id,1,8) AS user, s.public_name AS style,
-                    j.source_asset_id AS sourceAssetId,
-                    (SELECT c.asset_id FROM generation_candidates c WHERE c.job_id=j.id LIMIT 1) AS candidateAssetId
-             FROM generation_jobs j
-             JOIN style_versions v ON v.id=j.style_version_id JOIN styles s ON s.id=v.style_id
-             ORDER BY j.created_at DESC LIMIT ?`, limit),
-  };
-});
-
-route('GET', '/v1/admin/feedback', (ctx) => {
-  requireAdmin(ctx);
-  return {
-    feedback: q(`SELECT f.rating, f.reason_codes, f.created_at, s.public_name AS style
-                 FROM user_feedback f
-                 LEFT JOIN generation_candidates c ON c.id=f.candidate_id
-                 LEFT JOIN generation_jobs j ON j.id=c.job_id
-                 LEFT JOIN style_versions v ON v.id=j.style_version_id LEFT JOIN styles s ON s.id=v.style_id
-                 ORDER BY f.created_at DESC LIMIT 100`),
-  };
-});
-
-route('GET', '/v1/admin/purchases', (ctx) => {
-  requireAdmin(ctx);
-  return {
-    purchases: q(`SELECT pu.amount_minor, pu.currency, pu.purchased_at, pu.status, p.display_name AS product, substr(pu.user_id,1,8) AS user
-                  FROM purchases pu JOIN products p ON p.id=pu.product_id ORDER BY pu.purchased_at DESC LIMIT 100`),
-  };
-});
-
-// Explicit, token-gated image access for spot checks (spec §19.2: not shown by default).
-route('GET', '/v1/admin/assets/([\\w-]+)/file', (ctx) => {
-  requireAdmin(ctx);
-  const asset = q1('SELECT * FROM assets WHERE id = ?', ctx.params[0]);
-  if (!asset) throw new ApiError(404, 'NOT_FOUND', 'Unknown asset.');
-  const file = path.join(ASSET_DIR, asset.storage_key);
-  if (!existsSync(file)) throw new ApiError(404, 'NOT_FOUND', 'File missing.');
-  ctx.res.writeHead(200, { 'Content-Type': asset.content_type, 'Cache-Control': 'private, max-age=300' });
-  ctx.res.end(readFileSync(file));
-  return null;
-});
+// Route definitions live in admin.js; registered here so they share this
+// module's `routes` array. `route` and `ApiError` are passed in explicitly
+// (rather than imported by admin.js) so there is no import cycle between the
+// two modules.
+registerAdminRoutes(route, { ApiError });

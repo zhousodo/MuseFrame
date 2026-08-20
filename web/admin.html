@@ -8,9 +8,9 @@
   :root { --canvas:#F7F5EF; --ink:#171717; --muted:#6E6B66; --line:#D9D5CC; --cobalt:#1C49D8; --ok:#217A54; --bad:#B42318; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--canvas); color:var(--ink); font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif; }
-  main { max-width:1080px; margin:0 auto; padding:32px 20px 80px; }
+  main { max-width:1080px; margin:0 auto; padding:0 20px 80px; }
   h1 { font-family:Georgia,"Songti SC",serif; font-size:28px; margin:0 0 4px; }
-  .sub { color:var(--muted); font-size:12px; margin-bottom:24px; }
+  .sub { color:var(--muted); font-size:12px; margin-bottom:0; }
   h2 { font-family:Georgia,serif; font-size:18px; margin:32px 0 10px; }
   .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; }
   .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
@@ -23,83 +23,636 @@
   .ok { color:var(--ok); } .bad { color:var(--bad); } .muted { color:var(--muted); }
   img.thumb { width:36px; height:45px; object-fit:cover; border-radius:6px; border:1px solid var(--line); cursor:zoom-in; background:#eee; }
   #login { max-width:360px; margin:120px auto; text-align:center; }
-  input { width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:10px; font-size:14px; background:#fff; }
+  input, select { width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:10px; font-size:14px; background:#fff; font-family:inherit; }
+  textarea { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:10px; font:12.5px/1.5 ui-monospace,Consolas,monospace; resize:vertical; background:#fff; }
   button { margin-top:10px; width:100%; padding:11px; border:none; border-radius:10px; background:var(--cobalt); color:#fff; font-size:14px; font-weight:600; cursor:pointer; }
-  .bar { display:flex; justify-content:space-between; align-items:center; }
+  .bar { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
   .refresh { width:auto; margin:0; padding:7px 16px; font-size:12.5px; }
   #viewer { position:fixed; inset:0; background:rgba(23,23,23,.85); display:none; align-items:center; justify-content:center; cursor:zoom-out; z-index:50; }
   #viewer img { max-width:92vw; max-height:92vh; border-radius:8px; }
   .wrap { overflow-x:auto; }
+
+  .topbar { position:sticky; top:0; background:var(--canvas); z-index:20; padding-top:20px; padding-bottom:2px; }
+  .tabbar { display:flex; gap:0; margin-top:14px; border-bottom:1px solid var(--line); }
+  button.tabbtn { width:auto; background:none; color:var(--muted); border:none; border-bottom:2px solid transparent; border-radius:0; padding:9px 4px; margin:0 16px 0 0; font-size:13.5px; font-weight:600; cursor:pointer; }
+  button.tabbtn.active { color:var(--cobalt); border-bottom-color:var(--cobalt); }
+  .tabpane { padding-top:8px; }
+
+  button.small { width:auto; margin:0; padding:6px 12px; font-size:12px; border-radius:8px; }
+  button.ghost { background:#fff; color:var(--ink); border:1px solid var(--line); }
+  button.ghost:disabled, button.small:disabled { opacity:.4; cursor:not-allowed; }
+  .rangebtns { display:flex; gap:6px; }
+  .rangebtns button.active { background:var(--cobalt); color:#fff; border-color:var(--cobalt); }
+
+  .badge { display:inline-block; font-size:10px; padding:2px 7px; border-radius:20px; margin-left:6px; font-weight:600; vertical-align:middle; white-space:nowrap; }
+  .badge-cobalt { background:rgba(28,73,216,.12); color:var(--cobalt); }
+  .badge-gray { background:#EFEDE6; color:var(--muted); }
+  .badge-light { background:#F7F5EF; color:var(--muted); border:1px solid var(--line); }
+  .badge-warn { background:rgba(180,35,24,.1); color:var(--bad); }
+
+  .cfgrow { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:8px; }
+  .cfgmeta { flex:1; min-width:0; }
+  .cfgmeta b { font-family:Georgia,serif; font-size:14px; }
+  .cfgmeta .muted { font-size:12px; margin-top:2px; }
+  .cfgctrl { display:flex; align-items:center; gap:6px; flex-shrink:0; flex-wrap:wrap; justify-content:flex-end; }
+  .cfgctrl input, .cfgctrl select { width:180px; padding:7px 9px; font-size:13px; margin:0; }
+  .cfgctrl button { margin:0; }
+
+  .legend { display:flex; gap:14px; font-size:11px; color:var(--muted); margin-bottom:2px; }
+  .legend i { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; vertical-align:middle; }
+
+  .dblayout { display:flex; gap:16px; align-items:flex-start; }
+  .dbsidebar { width:220px; flex-shrink:0; background:#fff; border:1px solid var(--line); border-radius:12px; padding:6px; max-height:560px; overflow:auto; }
+  .dbitem { display:flex; justify-content:space-between; gap:8px; padding:8px 10px; border-radius:8px; cursor:pointer; font-size:12.5px; }
+  .dbitem:hover { background:#F2F0E9; }
+  .dbitem.active { background:rgba(28,73,216,.1); color:var(--cobalt); font-weight:600; }
+  .dbmain { flex:1; min-width:0; }
+  td.trunc { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pagination { display:flex; align-items:center; gap:10px; }
+  .pagination button { margin:0; }
+
+  #toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--ink); color:#fff; padding:10px 18px; border-radius:10px; font-size:13px; opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; z-index:100; }
+  #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+  #toast.bad { background:var(--bad); }
 </style>
 </head>
 <body>
 <div id="login">
   <h1>MuseFrame 管理后台</h1>
   <p class="sub">输入管理令牌（服务器 .env 中的 ADMIN_TOKEN）</p>
-  <input id="tok" type="password" placeholder="Admin token">
+  <input id="tok" type="password" placeholder="Admin token" onkeydown="if(event.key==='Enter') saveTok()">
   <button onclick="saveTok()">进入</button>
   <p id="loginErr" class="bad"></p>
 </div>
 <main id="app" style="display:none">
-  <div class="bar">
-    <div><h1>MuseFrame 管理后台</h1><div class="sub" id="stamp"></div></div>
-    <button class="refresh" onclick="loadAll()">刷新</button>
+  <div class="topbar">
+    <div class="bar">
+      <div><h1>MuseFrame 管理后台</h1><div class="sub" id="stamp"></div></div>
+      <button class="refresh" onclick="loadCurrentTab()">刷新</button>
+    </div>
+    <div class="tabbar" id="tabbar">
+      <button class="tabbtn" data-tab="overview">概览</button>
+      <button class="tabbtn" data-tab="stats">统计</button>
+      <button class="tabbtn" data-tab="db">数据库</button>
+      <button class="tabbtn" data-tab="config">配置</button>
+    </div>
   </div>
-  <div class="cards" id="cards"></div>
-  <h2>生成任务（最近 60 条）</h2>
-  <div class="wrap"><table id="jobs"></table></div>
-  <h2>购买记录</h2>
-  <div class="wrap"><table id="purchases"></table></div>
-  <h2>用户反馈</h2>
-  <div class="wrap"><table id="feedback"></table></div>
+
+  <section id="tab-overview" class="tabpane" style="display:none">
+    <div class="cards" id="cards">加载中…</div>
+    <h2>生成任务（最近 60 条）</h2>
+    <div class="wrap"><table id="jobs"></table></div>
+    <h2>购买记录</h2>
+    <div class="wrap"><table id="purchases"></table></div>
+    <h2>用户反馈</h2>
+    <div class="wrap"><table id="feedback"></table></div>
+  </section>
+
+  <section id="tab-stats" class="tabpane" style="display:none">
+    <div class="bar">
+      <h2 style="margin:20px 0 10px">每日生成（成功 / 失败）</h2>
+      <div class="rangebtns" id="rangebtns">
+        <button class="small ghost" data-days="7">7 天</button>
+        <button class="small ghost" data-days="30">30 天</button>
+        <button class="small ghost" data-days="90">90 天</button>
+      </div>
+    </div>
+    <div id="chartA">加载中…</div>
+    <h2>每日新增用户</h2>
+    <div id="chartB">加载中…</div>
+    <h2>每日收入（美元）</h2>
+    <div id="chartC">加载中…</div>
+    <h2>风格排行</h2>
+    <div class="wrap"><table id="stylesRank"></table></div>
+  </section>
+
+  <section id="tab-db" class="tabpane" style="display:none">
+    <div class="dblayout">
+      <div class="dbsidebar" id="dbTableList">加载中…</div>
+      <div class="dbmain" id="dbTableView"><p class="muted">请选择左侧的表</p></div>
+    </div>
+    <h2>SQL 查询台</h2>
+    <p class="muted" style="margin-top:-6px;font-size:12px">只允许 SELECT / WITH 查询。</p>
+    <textarea id="sqlInput" rows="4" placeholder="SELECT * FROM users LIMIT 10"></textarea>
+    <button class="small" id="sqlRun" style="margin-top:8px">执行</button>
+    <div id="sqlResult" style="margin-top:10px"></div>
+  </section>
+
+  <section id="tab-config" class="tabpane" style="display:none">
+    <h2 style="margin-top:20px">系统配置</h2>
+    <div id="configForm">加载中…</div>
+    <h2>商品管理</h2>
+    <div class="wrap" id="productsTable">加载中…</div>
+    <h2>风格管理</h2>
+    <div class="wrap" id="stylesTable">加载中…</div>
+  </section>
 </main>
 <div id="viewer" onclick="this.style.display='none'"><img id="viewerImg"></div>
+<div id="toast"></div>
 <script>
 const $ = (id) => document.getElementById(id);
 let TOK = localStorage.getItem('mf.admin') || '';
+const TABS = ['overview','stats','db','config'];
+const tabState = { overview:false, stats:false, db:false, config:false };
+let statsDays = 30;
+const dbState = { tables:[], selected:null, offset:0, limit:50, total:0 };
+
 function saveTok(){ TOK = $('tok').value.trim(); localStorage.setItem('mf.admin', TOK); boot(); }
-async function api(p){
-  const r = await fetch(p + (p.includes('?')?'&':'?') + 'admin_token=' + encodeURIComponent(TOK));
-  if (r.status === 401) throw new Error('token');
-  return r.json();
+
+async function api(path, opts){
+  opts = opts || {};
+  const method = opts.method || 'GET';
+  // Token travels in a header, never the URL — keeps it out of logs/history.
+  const fetchOpts = { method, headers: { 'x-admin-token': TOK } };
+  if (opts.body !== undefined) {
+    fetchOpts.headers['Content-Type'] = 'application/json';
+    fetchOpts.body = JSON.stringify(opts.body);
+  }
+  let r;
+  try {
+    r = await fetch(path, fetchOpts);
+  } catch (netErr) {
+    throw new Error('网络错误：' + netErr.message);
+  }
+  if (r.status === 401) {
+    localStorage.removeItem('mf.admin');
+    TOK = '';
+    $('app').style.display = 'none';
+    $('login').style.display = 'block';
+    $('loginErr').textContent = '令牌不正确或已过期';
+    const e = new Error('unauthorized');
+    e.status = 401;
+    throw e;
+  }
+  let body = null;
+  try { body = await r.json(); } catch(_) {}
+  if (!r.ok) {
+    const msg = (body && body.error && body.error.message) || (r.status + ' ' + r.statusText);
+    const e = new Error(msg);
+    e.status = r.status;
+    e.body = body;
+    throw e;
+  }
+  return body;
 }
-const fmt$ = (m) => '$' + (m/100).toFixed(2);
-const ago = (t) => { const s=(Date.now()-new Date(t))/1000; return s<3600?Math.round(s/60)+' 分钟前':s<86400?Math.round(s/3600)+' 小时前':Math.round(s/86400)+' 天前'; };
-const thumb = (id) => id ? `<img class="thumb" loading="lazy" src="/v1/admin/assets/${id}/file?admin_token=${encodeURIComponent(TOK)}" onclick="view(this.src)">` : '<span class="muted">—</span>';
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function errHtml(msg){ return `<p class="bad">加载失败：${escapeHtml(msg)}</p>`; }
+function fmt$(m){ return '$' + (m/100).toFixed(2); }
+function fmtNum(v){ return Number.isInteger(v) ? String(v) : Number(v).toFixed(2); }
+function ago(t){ const s=(Date.now()-new Date(t))/1000; return s<3600?Math.round(s/60)+' 分钟前':s<86400?Math.round(s/3600)+' 小时前':Math.round(s/86400)+' 天前'; }
+// Short-lived image token (fetched once, cached ~50min) so the real admin token
+// never appears in <img> URLs.
+let IMG_TOK = '';
+async function ensureImgTok(){
+  if (IMG_TOK) return IMG_TOK;
+  try { IMG_TOK = (await api('/v1/admin/img-token')).token; setTimeout(() => { IMG_TOK=''; }, 3000000); } catch(_) {}
+  return IMG_TOK;
+}
+function thumb(id){ return id ? `<img class="thumb" loading="lazy" src="/v1/admin/assets/${id}/file?img_token=${encodeURIComponent(IMG_TOK)}" onclick="view(this.src)">` : '<span class="muted">—</span>'; }
 function view(src){ $('viewerImg').src = src; $('viewer').style.display='flex'; }
 
-async function loadAll(){
-  const o = await api('/v1/admin/overview');
-  const j = o.jobsByStatus;
-  $('stamp').textContent = '数据时间 ' + new Date().toLocaleString();
-  $('cards').innerHTML = [
-    ['用户总数', o.users, '今日 +' + o.usersToday],
-    ['生成成功', j.succeeded||0, '失败 ' + (j.failed||0) + ' · 进行中 ' + ((j.running||0)+(j.queued||0))],
-    ['平均耗时', (o.succeededAvgSeconds??'—') + ' 秒', '成功任务'],
-    ['已发放点数', o.unitsGranted, '已消耗 ' + o.unitsConsumed],
-    ['收入(演示)', fmt$(o.revenueMinor), o.purchases.map(p=>p.product+'×'+p.n).join(' ')||'暂无'],
-    ['反馈', '👍' + o.feedback.positive + ' 👎' + o.feedback.negative, '风格 Top: ' + (o.topStyles[0]?.name||'—')],
-  ].map(c=>`<div class="card"><span>${c[0]}</span><b>${c[1]}</b><span>${c[2]}</span></div>`).join('');
+let toastTimer;
+function toast(msg, isErr){
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.toggle('bad', !!isErr);
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
 
-  const jobs = (await api('/v1/admin/jobs')).jobs;
-  $('jobs').innerHTML = '<tr><th>原图</th><th>结果</th><th>风格</th><th>状态</th><th>耗时</th><th>尝试</th><th>用户</th><th>时间</th></tr>' +
-    jobs.map(x=>`<tr><td>${thumb(x.sourceAssetId)}</td><td>${thumb(x.candidateAssetId)}</td><td>${x.style}</td>
-      <td class="${x.status==='succeeded'?'ok':x.status==='failed'?'bad':'muted'}">${x.status}${x.error_code?'<br><span class=muted>'+x.error_code+'</span>':''}</td>
-      <td>${x.seconds!=null?x.seconds+'s':'—'}</td><td>${x.attempt_count}</td><td class="muted">${x.user}</td><td class="muted">${ago(x.created_at)}</td></tr>`).join('');
+function stamp(){ $('stamp').textContent = '数据时间 ' + new Date().toLocaleString(); }
 
-  const pu = (await api('/v1/admin/purchases')).purchases;
-  $('purchases').innerHTML = '<tr><th>商品</th><th>金额</th><th>状态</th><th>用户</th><th>时间</th></tr>' +
-    (pu.length ? pu.map(p=>`<tr><td>${p.product}</td><td>${fmt$(p.amount_minor)}</td><td>${p.status}</td><td class="muted">${p.user}</td><td class="muted">${ago(p.purchased_at)}</td></tr>`).join('') : '<tr><td colspan=5 class=muted>暂无购买</td></tr>');
+/* ---------- 概览 ---------- */
+async function loadOverview(){
+  try {
+    await ensureImgTok();
+    const o = await api('/v1/admin/overview');
+    stamp();
+    const j = o.jobsByStatus || {};
+    $('cards').innerHTML = [
+      ['用户总数', o.users, '今日 +' + o.usersToday],
+      ['生成成功', j.succeeded||0, '失败 ' + (j.failed||0) + ' · 进行中 ' + ((j.running||0)+(j.queued||0))],
+      ['平均耗时', (o.succeededAvgSeconds??'—') + ' 秒', '成功任务'],
+      ['已发放点数', o.unitsGranted, '已消耗 ' + o.unitsConsumed],
+      ['收入(演示)', fmt$(o.revenueMinor), escapeHtml((o.purchases||[]).map(p=>p.product+'×'+p.n).join(' ')||'暂无')],
+      ['反馈', '👍' + (o.feedback?.positive||0) + ' 👎' + (o.feedback?.negative||0), '风格 Top: ' + escapeHtml(o.topStyles?.[0]?.name||'—')],
+    ].map(c=>`<div class="card"><span>${c[0]}</span><b>${c[1]}</b><span>${c[2]}</span></div>`).join('');
+  } catch(e) {
+    if (e.status === 401) return;
+    $('cards').innerHTML = errHtml(e.message);
+  }
 
-  const fb = (await api('/v1/admin/feedback')).feedback;
-  $('feedback').innerHTML = '<tr><th>评价</th><th>原因</th><th>风格</th><th>时间</th></tr>' +
-    (fb.length ? fb.map(f=>`<tr><td>${f.rating==='positive'?'👍':'👎'}</td><td>${JSON.parse(f.reason_codes||'[]').join(', ')||'—'}</td><td>${f.style||'—'}</td><td class="muted">${ago(f.created_at)}</td></tr>`).join('') : '<tr><td colspan=4 class=muted>暂无反馈</td></tr>');
+  try {
+    const jobs = (await api('/v1/admin/jobs')).jobs || [];
+    $('jobs').innerHTML = '<tr><th>原图</th><th>结果</th><th>风格</th><th>状态</th><th>耗时</th><th>尝试</th><th>用户</th><th>时间</th></tr>' +
+      (jobs.length ? jobs.map(x=>`<tr><td>${thumb(x.sourceAssetId)}</td><td>${thumb(x.candidateAssetId)}</td><td>${escapeHtml(x.style||'')}</td>
+        <td class="${x.status==='succeeded'?'ok':x.status==='failed'?'bad':'muted'}">${escapeHtml(x.status)}${x.error_code?'<br><span class=muted>'+escapeHtml(x.error_code)+'</span>':''}</td>
+        <td>${x.seconds!=null?x.seconds+'s':'—'}</td><td>${x.attempt_count}</td><td class="muted">${escapeHtml(x.user||'')}</td><td class="muted">${ago(x.created_at)}</td></tr>`).join('') : '<tr><td colspan=8 class=muted>暂无任务</td></tr>');
+  } catch(e) {
+    if (e.status !== 401) $('jobs').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
+  }
+
+  try {
+    const pu = (await api('/v1/admin/purchases')).purchases || [];
+    $('purchases').innerHTML = '<tr><th>商品</th><th>金额</th><th>状态</th><th>用户</th><th>时间</th></tr>' +
+      (pu.length ? pu.map(p=>`<tr><td>${escapeHtml(p.product)}</td><td>${fmt$(p.amount_minor)}</td><td>${escapeHtml(p.status)}</td><td class="muted">${escapeHtml(p.user||'')}</td><td class="muted">${ago(p.purchased_at)}</td></tr>`).join('') : '<tr><td colspan=5 class=muted>暂无购买</td></tr>');
+  } catch(e) {
+    if (e.status !== 401) $('purchases').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
+  }
+
+  try {
+    const fb = (await api('/v1/admin/feedback')).feedback || [];
+    $('feedback').innerHTML = '<tr><th>评价</th><th>原因</th><th>风格</th><th>时间</th></tr>' +
+      (fb.length ? fb.map(f=>{ let reasons=[]; try{ reasons = JSON.parse(f.reason_codes||'[]'); }catch(_){} return `<tr><td>${f.rating==='positive'?'👍':'👎'}</td><td>${escapeHtml(reasons.join(', ')||'—')}</td><td>${escapeHtml(f.style||'—')}</td><td class="muted">${ago(f.created_at)}</td></tr>`; }).join('') : '<tr><td colspan=4 class=muted>暂无反馈</td></tr>');
+  } catch(e) {
+    if (e.status !== 401) $('feedback').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
+  }
+}
+
+/* ---------- 统计 / 图表 ---------- */
+function chartAxes(n){
+  const W=640,H=170,padL=36,padR=12,padT=10,padB=22;
+  return {W,H,padL,padR,padT,padB,innerW:W-padL-padR,innerH:H-padT-padB};
+}
+function lineChart(days, series){
+  const n = days.length || 1;
+  const {W,H,padL,padR,padT,padB,innerW,innerH} = chartAxes(n);
+  let maxV = 0;
+  series.forEach(s => days.forEach(d => { maxV = Math.max(maxV, d[s.key]||0); }));
+  maxV = maxV <= 0 ? 1 : Math.ceil(maxV*1.15);
+  const x = i => n<=1 ? padL+innerW/2 : padL + innerW*i/(n-1);
+  const y = v => padT + innerH - innerH*v/maxV;
+  const gridN = 4;
+  let grid = '';
+  for (let g=0; g<=gridN; g++){
+    const yy = padT + innerH*g/gridN;
+    const val = Math.round(maxV*(gridN-g)/gridN);
+    grid += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${W-padR}" y2="${yy.toFixed(1)}" stroke="#D9D5CC" stroke-width="1"/><text x="${padL-6}" y="${(yy+3).toFixed(1)}" font-size="9" fill="#6E6B66" text-anchor="end">${val}</text>`;
+  }
+  const tickEvery = Math.max(1, Math.round(n/6));
+  let xlabels = '';
+  days.forEach((d,i) => { if (i % tickEvery === 0 || i === n-1) xlabels += `<text x="${x(i).toFixed(1)}" y="${H-5}" font-size="9" fill="#6E6B66" text-anchor="middle">${escapeHtml((d.date||'').slice(5))}</text>`; });
+  let body = '';
+  series.forEach(s => {
+    const pts = days.map((d,i) => `${x(i).toFixed(1)},${y(d[s.key]||0).toFixed(1)}`).join(' ');
+    body += `<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="1.6"/>`;
+    body += days.map((d,i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(d[s.key]||0).toFixed(1)}" r="2.2" fill="${s.color}"><title>${escapeHtml(d.date)} ${escapeHtml(s.label)}: ${fmtNum(d[s.key]||0)}</title></circle>`).join('');
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:160px;display:block" xmlns="http://www.w3.org/2000/svg">${grid}${body}${xlabels}</svg>`;
+}
+function barChart(days, key, color, label){
+  const n = days.length || 1;
+  const {W,H,padL,padR,padT,padB,innerW,innerH} = chartAxes(n);
+  let maxV = 0;
+  days.forEach(d => { maxV = Math.max(maxV, d[key]||0); });
+  maxV = maxV <= 0 ? 1 : Math.ceil(maxV*1.15);
+  const gap = innerW/n;
+  const bw = Math.max(2, gap*0.6);
+  const y = v => padT + innerH - innerH*v/maxV;
+  const gridN = 4;
+  let grid = '';
+  for (let g=0; g<=gridN; g++){
+    const yy = padT + innerH*g/gridN;
+    const val = Math.round(maxV*(gridN-g)/gridN);
+    grid += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${W-padR}" y2="${yy.toFixed(1)}" stroke="#D9D5CC" stroke-width="1"/><text x="${padL-6}" y="${(yy+3).toFixed(1)}" font-size="9" fill="#6E6B66" text-anchor="end">${val}</text>`;
+  }
+  const tickEvery = Math.max(1, Math.round(n/6));
+  let xlabels = '', bars = '';
+  days.forEach((d,i) => {
+    const cx = padL + gap*i + gap/2;
+    const v = d[key]||0;
+    const yy = y(v);
+    bars += `<rect x="${(cx-bw/2).toFixed(1)}" y="${yy.toFixed(1)}" width="${bw.toFixed(1)}" height="${(padT+innerH-yy).toFixed(1)}" fill="${color}" rx="1.5"><title>${escapeHtml(d.date)} ${escapeHtml(label)}: ${fmtNum(v)}</title></rect>`;
+    if (i % tickEvery === 0 || i === n-1) xlabels += `<text x="${cx.toFixed(1)}" y="${H-5}" font-size="9" fill="#6E6B66" text-anchor="middle">${escapeHtml((d.date||'').slice(5))}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:160px;display:block" xmlns="http://www.w3.org/2000/svg">${grid}${bars}${xlabels}</svg>`;
+}
+function legendHtml(items){
+  return `<div class="legend">${items.map(([label,color]) => `<span><i style="background:${color}"></i>${escapeHtml(label)}</span>`).join('')}</div>`;
+}
+function fmtPct(v){
+  if (v === null || v === undefined) return '—';
+  const pct = v <= 1 ? v*100 : v;
+  return pct.toFixed(1) + '%';
+}
+function renderStylesRank(styles){
+  const sorted = styles.slice().sort((a,b) => (b.jobs||0)-(a.jobs||0));
+  $('stylesRank').innerHTML = `<tr><th>风格</th><th>主题</th><th>生成数</th><th>成功率</th><th>平均耗时</th><th>保存数</th><th>👍</th><th>👎</th><th>状态</th></tr>` +
+    (sorted.length ? sorted.map(s => `<tr>
+      <td>${escapeHtml(s.name||s.internalKey||'')}</td>
+      <td class="muted">${escapeHtml(s.theme||'')}</td>
+      <td>${s.jobs ?? 0}</td>
+      <td>${fmtPct(s.successRate)}</td>
+      <td>${s.avgSeconds!=null ? s.avgSeconds+'s' : '—'}</td>
+      <td>${s.saves ?? 0}</td>
+      <td>${s.feedbackPositive ?? 0}</td>
+      <td>${s.feedbackNegative ?? 0}</td>
+      <td class="${s.status==='published'?'ok':'muted'}">${escapeHtml(s.status||'—')}</td>
+    </tr>`).join('') : '<tr><td colspan=9 class="muted">暂无数据</td></tr>');
+}
+async function loadStats(){
+  document.querySelectorAll('#rangebtns [data-days]').forEach(b => b.classList.toggle('active', Number(b.dataset.days)===statsDays));
+  $('chartA').innerHTML = '加载中…'; $('chartB').innerHTML = '加载中…'; $('chartC').innerHTML = '加载中…';
+  try {
+    const r = await api('/v1/admin/stats/daily?days=' + statsDays);
+    const days = r.days || [];
+    $('chartA').innerHTML = legendHtml([['成功','var(--cobalt)'],['失败','var(--bad)']]) + lineChart(days, [
+      {key:'jobsSucceeded', color:'var(--cobalt)', label:'成功'},
+      {key:'jobsFailed', color:'var(--bad)', label:'失败'},
+    ]);
+    $('chartB').innerHTML = barChart(days, 'newUsers', 'var(--cobalt)', '新增用户');
+    const withRevenue = days.map(d => Object.assign({}, d, { revenueDollars: (d.revenueMinor||0)/100 }));
+    $('chartC').innerHTML = barChart(withRevenue, 'revenueDollars', 'var(--ok)', '收入($)');
+  } catch(e) {
+    if (e.status !== 401) { $('chartA').innerHTML = errHtml(e.message); $('chartB').innerHTML=''; $('chartC').innerHTML=''; }
+  }
+  try {
+    const r = await api('/v1/admin/stats/styles');
+    renderStylesRank(r.styles || []);
+  } catch(e) {
+    if (e.status !== 401) $('stylesRank').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
+  }
+}
+
+/* ---------- 数据库 ---------- */
+function highlightDbList(){
+  $('dbTableList').querySelectorAll('.dbitem').forEach(el => el.classList.toggle('active', el.dataset.table === dbState.selected));
+}
+async function loadDbTables(){
+  $('dbTableList').innerHTML = '加载中…';
+  try {
+    const r = await api('/v1/admin/db/tables');
+    dbState.tables = r.tables || [];
+    $('dbTableList').innerHTML = dbState.tables.length ? dbState.tables.map(t => `<div class="dbitem${dbState.selected===t.name?' active':''}" data-table="${escapeHtml(t.name)}"><span>${escapeHtml(t.name)}</span><span class="muted">${t.rows}</span></div>`).join('') : '<div class="muted" style="padding:8px">无表</div>';
+    $('dbTableList').querySelectorAll('.dbitem').forEach(el => el.addEventListener('click', () => selectDbTable(el.dataset.table)));
+  } catch(e) {
+    if (e.status !== 401) $('dbTableList').innerHTML = errHtml(e.message);
+  }
+}
+function selectDbTable(name){
+  dbState.selected = name;
+  dbState.offset = 0;
+  highlightDbList();
+  loadDbTablePage();
+}
+function renderDbTableView(columns, rows, total){
+  const start = dbState.offset;
+  const end = Math.min(dbState.offset + rows.length, total);
+  const head = '<tr>' + columns.map(c=>`<th>${escapeHtml(c)}</th>`).join('') + '</tr>';
+  const body = rows.length ? rows.map(row => '<tr>' + row.map(v => {
+    if (v === null || v === undefined) return '<td class="muted" title="NULL">NULL</td>';
+    const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    return `<td class="trunc" title="${escapeHtml(s)}">${escapeHtml(s)}</td>`;
+  }).join('') + '</tr>').join('') : `<tr><td colspan="${columns.length||1}" class="muted">无数据</td></tr>`;
+  $('dbTableView').innerHTML = `
+    <div class="bar" style="margin-bottom:8px"><h2 style="margin:0">${escapeHtml(dbState.selected)}</h2>
+      <div class="pagination">
+        <span class="muted">${total ? (start+1)+'–'+end+' / '+total : '0 / 0'}</span>
+        <button class="small ghost" id="dbPrev" ${dbState.offset<=0?'disabled':''}>上一页</button>
+        <button class="small ghost" id="dbNext" ${end>=total?'disabled':''}>下一页</button>
+      </div>
+    </div>
+    <div class="wrap"><table>${head}${body}</table></div>`;
+  const prev = $('dbPrev'), next = $('dbNext');
+  if (prev) prev.addEventListener('click', () => { dbState.offset = Math.max(0, dbState.offset - dbState.limit); loadDbTablePage(); });
+  if (next) next.addEventListener('click', () => { dbState.offset += dbState.limit; loadDbTablePage(); });
+}
+async function loadDbTablePage(){
+  if (!dbState.selected) return;
+  $('dbTableView').innerHTML = '加载中…';
+  try {
+    const r = await api(`/v1/admin/db/table/${encodeURIComponent(dbState.selected)}?limit=${dbState.limit}&offset=${dbState.offset}`);
+    dbState.total = r.total || 0;
+    renderDbTableView(r.columns || [], r.rows || [], dbState.total);
+  } catch(e) {
+    if (e.status !== 401) $('dbTableView').innerHTML = errHtml(e.message);
+  }
+}
+async function loadDb(){
+  await loadDbTables();
+  if (dbState.selected) await loadDbTablePage();
+}
+async function runSql(){
+  const sql = $('sqlInput').value.trim();
+  if (!sql) return;
+  $('sqlResult').innerHTML = '加载中…';
+  try {
+    const r = await api('/v1/admin/db/query', { method:'POST', body:{ sql } });
+    const cols = r.columns || [], rows = r.rows || [];
+    const head = '<tr>' + cols.map(c=>`<th>${escapeHtml(c)}</th>`).join('') + '</tr>';
+    const body = rows.length ? rows.map(row => '<tr>' + row.map(v => {
+      if (v === null || v === undefined) return '<td class="muted" title="NULL">NULL</td>';
+      const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+      return `<td class="trunc" title="${escapeHtml(s)}">${escapeHtml(s)}</td>`;
+    }).join('') + '</tr>').join('') : `<tr><td colspan="${cols.length||1}" class="muted">无数据</td></tr>`;
+    $('sqlResult').innerHTML = (r.truncated ? '<p class="muted">⚠ 结果已截断</p>' : '') +
+      `<p class="muted">共 ${r.rowCount ?? rows.length} 行</p><div class="wrap"><table>${head}${body}</table></div>`;
+  } catch(e) {
+    if (e.status === 401) return;
+    const msg = (e.body && e.body.error && e.body.error.message) || e.message;
+    $('sqlResult').innerHTML = `<p class="bad">${escapeHtml(msg)}</p>`;
+  }
+}
+
+/* ---------- 配置 ---------- */
+function configRowHtml(s){
+  const key = escapeHtml(s.key);
+  const inputId = 'cfgval_' + s.key.replace(/[^a-zA-Z0-9_]/g,'_');
+  const isBool = /^bool/i.test(s.type||'');
+  const isNum = /^(number|int|integer|float|double)$/i.test(s.type||'');
+  let control;
+  if (isBool) {
+    const val = s.value === true || s.value === 'true' || s.value === 1;
+    control = `<select id="${inputId}" ${s.readOnly?'disabled':''}><option value="true"${val?' selected':''}>开</option><option value="false"${!val?' selected':''}>关</option></select>`;
+  } else if (s.secret) {
+    const placeholder = s.value != null && s.value !== '' ? String(s.value) : '未设置';
+    control = `<input id="${inputId}" type="password" placeholder="${escapeHtml(placeholder)}" autocomplete="new-password" ${s.readOnly?'disabled':''}>`;
+  } else if (isNum) {
+    control = `<input id="${inputId}" type="number" value="${s.value ?? ''}" ${s.readOnly?'disabled':''}>`;
+  } else {
+    control = `<input id="${inputId}" type="text" value="${escapeHtml(s.value!=null?String(s.value):'')}" ${s.readOnly?'disabled':''}>`;
+  }
+  const sourceBadge = s.source==='db' ? '<span class="badge badge-cobalt">db 覆盖</span>' : s.source==='env' ? '<span class="badge badge-gray">env</span>' : '<span class="badge badge-light">默认</span>';
+  const restartBadge = s.requiresRestart ? '<span class="badge badge-warn">⚠需重启</span>' : '';
+  const roBadge = s.readOnly ? '<span class="badge badge-gray">只读</span>' : '';
+  const type = isBool ? 'boolean' : (isNum ? 'number' : 'text');
+  const saveBtn = s.readOnly ? '' : `<button class="small" data-save="${escapeHtml(s.key)}" data-type="${type}" data-secret="${s.secret?'1':'0'}" data-input="${inputId}">保存</button>`;
+  const restoreBtn = (s.rawSet && !s.readOnly) ? `<button class="small ghost" data-restore="${escapeHtml(s.key)}">恢复默认</button>` : '';
+  return `<div class="cfgrow">
+    <div class="cfgmeta"><b>${key}</b> ${sourceBadge}${restartBadge}${roBadge}<div class="muted">${escapeHtml(s.description||'')}</div></div>
+    <div class="cfgctrl">${control}${saveBtn}${restoreBtn}</div>
+  </div>`;
+}
+function renderConfig(settings){
+  $('configForm').innerHTML = settings.length ? settings.map(configRowHtml).join('') : '<p class="muted">无配置项</p>';
+  $('configForm').querySelectorAll('[data-save]').forEach(btn => btn.addEventListener('click', () => saveConfigItem(btn)));
+  $('configForm').querySelectorAll('[data-restore]').forEach(btn => btn.addEventListener('click', () => restoreConfigItem(btn.dataset.restore)));
+}
+async function saveConfigItem(btn){
+  const key = btn.dataset.save;
+  const type = btn.dataset.type;
+  const secret = btn.dataset.secret === '1';
+  const input = $(btn.dataset.input);
+  const raw = input.value;
+  if (secret && raw === '') { toast('未输入新值，未保存', true); return; }
+  let value;
+  if (type === 'boolean') value = raw === 'true';
+  else if (type === 'number') value = raw === '' ? null : Number(raw);
+  else value = raw;
+  try {
+    const r = await api('/v1/admin/config', { method:'PUT', body:{ key, value } });
+    renderConfig(r.settings || []);
+    toast('已保存');
+  } catch(e) {
+    if (e.status !== 401) toast('保存失败：' + e.message, true);
+  }
+}
+async function restoreConfigItem(key){
+  try {
+    const r = await api('/v1/admin/config', { method:'PUT', body:{ key, value:null } });
+    renderConfig(r.settings || []);
+    toast('已恢复默认');
+  } catch(e) {
+    if (e.status !== 401) toast('操作失败：' + e.message, true);
+  }
+}
+
+function renderProducts(products){
+  $('productsTable').innerHTML = products.length ? `<table>
+    <tr><th>名称</th><th>internal_key</th><th>类型</th><th>数量</th><th>价格(美分)</th><th>状态</th><th></th></tr>
+    ${products.map(p => `<tr>
+      <td>${escapeHtml(p.displayName||'')}</td>
+      <td class="muted">${escapeHtml(p.internalKey)}</td>
+      <td class="muted">${escapeHtml(p.productType||'')}</td>
+      <td><input type="number" class="pgu" value="${p.grantedUnits}" style="width:80px"></td>
+      <td><input type="number" class="ppm" value="${p.priceMinor}" style="width:90px"></td>
+      <td>${p.active ? '<span class="badge badge-cobalt">上架</span>' : '<span class="badge badge-gray">下架</span>'}</td>
+      <td style="white-space:nowrap"><button class="small" data-save-product="${escapeHtml(p.internalKey)}">保存</button>
+          <button class="small ghost" data-toggle-product="${escapeHtml(p.internalKey)}" data-active="${p.active?'1':'0'}">${p.active?'下架':'上架'}</button></td>
+    </tr>`).join('')}
+  </table>` : '<p class="muted">暂无商品</p>';
+  $('productsTable').querySelectorAll('[data-save-product]').forEach(btn => btn.addEventListener('click', () => saveProduct(btn)));
+  $('productsTable').querySelectorAll('[data-toggle-product]').forEach(btn => btn.addEventListener('click', () => toggleProduct(btn)));
+}
+async function saveProduct(btn){
+  const key = btn.dataset.saveProduct;
+  const row = btn.closest('tr');
+  const grantedUnits = Number(row.querySelector('.pgu').value);
+  const priceMinor = Number(row.querySelector('.ppm').value);
+  const active = row.querySelector('[data-toggle-product]').dataset.active === '1';
+  try {
+    await api('/v1/admin/products-admin/' + encodeURIComponent(key), { method:'PATCH', body:{ grantedUnits, priceMinor, active } });
+    const r = await api('/v1/admin/products-admin');
+    renderProducts(r.products || []);
+    toast('已保存');
+  } catch(e) {
+    if (e.status !== 401) toast('保存失败：' + e.message, true);
+  }
+}
+async function toggleProduct(btn){
+  const key = btn.dataset.toggleProduct;
+  const row = btn.closest('tr');
+  const grantedUnits = Number(row.querySelector('.pgu').value);
+  const priceMinor = Number(row.querySelector('.ppm').value);
+  const active = !(btn.dataset.active === '1');
+  try {
+    await api('/v1/admin/products-admin/' + encodeURIComponent(key), { method:'PATCH', body:{ grantedUnits, priceMinor, active } });
+    const r = await api('/v1/admin/products-admin');
+    renderProducts(r.products || []);
+    toast(active ? '已上架' : '已下架');
+  } catch(e) {
+    if (e.status !== 401) toast('操作失败：' + e.message, true);
+  }
+}
+
+function renderStylesAdmin(styles){
+  $('stylesTable').innerHTML = styles.length ? `<table>
+    <tr><th>名称</th><th>主题</th><th>生成数</th><th>Premium</th><th>状态</th><th></th></tr>
+    ${styles.map(s => `<tr>
+      <td>${escapeHtml(s.name||'')}</td>
+      <td class="muted">${escapeHtml(s.theme||'')}</td>
+      <td>${s.jobs ?? 0}</td>
+      <td>${s.premium ? '是' : '否'}</td>
+      <td class="${s.status==='published'?'ok':'muted'}">${escapeHtml(s.status||'')}</td>
+      <td><button class="small ghost" data-style-toggle="${s.id}" data-status="${escapeHtml(s.status||'')}">${s.status==='published'?'下线':'上线'}</button></td>
+    </tr>`).join('')}
+  </table>` : '<p class="muted">暂无风格</p>';
+  $('stylesTable').querySelectorAll('[data-style-toggle]').forEach(btn => btn.addEventListener('click', () => toggleStyleStatus(btn)));
+}
+async function toggleStyleStatus(btn){
+  const id = btn.dataset.styleToggle;
+  const cur = btn.dataset.status;
+  const next = cur === 'published' ? 'disabled' : 'published';
+  if (next === 'disabled' && !confirm('确认下线该风格？')) return;
+  try {
+    await api('/v1/admin/styles-admin/' + encodeURIComponent(id) + '/status', { method:'POST', body:{ status: next } });
+    const r = await api('/v1/admin/styles-admin');
+    renderStylesAdmin(r.styles || []);
+    toast(next === 'published' ? '已上线' : '已下线');
+  } catch(e) {
+    if (e.status !== 401) toast('操作失败：' + e.message, true);
+  }
+}
+
+async function loadConfig(){
+  $('configForm').innerHTML = '加载中…';
+  $('productsTable').innerHTML = '加载中…';
+  $('stylesTable').innerHTML = '加载中…';
+  try {
+    const r = await api('/v1/admin/config');
+    renderConfig(r.settings || []);
+  } catch(e) { if (e.status !== 401) $('configForm').innerHTML = errHtml(e.message); }
+  try {
+    const r = await api('/v1/admin/products-admin');
+    renderProducts(r.products || []);
+  } catch(e) { if (e.status !== 401) $('productsTable').innerHTML = errHtml(e.message); }
+  try {
+    const r = await api('/v1/admin/styles-admin');
+    renderStylesAdmin(r.styles || []);
+  } catch(e) { if (e.status !== 401) $('stylesTable').innerHTML = errHtml(e.message); }
+}
+
+/* ---------- Tabs / boot ---------- */
+function currentTab(){ const h = (location.hash||'').replace('#',''); return TABS.includes(h) ? h : 'overview'; }
+function loadTabByName(name){
+  if (name === 'overview') return loadOverview();
+  if (name === 'stats') return loadStats();
+  if (name === 'db') return loadDb();
+  if (name === 'config') return loadConfig();
+}
+function loadCurrentTab(){ loadTabByName(currentTab()); }
+function showTab(name){
+  TABS.forEach(t => { $('tab-'+t).style.display = t===name ? 'block' : 'none'; });
+  document.querySelectorAll('.tabbtn').forEach(b => b.classList.toggle('active', b.dataset.tab===name));
+  if (!tabState[name]) { tabState[name] = true; loadTabByName(name); }
+}
+
+let staticBound = false;
+function bindStaticEvents(){
+  if (staticBound) return;
+  staticBound = true;
+  document.querySelectorAll('.tabbtn').forEach(btn => btn.addEventListener('click', () => { location.hash = btn.dataset.tab; }));
+  window.addEventListener('hashchange', () => showTab(currentTab()));
+  document.querySelectorAll('#rangebtns [data-days]').forEach(btn => btn.addEventListener('click', () => { statsDays = Number(btn.dataset.days); loadStats(); }));
+  $('sqlRun').addEventListener('click', runSql);
 }
 
 async function boot(){
   if (!TOK) return;
-  try { await loadAll(); $('login').style.display='none'; $('app').style.display='block'; }
-  catch(e){ $('loginErr').textContent = e.message==='token' ? '令牌不正确' : '加载失败：' + e.message; localStorage.removeItem('mf.admin'); }
+  try {
+    await api('/v1/admin/overview');
+  } catch(e) {
+    if (e.status !== 401) $('loginErr').textContent = '加载失败：' + e.message;
+    return;
+  }
+  $('login').style.display = 'none';
+  $('app').style.display = 'block';
+  bindStaticEvents();
+  showTab(currentTab());
 }
 boot();
 </script>

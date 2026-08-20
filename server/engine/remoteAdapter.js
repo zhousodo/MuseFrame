@@ -4,13 +4,17 @@
 // provider; the worker falls back to the LocalStyleEngine backup on failure.
 import { PNG } from 'pngjs';
 import jpeg from 'jpeg-js';
+import { cfg } from '../configStore.js';
 
+// Live getters — admin overrides (base URL, key, model, timeout) apply on the
+// next request, no restart needed. IMAGE_PROVIDER itself stays an env-only
+// on/off switch (not runtime-configurable — changing providers is an ops call).
 export const remoteConfig = {
-  enabled: process.env.IMAGE_PROVIDER === 'remote' && !!process.env.IMAGE_PROVIDER_API_KEY,
-  baseUrl: (process.env.IMAGE_PROVIDER_BASE_URL || '').replace(/\/$/, ''),
-  apiKey: process.env.IMAGE_PROVIDER_API_KEY || '',
-  model: process.env.IMAGE_PROVIDER_MODEL || 'gpt-image-2',
-  timeoutMs: Number(process.env.IMAGE_PROVIDER_TIMEOUT_MS || 180000),
+  get enabled() { return process.env.IMAGE_PROVIDER === 'remote' && !!cfg('image_provider_api_key'); },
+  get baseUrl() { return (cfg('image_provider_base_url') || '').replace(/\/$/, ''); },
+  get apiKey() { return cfg('image_provider_api_key') || ''; },
+  get model() { return cfg('image_provider_model') || 'gpt-image-2'; },
+  get timeoutMs() { return Number(cfg('image_provider_timeout_ms')) || 420000; },
 };
 
 /**

@@ -8,14 +8,12 @@ import { commitUnits, releaseUnits } from './ledger.js';
 import { decodeJpeg, encodeJpeg, applyStyle, cropTo, resize } from './engine/styleEngine.js';
 import { remoteConfig, createEdit } from './engine/remoteAdapter.js';
 import { compileInstruction } from './engine/promptCompiler.js';
+import { cfg } from './configStore.js';
 
 const STAGE_DELAYS = { preparing: 700, building: 900, checking: 600 }; // paced so progress reads honestly
 
 let queue = [];
 let active = 0;
-// Remote jobs are IO-bound waits on the provider — run several in parallel so
-// one slow generation doesn't serialize everyone behind it.
-const MAX_CONCURRENT = Number(process.env.WORKER_CONCURRENCY || 3);
 
 export function enqueueJob(jobId) {
   queue.push(jobId);
@@ -38,7 +36,11 @@ function setStage(jobId, status, stage) {
 }
 
 function pump() {
-  while (active < MAX_CONCURRENT && queue.length) {
+  // Remote jobs are IO-bound waits on the provider — run several in parallel so
+  // one slow generation doesn't serialize everyone behind it. Read live so an
+  // admin change to worker_concurrency applies to the next dispatch, no restart.
+  const maxConcurrent = cfg('worker_concurrency');
+  while (active < maxConcurrent && queue.length) {
     const jobId = queue.shift();
     active++;
     processJob(jobId)

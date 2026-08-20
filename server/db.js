@@ -237,6 +237,9 @@ function ensureColumn(table, col, ddl) {
 }
 ensureColumn('products', 'google_product_id', 'google_product_id TEXT');
 ensureColumn('products', 'apple_product_id', 'apple_product_id TEXT');
+// auth_identities.email_normalized is written on Google/Apple sign-in but was
+// missing from the original CREATE — without this a real sign-in throws.
+ensureColumn('auth_identities', 'email_normalized', 'email_normalized TEXT');
 
 export const uuid = () => randomUUID();
 export const now = () => new Date().toISOString();

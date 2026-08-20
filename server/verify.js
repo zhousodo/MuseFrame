@@ -4,6 +4,7 @@
 // word. Uses only Node built-ins (crypto + fetch); credentials come from env.
 import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { cfg } from './configStore.js';
 
 // ---- JWKS-based ID token verification (Google Sign-In, Sign in with Apple) --
 
@@ -42,7 +43,7 @@ async function verifyIdToken(idToken, { jwksUrl, issuers, audience }) {
 }
 
 export async function verifyGoogleIdToken(idToken) {
-  const audience = (process.env.GOOGLE_CLIENT_IDS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const audience = (cfg('google_client_ids') || '').split(',').map((s) => s.trim()).filter(Boolean);
   if (!audience.length) { const e = new Error('Google Sign-In not configured'); e.code = 'PROVIDER_NOT_CONFIGURED'; throw e; }
   const c = await verifyIdToken(idToken, {
     jwksUrl: 'https://www.googleapis.com/oauth2/v3/certs',
@@ -53,7 +54,7 @@ export async function verifyGoogleIdToken(idToken) {
 }
 
 export async function verifyAppleIdToken(idToken) {
-  const audience = (process.env.APPLE_BUNDLE_IDS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const audience = (cfg('apple_bundle_ids') || '').split(',').map((s) => s.trim()).filter(Boolean);
   if (!audience.length) { const e = new Error('Sign in with Apple not configured'); e.code = 'PROVIDER_NOT_CONFIGURED'; throw e; }
   const c = await verifyIdToken(idToken, {
     jwksUrl: 'https://appleid.apple.com/auth/keys',
@@ -110,7 +111,7 @@ async function getPlayAccessToken() {
  */
 export async function verifyPlayPurchase({ packageName, productId, purchaseToken, kind }) {
   const token = await getPlayAccessToken();
-  const pkg = packageName || process.env.GOOGLE_PACKAGE_NAME;
+  const pkg = packageName || cfg('google_package_name');
   const base = `https://androidpublisher.googleapis.com/androidpublisher/v3/applications/${pkg}`;
   const url = kind === 'subscription'
     ? `${base}/purchases/subscriptions/${productId}/tokens/${purchaseToken}`
@@ -127,11 +128,14 @@ export async function verifyPlayPurchase({ packageName, productId, purchaseToken
   return { valid: body.purchaseState === 0, expiresAt: null };
 }
 
+// Live getters — every property reflects the current DB override / env var on
+// each read, so admin changes take effect without a restart (except the two
+// purely env-backed billing flags, which are unchanged by design).
 export const verifyConfig = {
-  googleSignIn: !!(process.env.GOOGLE_CLIENT_IDS || '').trim(),
-  appleSignIn: !!(process.env.APPLE_BUNDLE_IDS || '').trim(),
-  playBilling: !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
-  allowMockPurchases: process.env.ALLOW_MOCK_PURCHASES === 'true',
-  allowGuest: process.env.ALLOW_GUEST !== 'false',
-  freeRequiresAuth: process.env.FREE_REQUIRES_AUTH === 'true',
+  get googleSignIn() { return !!(cfg('google_client_ids') || '').trim(); },
+  get appleSignIn() { return !!(cfg('apple_bundle_ids') || '').trim(); },
+  get playBilling() { return !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON; },
+  get allowMockPurchases() { return process.env.ALLOW_MOCK_PURCHASES === 'true'; },
+  get allowGuest() { return !!cfg('allow_guest'); },
+  get freeRequiresAuth() { return !!cfg('free_requires_auth'); },
 };
