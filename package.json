@@ -13,6 +13,9 @@
     "node": ">=22.5"
   },
   "dependencies": {
+    "@capacitor/device": "^8.0.3",
+    "@capgo/capacitor-social-login": "^8.4.4",
+    "@capgo/native-purchases": "^8.6.6",
     "jpeg-js": "0.4.4",
     "pngjs": "^7.0.0"
   },

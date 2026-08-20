@@ -524,10 +524,12 @@ export function seedCatalog({ db, uuid, now, q1, run }) {
   });
 }
 
+// storeProductId 默认与 internalKey 一致 —— 在 Play Console / App Store Connect
+// 建商品时直接用同名 ID（mini_pack / creator_monthly / creator_annual）即可零配置。
 export const PRODUCTS = [
-  { internalKey: 'mini_pack', productType: 'pack', displayName: 'Mini Pack', grantedUnits: 8, priceMinor: 399, period: null, featureFlags: {} },
-  { internalKey: 'creator_monthly', productType: 'subscription', displayName: 'Creator Monthly', grantedUnits: 40, priceMinor: 999, period: 'month', featureFlags: { premiumStyles: true, priorityQueue: true, highResolution: true } },
-  { internalKey: 'creator_annual', productType: 'subscription', displayName: 'Creator Annual', grantedUnits: 480, priceMinor: 6999, period: 'year', featureFlags: { premiumStyles: true, priorityQueue: true, highResolution: true } },
+  { internalKey: 'mini_pack', productType: 'pack', displayName: 'Mini Pack', grantedUnits: 8, priceMinor: 399, period: null, featureFlags: {}, googleProductId: 'mini_pack', appleProductId: 'mini_pack' },
+  { internalKey: 'creator_monthly', productType: 'subscription', displayName: 'Creator Monthly', grantedUnits: 40, priceMinor: 999, period: 'month', featureFlags: { premiumStyles: true, priorityQueue: true, highResolution: true }, googleProductId: 'creator_monthly', appleProductId: 'creator_monthly' },
+  { internalKey: 'creator_annual', productType: 'subscription', displayName: 'Creator Annual', grantedUnits: 480, priceMinor: 6999, period: 'year', featureFlags: { premiumStyles: true, priorityQueue: true, highResolution: true }, googleProductId: 'creator_annual', appleProductId: 'creator_annual' },
 ];
 
 export function seedProducts({ q1, run, uuid }) {
@@ -536,12 +538,12 @@ export function seedProducts({ q1, run, uuid }) {
   for (const p of PRODUCTS) {
     const existing = q1('SELECT id FROM products WHERE internal_key = ?', p.internalKey);
     if (existing) {
-      run('UPDATE products SET display_name = ?, granted_units = ?, price_minor = ?, period = ?, feature_flags = ?, active = 1 WHERE id = ?',
-        p.displayName, p.grantedUnits, p.priceMinor, p.period, JSON.stringify(p.featureFlags), existing.id);
+      run('UPDATE products SET display_name = ?, granted_units = ?, price_minor = ?, period = ?, feature_flags = ?, google_product_id = ?, apple_product_id = ?, active = 1 WHERE id = ?',
+        p.displayName, p.grantedUnits, p.priceMinor, p.period, JSON.stringify(p.featureFlags), p.googleProductId, p.appleProductId, existing.id);
       continue;
     }
-    run(`INSERT INTO products (id, internal_key, product_type, display_name, granted_units, price_minor, currency, period, feature_flags, active)
-         VALUES (?,?,?,?,?,?,?,?,?,1)`,
-      uuid(), p.internalKey, p.productType, p.displayName, p.grantedUnits, p.priceMinor, 'USD', p.period, JSON.stringify(p.featureFlags));
+    run(`INSERT INTO products (id, internal_key, product_type, display_name, granted_units, price_minor, currency, period, feature_flags, google_product_id, apple_product_id, active)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,1)`,
+      uuid(), p.internalKey, p.productType, p.displayName, p.grantedUnits, p.priceMinor, 'USD', p.period, JSON.stringify(p.featureFlags), p.googleProductId, p.appleProductId);
   }
 }

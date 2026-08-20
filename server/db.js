@@ -230,6 +230,14 @@ CREATE TABLE IF NOT EXISTS events (
 );
 `);
 
+// Lightweight migrations for columns added after first ship.
+function ensureColumn(table, col, ddl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+}
+ensureColumn('products', 'google_product_id', 'google_product_id TEXT');
+ensureColumn('products', 'apple_product_id', 'apple_product_id TEXT');
+
 export const uuid = () => randomUUID();
 export const now = () => new Date().toISOString();
 

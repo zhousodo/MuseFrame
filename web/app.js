@@ -1,7 +1,8 @@
 // MuseFrame web app — curated-gallery P0 flow (spec §6):
 // Onboarding → Discover → Exhibition → Styles → Preview settings → Progress → Result,
 // plus Projects, Profile, Paywall. Vanilla DOM, no build step.
-import { ensureSession, get, post, put, del, assetUrl, apiUrl, track } from './api.js';
+import { ensureSession, setToken, get, post, put, del, assetUrl, apiUrl, track } from './api.js';
+import { deviceId, getAuthConfig, nativeSignIn, nativePurchase, isNative, platform } from './native.js';
 
 // ---------- tiny DOM helper ----------
 function h(tag, attrs, ...children) {
@@ -757,11 +758,26 @@ function ProfileScreen() {
   return h('div', { class: 'screen' },
     h('div', { class: 'scroll', style: { padding: 'max(22px, env(safe-area-inset-top)) 20px 116px' } },
       h('div', { class: 'page-title', style: { padding: '14px 0 16px' } }, 'Profile'),
-      h('div', { style: { display: 'flex', alignItems: 'center', gap: '14px', paddingBottom: '18px' } },
-        h('div', { style: { width: '54px', height: '54px', borderRadius: '999px', background: 'var(--ink)', color: 'var(--canvas)', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '600 22px var(--serif)' } }, 'G'),
-        h('div', null,
-          h('div', { style: { font: '600 16px var(--sans)' } }, 'Guest'),
-          h('div', { style: { font: '400 12px var(--sans)', color: 'var(--ink-muted)' } }, 'Works are saved on this device'))),
+      (() => {
+        const signedIn = localStorage.getItem('mf.signedIn') === '1';
+        const name = localStorage.getItem('mf.userName') || (signedIn ? 'Creator' : 'Guest');
+        const cfg = S.authConfig || {};
+        const showGoogle = !signedIn && cfg.google?.enabled;
+        const showApple = !signedIn && cfg.apple?.enabled && platform() === 'ios';
+        return h('div', { style: { paddingBottom: '18px' } },
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: '14px' } },
+            h('div', { style: { width: '54px', height: '54px', borderRadius: '999px', background: 'var(--ink)', color: 'var(--canvas)', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '600 22px var(--serif)' } }, (name[0] || 'G').toUpperCase()),
+            h('div', null,
+              h('div', { style: { font: '600 16px var(--sans)' } }, name),
+              h('div', { style: { font: '400 12px var(--sans)', color: 'var(--ink-muted)' } },
+                signedIn ? 'Signed in — works follow your account' : 'Works are saved on this device'))),
+          (showGoogle || showApple) && h('div', { style: { display: 'flex', gap: '10px', paddingTop: '14px' } },
+            showGoogle && h('button', { class: 'btn secondary small', style: { flex: 1 }, onClick: () => signIn('google') }, '使用 Google 登录'),
+            showApple && h('button', { class: 'btn secondary small', style: { flex: 1 }, onClick: () => signIn('apple') }, '通过 Apple 登录')),
+          !signedIn && !showGoogle && !showApple && isNative() && h('div', { style: { font: '400 11.5px var(--sans)', color: 'var(--ink-muted)', paddingTop: '10px' } },
+            '第三方登录开通后，可跨设备同步你的作品与权益。'),
+        );
+      })(),
       h('div', { class: 'panel', style: { padding: '16px' } },
         h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
           h('div', { style: { font: '600 15px var(--serif)' } }, planName),
@@ -795,13 +811,30 @@ function PaywallSheet() {
   const sel = plans.find(p => p.internalKey === S.payPlan) || plans[0];
   const price = (m) => `$${(m / 100).toFixed(2)}`;
   const buy = async (key) => {
+    const product = S.products.find(p => p.internalKey === key);
     try {
-      const res = await post('/v1/purchases/verify', { platform: 'web', productKey: key, transactionId: `web_${crypto.randomUUID()}` });
+      // Native store purchase → server-side receipt verification (the only
+      // path that grants entitlements in production).
+      let payload = null;
+      const native = await nativePurchase(product).catch(e => { throw e; });
+      if (native) {
+        payload = { ...native, productKey: key };
+      } else if (S.authConfig?.billing?.mock) {
+        payload = { platform: 'web', productKey: key, transactionId: `web_${crypto.randomUUID()}` }; // dev only
+      } else {
+        toast('请在手机 App 内完成购买'); return;
+      }
+      const res = await post('/v1/purchases/verify', payload);
       S.ent = res.entitlements; S.paywall = null;
       render(); renderOverlay();
       toast(key === 'mini_pack' ? 'Mini Pack added — 8 images' : 'Welcome to Creator');
       track('purchase_completed', { productId: key });
-    } catch { toast('Purchase failed — you were not charged'); }
+    } catch (e) {
+      if (e.userMessage) toast(e.userMessage);
+      else if (e.code === 'PROVIDER_NOT_CONFIGURED') toast('商店购买尚未开通，敬请期待');
+      else if (e.code === 'PURCHASE_INVALID') toast('购买校验未通过，如已扣款请联系客服');
+      else toast('Purchase failed — you were not charged');
+    }
   };
   return h('div', { class: 'sheet-backdrop', onClick: () => { S.paywall = null; renderOverlay(); } },
     h('div', { class: 'sheet', onClick: (e) => e.stopPropagation() },
@@ -826,6 +859,9 @@ function PaywallSheet() {
         `Continue — ${price(sel.priceMinor)} / ${sel.period}`),
       mini && h('button', { class: 'linkbtn', style: { width: '100%', textAlign: 'center', paddingTop: '14px', color: 'var(--ink)', fontSize: '12.5px' }, onClick: () => buy('mini_pack') },
         `Not ready? Mini Pack — 8 images for ${price(mini.priceMinor)}`),
+      S.authConfig?.freeRequiresAuth && localStorage.getItem('mf.signedIn') !== '1' && S.authConfig?.google?.enabled &&
+        h('button', { class: 'linkbtn', style: { width: '100%', textAlign: 'center', paddingTop: '12px', fontSize: '12.5px' }, onClick: () => signIn('google') },
+          '登录即可领取免费生成额度'),
       h('button', { class: 'linkbtn', style: { width: '100%', textAlign: 'center', paddingTop: '10px', fontWeight: 500, fontSize: '12px' }, onClick: async () => { await refreshEnt(); render(); toast(S.ent.plan === 'free' ? 'No previous purchases found' : 'Purchases restored'); } }, 'Restore purchases'),
       h('div', { style: { textAlign: 'center', font: '400 10px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '12px' } }, 'Demo checkout — no real charge. Auto-renews until cancelled. Terms · Privacy'),
     ),
@@ -923,8 +959,9 @@ async function bootApp() {
   S.bootError = false;
   render(); // paint loader immediately
   try {
-    await ensureSession();
+    await ensureSession(await deviceId());
     await loadCore();
+    S.authConfig = await getAuthConfig();
     track('discover_viewed', {});
   } catch (e) {
     S.bootError = true;
@@ -933,3 +970,20 @@ async function bootApp() {
   render();
 }
 bootApp();
+
+// ---------- sign-in ----------
+async function signIn(provider) {
+  try {
+    const res = await nativeSignIn(provider);
+    setToken(res.accessToken);
+    S.user = res.user;
+    localStorage.setItem('mf.userName', res.user.displayName || '');
+    localStorage.setItem('mf.signedIn', '1');
+    await refreshEnt();
+    await loadProfile();
+    toast(`欢迎，${res.user.displayName || '创作者'}`);
+    render(); renderOverlay();
+  } catch (e) {
+    toast(e.userMessage || '登录失败，请重试');
+  }
+}

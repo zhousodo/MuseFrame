@@ -31,13 +31,16 @@ function createUser(displayName, isGuest, locale) {
 
 // Free grant is deliberate and idempotent per identity — NOT handed out on every
 // createUser (which would let reinstall-farming mint infinite free generations).
-// When freeRequiresAuth is on, guests get nothing until they sign in with a
-// real provider identity; the grant is keyed to that identity so it fires once.
-function maybeGrantFree(userId, isGuest) {
+// Dedupe key preference: provider identity > device fingerprint > user id.
+// The lookup is GLOBAL (across users): a device or identity that has ever
+// claimed the free image can never mint another one via a fresh account.
+function maybeGrantFree(userId, isGuest, deviceId) {
   if (FREE_UNITS <= 0) return;
   if (isGuest && verifyConfig.freeRequiresAuth) return;
-  const already = q1(`SELECT id FROM credit_ledger WHERE user_id = ? AND reference_key = ?`, userId, `grant:free_grant:${userId}`);
-  if (!already) grantUnits(userId, FREE_UNITS, 'free_grant', userId);
+  const deviceHash = deviceId ? createHash('sha256').update(String(deviceId)).digest('hex').slice(0, 24) : null;
+  const dedupeId = isGuest ? (deviceHash || userId) : userId;
+  const already = q1(`SELECT id FROM credit_ledger WHERE reference_key = ? LIMIT 1`, `grant:free_grant:${dedupeId}`);
+  if (!already) grantUnits(userId, FREE_UNITS, 'free_grant', dedupeId);
 }
 
 function createSession(userId, deviceId) {
@@ -153,7 +156,7 @@ route('POST', '/v1/auth/exchange', async (ctx) => {
   if (provider === 'guest' || !provider) {
     if (!verifyConfig.allowGuest) throw new ApiError(403, 'AUTH_REQUIRED', 'Sign in to continue.');
     userId = createUser(displayName || null, true, locale);
-    maybeGrantFree(userId, true);
+    maybeGrantFree(userId, true, deviceId);
   } else if (provider === 'google' || provider === 'apple') {
     // Cryptographically verify the ID token with the issuer's public keys.
     // A forged or replayed token cannot pass — identity is the provider's `sub`.
@@ -181,7 +184,7 @@ route('POST', '/v1/auth/exchange', async (ctx) => {
       run('INSERT INTO auth_identities (id, user_id, provider, provider_subject, email_normalized, created_at) VALUES (?,?,?,?,?,?)',
         uuid(), userId, provider, subject, claims.email || null, now());
     }
-    maybeGrantFree(userId, false);
+    maybeGrantFree(userId, false, deviceId);
   } else {
     throw new ApiError(422, 'VALIDATION', 'Unknown provider.');
   }
@@ -190,6 +193,24 @@ route('POST', '/v1/auth/exchange', async (ctx) => {
   const user = q1('SELECT id, is_guest, display_name FROM users WHERE id = ?', userId);
   return { accessToken: token, user: { id: user.id, isGuest: !!user.is_guest, displayName: user.display_name } };
 });
+
+// What sign-in / billing options this deployment supports. The packaged app
+// reads this at boot, so enabling providers later is a server-side .env change
+// — no app update required.
+route('GET', '/v1/auth/config', () => ({
+  guestAllowed: verifyConfig.allowGuest,
+  freeRequiresAuth: verifyConfig.freeRequiresAuth,
+  google: {
+    enabled: verifyConfig.googleSignIn,
+    webClientId: (process.env.GOOGLE_WEB_CLIENT_ID || (process.env.GOOGLE_CLIENT_IDS || '').split(',')[0] || '').trim() || null,
+  },
+  apple: { enabled: verifyConfig.appleSignIn },
+  billing: {
+    google: verifyConfig.playBilling,
+    apple: false, // App Store Server API verification not yet configured
+    mock: verifyConfig.allowMockPurchases,
+  },
+}));
 
 route('GET', '/v1/discover', (ctx) => {
   const plan = ctx.user ? userPlan(ctx.user.id) : 'free';
@@ -475,6 +496,8 @@ route('GET', '/v1/products', () => ({
   products: q('SELECT * FROM products WHERE active = 1').map(p => ({
     internalKey: p.internal_key, productType: p.product_type, displayName: p.display_name,
     grantedUnits: p.granted_units, priceMinor: p.price_minor, currency: p.currency, period: p.period,
+    googleProductId: p.google_product_id || p.internal_key,
+    appleProductId: p.apple_product_id || p.internal_key,
   })),
 }));
 
@@ -489,9 +512,7 @@ route('POST', '/v1/purchases/verify', async (ctx) => {
   if (!product) throw new ApiError(404, 'NOT_FOUND', 'Unknown product.');
 
   // The Play/App Store product ID actually purchased (falls back to internalKey).
-  const storeProductId = platform === 'apple'
-    ? product.internal_key // wire apple_product_id column when store IDs differ
-    : product.internal_key;
+  const storeProductId = (platform === 'apple' ? product.apple_product_id : product.google_product_id) || product.internal_key;
 
   let verified = false, expiresAt = null, externalTxId = transactionId || purchaseToken;
   if (platform === 'google') {

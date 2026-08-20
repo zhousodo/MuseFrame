@@ -8,17 +8,21 @@ export const apiUrl = (p) => (p?.startsWith('/') ? API_BASE + p : p);
 
 export let token = localStorage.getItem(KEY) || null;
 
-export async function ensureSession() {
+export function setToken(t) {
+  token = t;
+  localStorage.setItem(KEY, t);
+}
+
+export async function ensureSession(deviceId) {
   if (token) {
     try { await get('/v1/entitlements/me'); return; }
     catch (e) { if (e.code !== 'AUTH_REQUIRED') return; token = null; }
   }
   const res = await fetch(apiUrl('/v1/auth/exchange'), {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider: 'guest', locale: navigator.language }),
+    body: JSON.stringify({ provider: 'guest', locale: navigator.language, deviceId }),
   }).then(r => r.json());
-  token = res.accessToken;
-  localStorage.setItem(KEY, token);
+  if (res.accessToken) setToken(res.accessToken);
 }
 
 async function request(method, path, body, extraHeaders = {}, raw = false) {
