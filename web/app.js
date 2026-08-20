@@ -314,15 +314,28 @@ function ImportScreen() {
 }
 
 // Downscale + re-encode to JPEG client-side (strips EXIF/GPS by re-encoding).
-async function toJpeg(file, maxEdge = 2048) {
+// Falls back to <img> decoding on WebViews without createImageBitmap(File).
+async function decodeToSource(file) {
   const bmp = await createImageBitmap(file).catch(() => null);
-  if (!bmp) throw new Error('unsupported');
-  const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height));
-  const w = Math.round(bmp.width * scale), hgt = Math.round(bmp.height * scale);
+  if (bmp) return bmp;
+  return await new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode')); };
+    img.src = url;
+  });
+}
+async function toJpeg(file, maxEdge = 2048) {
+  const src = await decodeToSource(file);
+  const sw = src.naturalWidth || src.width, sh = src.naturalHeight || src.height;
+  const scale = Math.min(1, maxEdge / Math.max(sw, sh));
+  const w = Math.round(sw * scale), hgt = Math.round(sh * scale);
   const canvas = document.createElement('canvas');
   canvas.width = w; canvas.height = hgt;
-  canvas.getContext('2d').drawImage(bmp, 0, 0, w, hgt);
+  canvas.getContext('2d').drawImage(src, 0, 0, w, hgt);
   const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.92));
+  if (!blob) throw new Error('decode');
   return { blob, width: w, height: hgt };
 }
 
@@ -359,7 +372,10 @@ async function handleFile(file) {
     track('analysis_completed', { subjectType: S.draft.analysis?.subjectType });
   } catch (e) {
     S.analyzing = false; renderOverlay();
-    toast(e.code === 'ASSET_UNSUPPORTED' ? e.message : 'Could not read that image — try another');
+    // Distinguish decode problems from connectivity problems (spec §23 recoverable errors).
+    if (e.code === 'ASSET_UNSUPPORTED') toast(e.message);
+    else if (e.message === 'decode' || e.message === 'unsupported') toast('Could not read that image — try another');
+    else toast('Connection problem — check your network and try again', 2600);
   }
 }
 
