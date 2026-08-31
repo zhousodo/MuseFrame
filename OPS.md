@@ -53,6 +53,19 @@ sudo docker compose up -d
 只有少数 env-only 开关（`ALLOW_MOCK_PURCHASES`、`ALLOW_TEST_LOGIN`、
 `GOOGLE_SERVICE_ACCOUNT_JSON` 路径）需要改 `.env` + `docker compose restart`。
 
+## 2.1 一句话部署（含上线后安全回归）
+
+```bash
+cd /opt/museframe && bash server/tools/deploy.sh
+```
+
+备份 `.env` → `git pull` → 关掉两个开发开关 → `docker compose up -d --build` →
+**对着公网实跑一遍白嫖路径**并逐条打 PASS/FAIL（空 body 换令牌拿不拿得到额度、
+演示购买/测试登录无令牌是否被拒、公众端 `billing.mock` 是否为 false）。
+全绿才去后台贴回图像密钥。`data/` 全程不碰；脚本幂等，可重复跑。
+
+`/opt/museframe` 若还不是 git 仓库，脚本会打印两种接法后退出，不乱猜。
+
 ## 3.1 图像生成开关（后台一眼可见）
 
 后台 **概览 / 配置** 顶部有一条生成状态横幅，三种状态：
