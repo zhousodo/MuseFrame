@@ -9,6 +9,7 @@ import { releaseUnits } from './ledger.js';
 import { verifyGoogleIdToken, verifyAppleIdToken, verifyPlayPurchase, verifyConfig } from './verify.js';
 import { enqueueJob } from './jobs.js';
 import { decodeJpeg, analyzeImage, recommendStyles } from './engine/styleEngine.js';
+import { generationStatus } from './engine/remoteAdapter.js';
 import { cfg } from './configStore.js';
 import { sendLoginCode, smtpConfigured } from './email.js';
 import { registerAdminRoutes } from './admin.js';
@@ -286,8 +287,21 @@ route('POST', '/v1/auth/email/verify', (ctx) => {
 // What sign-in / billing options this deployment supports. The packaged app
 // reads this at boot, so enabling providers later is a server-side .env change
 // — no app update required.
+// Whether this deployment can actually make an image, plus how long it takes.
+// `available:false` lets the client say so up front instead of letting someone
+// spend a unit on a job the worker is going to refuse.
+function generationInfo() {
+  const gen = generationStatus();
+  return {
+    available: gen.available,
+    unavailableReason: gen.available ? null : gen.reason,
+    estimatedRangeSeconds: gen.mode === 'remote' ? [60, 300] : [5, 30],
+  };
+}
+
 route('GET', '/v1/auth/config', () => ({
   guestAllowed: verifyConfig.allowGuest,
+  generation: generationInfo(),
   freeRequiresAuth: verifyConfig.freeRequiresAuth,
   google: {
     enabled: verifyConfig.googleSignIn,
@@ -318,7 +332,7 @@ route('GET', '/v1/discover', (ctx) => {
   }));
   return {
     edition: '2026-W33', heroExhibition: shelves[0], shelves: shelves.slice(1), configVersion: 1,
-    generation: { estimatedRangeSeconds: process.env.IMAGE_PROVIDER === 'remote' ? [60, 300] : [5, 30] },
+    generation: generationInfo(),
   };
 });
 
@@ -477,6 +491,13 @@ route('POST', '/v1/generation-jobs', (ctx) => {
     return JSON.parse(prior.response_body);
   }
 
+  // No configured image provider ⇒ refuse before anything is written or billed.
+  // (The worker re-checks; this is the one that keeps units untouched.)
+  const gen = generationStatus();
+  if (!gen.available) {
+    throw new ApiError(503, 'GENERATION_UNAVAILABLE', 'Image generation is unavailable right now.');
+  }
+
   const { projectId, sourceAssetId, styleVersionId, controls = {}, output = {}, parentJobId } = ctx.body || {};
   const project = q1('SELECT * FROM projects WHERE id = ? AND user_id = ? AND deleted_at IS NULL', projectId, user.id);
   if (!project) throw new ApiError(404, 'NOT_FOUND', 'Project not found.');
@@ -519,7 +540,7 @@ route('POST', '/v1/generation-jobs', (ctx) => {
   enqueueJob(jobId);
 
   const body = {
-    job: { id: jobId, status: 'queued', stage: 'preparing', estimatedRangeSeconds: process.env.IMAGE_PROVIDER === 'remote' ? [60, 300] : [5, 30], reservedUnits: units, createdAt: t },
+    job: { id: jobId, status: 'queued', stage: 'preparing', estimatedRangeSeconds: generationInfo().estimatedRangeSeconds, reservedUnits: units, createdAt: t },
     entitlementSnapshot: { availableUnits: availableUnits(user.id), plan },
   };
   run(`INSERT INTO idempotency_records (user_id, idempotency_key, request_hash, response_status, response_body, created_at)

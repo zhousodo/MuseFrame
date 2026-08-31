@@ -53,6 +53,27 @@ sudo docker compose up -d
 只有少数 env-only 开关（`ALLOW_MOCK_PURCHASES`、`ALLOW_TEST_LOGIN`、
 `GOOGLE_SERVICE_ACCOUNT_JSON` 路径）需要改 `.env` + `docker compose restart`。
 
+## 3.1 图像生成开关（后台一眼可见）
+
+后台 **概览 / 配置** 顶部有一条生成状态横幅，三种状态：
+
+| 横幅 | 含义 | 用户侧表现 |
+|---|---|---|
+| ⛔ 已停用 | `IMAGE_PROVIDER=remote` 但缺 `image_provider_api_key` / `image_provider_base_url` | 生成按钮变灰「Generating is paused」；接口 503 `GENERATION_UNAVAILABLE`；**不预留、不扣额度** |
+| ⚠️ 本地像素引擎 | `.env` 里显式 `IMAGE_PROVIDER=local` | 能生成，但产出是本地滤镜、不是模型结果，**不要对外开放** |
+| ✅ 正常 | 远程模型已配置 | 正常生成 |
+
+要点：
+
+- **没配密钥就一张也生不出来**，这是硬门禁。API 在建任务前就拒（额度分毫不动），
+  worker 启动时也会重查——密钥被摘掉之前排队/卡住的任务会被判 `GENERATION_UNAVAILABLE`
+  并**退回预留额度**（`credit_ledger` 的 release），不会再挂着。
+- **要断开上游**：后台把 `image_provider_api_key` 清空即可（立即生效，无需重启）。
+  注意后台设过的值写在 `app_config` 表，此后清 `.env` 环境变量无效——必须在后台清，
+  或把 `.env` 的 `IMAGE_PROVIDER` 改成别的值再重启。
+- `local_engine_fallback`（默认关）：开启后远程失败会回落本地像素引擎并**照常扣费**，
+  交付的不是模型结果。除非你清楚代价，否则保持关闭。
+
 ## 4. 邮箱验证码登录
 
 - 开关：后台配置 `email_login_enabled`（当前已开）。
@@ -93,3 +114,7 @@ sudo docker compose up -d --build   # 用当前 /opt/museframe 源码重建
 - 后台令牌 header 传递、图片短令牌、DB 浏览器对密钥/会话掩码、查询台禁访问凭据表。
 - 容器 `mem_limit: 512m`，日志滚动 10m×3，不会拖垮同机 LensCript。
 - 生产 `.env`：`ALLOW_MOCK_PURCHASES=false`、`ALLOW_TEST_LOGIN=false`。
+- 未配置图像密钥时整站拒绝生成（见 §3.1），本地像素引擎不会顶替付费模型。
+- ⚠️ **仍未堵的洞**：`ALLOW_GUEST=true` + `FREE_REQUIRES_AUTH=false` 时，
+  `POST /v1/auth/exchange` 空 body 无凭据即可换令牌 → 循环建游客白嫖免费额度。
+  贴回付费密钥前先按 `docs/ops/额度暴露与临时处置-20260831.md` §三 处理。

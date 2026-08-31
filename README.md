@@ -83,10 +83,19 @@ data/          SQLite DB + uploaded/generated assets (created at runtime)
   are downscaled to 1024 px before sending; results are center-cropped to the
   requested output ratio. Configure via `.env` (`IMAGE_PROVIDER=remote`,
   base URL / API key / model, default `gpt-image-2`). Typical latency 1–5 min.
-- **Backup — LocalStyleEngine**: the deterministic pixel engine. Used
-  automatically when the provider fails or times out (safety rejections are NOT
-  retried locally — the job fails with `GENERATION_REJECTED` and 0 units charged),
-  and exclusively when `IMAGE_PROVIDER=local` or no key is set.
+- **Backup — LocalStyleEngine**: the deterministic pixel engine. It runs the
+  whole pipeline only when the operator explicitly sets `IMAGE_PROVIDER=local`
+  (dev / offline). As a fallback for a *failed* remote call it is **off by
+  default** and must be turned on deliberately (`local_engine_fallback`, admin
+  panel or `LOCAL_ENGINE_FALLBACK`) — a filter pass is not the model's output and
+  should not be delivered, and billed, as one. Safety rejections are never
+  retried locally: the job fails with `GENERATION_REJECTED` and 0 units charged.
+- **No provider configured ⇒ no generation.** With `IMAGE_PROVIDER=remote`
+  (the default) and no API key / base URL, the service refuses to generate at
+  all: `POST /v1/generation-jobs` returns 503 `GENERATION_UNAVAILABLE` before any
+  unit is reserved, the worker refuses jobs queued earlier (releasing their
+  reserved units), and `/v1/discover` reports `generation.available: false` so the
+  app greys out the button. The local engine never stands in for a missing key.
 
 ## Performance notes (provider latency)
 

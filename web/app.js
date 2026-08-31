@@ -479,12 +479,22 @@ function ConfigureScreen() {
         h('div', { style: { font: '500 11px var(--sans)', color: 'var(--ink-muted)' } }, unitsBadgeText())),
     ),
     h('div', { class: 'bottom-bar' },
-      h('button', { class: 'btn', onClick: generate }, 'Generate')),
+      generationOffline()
+        ? h('button', { class: 'btn', disabled: true, style: { opacity: .55 } }, 'Generating is paused')
+        : h('button', { class: 'btn', onClick: generate }, 'Generate')),
   );
+}
+
+// The server refuses jobs when no image model is configured (503
+// GENERATION_UNAVAILABLE). Say so before the tap instead of after.
+function generationOffline() {
+  const g = S.discover?.generation || S.authConfig?.generation;
+  return !!g && g.available === false;
 }
 
 // ---------- generation ----------
 function estimateLabel() {
+  if (generationOffline()) return 'Generating is paused — nothing will be charged';
   const r = S.lastEstimate || S.discover?.generation?.estimatedRangeSeconds;
   if (r && r[1] > 120) return `Estimate — 1 standard image · ${Math.round(r[0] / 60)}–${Math.round(r[1] / 60)} min`;
   return 'Estimate — 1 standard image · 20–90 s';
@@ -492,6 +502,7 @@ function estimateLabel() {
 let pollTimer = null;
 async function generate() {
   const d = S.draft;
+  if (generationOffline()) { toast('Generating is paused right now — no units used', 2600); return; }
   if (!d.projectId || !d.assetId) { startImport(S.screen); return; }
   try {
     track('generation_submitted', { styleId: d.style.styleId });
@@ -512,7 +523,12 @@ async function generate() {
     pollJob(res.job.id);
   } catch (e) {
     if (e.code === 'INSUFFICIENT_ENTITLEMENT') openPaywall(e.details?.premiumStyle ? 'premium' : 'units');
-    else toast(e.message || 'Could not start — try again');
+    else if (e.code === 'GENERATION_UNAVAILABLE') {
+      // Key was cleared while the app was open — reflect it and re-render.
+      if (S.discover?.generation) S.discover.generation.available = false;
+      toast('Generating is paused right now — no units used', 2600);
+      render();
+    } else toast(e.message || 'Could not start — try again');
   }
 }
 
@@ -533,7 +549,10 @@ function pollJob(jobId) {
         await refreshEnt();
         track('generation_failed', { jobId, errorCode: job.error?.code });
         if (S.screen === 'progress') {
-          toast(job.error?.code === 'GENERATION_REJECTED' ? 'This request can’t be created — no units used' : 'Something went wrong — no units used', 2600);
+          const code = job.error?.code;
+          toast(code === 'GENERATION_REJECTED' ? 'This request can’t be created — no units used'
+            : code === 'GENERATION_UNAVAILABLE' ? 'Generating is paused right now — no units used'
+            : 'Something went wrong — no units used', 2600);
           go('configure');
         }
       } else if (S.screen === 'progress') render();

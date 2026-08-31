@@ -26,6 +26,8 @@ const REGISTRY = {
   image_provider_model: { type: 'string', envVar: 'IMAGE_PROVIDER_MODEL', default: 'gpt-image-2', description: '图像模型名称' },
   prompt_compiler_model: { type: 'string', envVar: 'PROMPT_COMPILER_MODEL', default: 'gpt-5.4-mini', description: '提示词编译模型' },
   image_provider_timeout_ms: { type: 'number', envVar: 'IMAGE_PROVIDER_TIMEOUT_MS', default: 420000, description: '图像模型请求超时时间（毫秒）' },
+  // 关闭时（默认）：远程生成失败即失败退款，绝不用本地像素引擎冒充模型结果。
+  local_engine_fallback: { type: 'boolean', envVar: 'LOCAL_ENGINE_FALLBACK', default: false, description: '远程生成失败时回落本地像素引擎（默认关闭：回落产出的不是模型结果）' },
   worker_concurrency: { type: 'number', envVar: 'WORKER_CONCURRENCY', default: 3, description: '生成任务并发数' },
   google_client_ids: { type: 'string', envVar: 'GOOGLE_CLIENT_IDS', default: '', description: 'Google 登录 OAuth Client IDs(逗号分隔)' },
   apple_bundle_ids: { type: 'string', envVar: 'APPLE_BUNDLE_IDS', default: '', description: 'Sign in with Apple Bundle IDs(逗号分隔)' },

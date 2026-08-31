@@ -53,6 +53,11 @@
   .badge-gray { background:#EFEDE6; color:var(--muted); }
   .badge-light { background:#F7F5EF; color:var(--muted); border:1px solid var(--line); }
   .badge-warn { background:rgba(180,35,24,.1); color:var(--bad); }
+  .genbar { border-radius:12px; padding:12px 14px; margin:16px 0 4px; border:1px solid var(--line); background:#fff; font-size:13px; line-height:1.55; }
+  .genbar.down { border-color:rgba(180,35,24,.35); background:rgba(180,35,24,.06); }
+  .genbar.local { border-color:rgba(180,120,24,.35); background:rgba(180,120,24,.07); }
+  .genbar b { display:block; font-size:14px; margin-bottom:2px; }
+  .genbar code { background:#EFEDE6; border-radius:4px; padding:1px 5px; font-size:12px; }
 
   .cfgrow { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:8px; }
   .cfgmeta { flex:1; min-width:0; }
@@ -104,6 +109,7 @@
   </div>
 
   <section id="tab-overview" class="tabpane" style="display:none">
+    <div id="genbarOverview"></div>
     <div class="cards" id="cards">加载中…</div>
     <h2>生成任务（最近 60 条）</h2>
     <div class="wrap"><table id="jobs"></table></div>
@@ -150,6 +156,7 @@
   </section>
 
   <section id="tab-config" class="tabpane" style="display:none">
+    <div id="genbarConfig"></div>
     <h2 style="margin-top:20px">系统配置</h2>
     <div id="configForm">加载中…</div>
     <h2>商品管理</h2>
@@ -251,6 +258,7 @@ async function loadOverview(){
     await ensureImgTok();
     const o = await api('/v1/admin/overview');
     stamp();
+    renderGenBar(o.generation);
     const j = o.jobsByStatus || {};
     $('cards').innerHTML = [
       ['用户总数', o.users, '今日 +' + o.usersToday],
@@ -500,6 +508,33 @@ async function runSql(){
   }
 }
 
+/* ---------- 图像生成状态 ---------- */
+/* 没配密钥就不该能生成。这条横幅让「服务器活着但一张图也做不出来」一眼可见，
+   而不是让本地像素引擎冒充模型、看上去一切正常。 */
+const GEN_REASONS = {
+  PROVIDER_NOT_CONFIGURED: '图像模型未配置——下面填好接口地址与 API 密钥后立即生效（无需重启）。',
+  PROVIDER_UNKNOWN: 'IMAGE_PROVIDER 取值无法识别，只支持 remote 或 local（.env，改后需重启）。',
+};
+function renderGenBar(g){
+  if (!g) return;
+  let cls, html;
+  if (!g.available) {
+    cls = 'genbar down';
+    const miss = (g.missing||[]).map(k=>`<code>${escapeHtml(k)}</code>`).join('、') || '—';
+    html = `<b>⛔ 图像生成已停用——用户无法生成，任务会以 GENERATION_UNAVAILABLE 失败并原额退回</b>
+            ${escapeHtml(GEN_REASONS[g.reason] || g.reason || '')}<br>缺少：${miss}`;
+  } else if (g.mode === 'local') {
+    cls = 'genbar local';
+    html = `<b>⚠️ 本地像素引擎模式（IMAGE_PROVIDER=local）</b>
+            产出的是本地滤镜结果、不是模型结果，仅供开发/离线自测，不要对外开放。`;
+  } else {
+    cls = 'genbar';
+    html = `<b>✅ 图像生成正常——远程模型已配置</b>
+            接口 <code>${escapeHtml(g.provider)}</code>${g.localFallback ? ' · <span class="bad">已开启失败回落本地引擎：远程失败时会交付非模型结果并照常扣费</span>' : ' · 远程失败即失败退款，不用本地引擎顶替'}`;
+  }
+  ['genbarOverview','genbarConfig'].forEach(id => { const el = $(id); if (el) { el.className = cls; el.innerHTML = html; } });
+}
+
 /* ---------- 配置 ---------- */
 function configRowHtml(s){
   const key = escapeHtml(s.key);
@@ -548,6 +583,7 @@ async function saveConfigItem(btn){
   try {
     const r = await api('/v1/admin/config', { method:'PUT', body:{ key, value } });
     renderConfig(r.settings || []);
+    renderGenBar(r.generation);
     toast('已保存');
   } catch(e) {
     if (e.status !== 401) toast('保存失败：' + e.message, true);
@@ -557,6 +593,7 @@ async function restoreConfigItem(key){
   try {
     const r = await api('/v1/admin/config', { method:'PUT', body:{ key, value:null } });
     renderConfig(r.settings || []);
+    renderGenBar(r.generation);
     toast('已恢复默认');
   } catch(e) {
     if (e.status !== 401) toast('操作失败：' + e.message, true);
@@ -658,6 +695,7 @@ async function loadConfig(){
   try {
     const r = await api('/v1/admin/config');
     renderConfig(r.settings || []);
+    renderGenBar(r.generation);
   } catch(e) { if (e.status !== 401) $('configForm').innerHTML = errHtml(e.message); }
   try {
     const r = await api('/v1/admin/products-admin');

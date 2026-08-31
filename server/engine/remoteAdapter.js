@@ -1,21 +1,55 @@
 // RemoteImageAdapter — primary model adapter (spec §9.3). Talks to an
 // OpenAI-compatible /v1/images/edits endpoint (image-to-image) with the source
 // photo and a prompt assembled from the StyleSpec. The client never sees the
-// provider; the worker falls back to the LocalStyleEngine backup on failure.
+// provider. The LocalStyleEngine backup is opt-in (local_engine_fallback) and
+// never stands in for an unconfigured provider — see generationStatus() below.
 import { PNG } from 'pngjs';
 import jpeg from 'jpeg-js';
 import { cfg } from '../configStore.js';
 
+// IMAGE_PROVIDER stays an env-only switch (not runtime-configurable — changing
+// providers is an ops call). It defaults to 'remote': an unset or blank value
+// must NOT silently downgrade the service to the local pixel engine, which is a
+// filter pass, not the model. Only an explicit IMAGE_PROVIDER=local does that.
+export function imageProvider() {
+  return (process.env.IMAGE_PROVIDER || 'remote').trim().toLowerCase() || 'remote';
+}
+
 // Live getters — admin overrides (base URL, key, model, timeout) apply on the
-// next request, no restart needed. IMAGE_PROVIDER itself stays an env-only
-// on/off switch (not runtime-configurable — changing providers is an ops call).
+// next request, no restart needed.
 export const remoteConfig = {
-  get enabled() { return process.env.IMAGE_PROVIDER === 'remote' && !!cfg('image_provider_api_key'); },
+  // Both the key and the endpoint are required: a key with no base URL would
+  // fail every call and (before the gate below) fall through to the local engine.
+  get enabled() { return imageProvider() === 'remote' && !!this.apiKey && !!this.baseUrl; },
   get baseUrl() { return (cfg('image_provider_base_url') || '').replace(/\/$/, ''); },
   get apiKey() { return cfg('image_provider_api_key') || ''; },
   get model() { return cfg('image_provider_model') || 'gpt-image-2'; },
   get timeoutMs() { return Number(cfg('image_provider_timeout_ms')) || 420000; },
 };
+
+/**
+ * Single source of truth for "may this deployment produce an image at all?".
+ * Checked by the API before a job is accepted (no units reserved) and again by
+ * the worker before a job runs (covers jobs queued before the key was cleared).
+ *
+ *   mode 'remote' — configured paid model
+ *   mode 'local'  — operator explicitly set IMAGE_PROVIDER=local (dev/offline)
+ *   mode 'none'   — nothing is configured; generation is refused
+ */
+export function generationStatus() {
+  const provider = imageProvider();
+  if (provider === 'local') {
+    return { available: true, provider, mode: 'local', missing: [], reason: null };
+  }
+  if (provider !== 'remote') {
+    return { available: false, provider, mode: 'none', missing: [], reason: 'PROVIDER_UNKNOWN' };
+  }
+  const missing = [];
+  if (!remoteConfig.apiKey) missing.push('image_provider_api_key');
+  if (!remoteConfig.baseUrl) missing.push('image_provider_base_url');
+  if (missing.length) return { available: false, provider, mode: 'none', missing, reason: 'PROVIDER_NOT_CONFIGURED' };
+  return { available: true, provider, mode: 'remote', missing: [], reason: null };
+}
 
 /**
  * Assemble the provider-agnostic instruction from the StyleSpec (spec §11.2).

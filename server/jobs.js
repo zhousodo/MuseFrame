@@ -6,7 +6,7 @@ import path from 'node:path';
 import { ASSET_DIR, q, q1, run, uuid, now } from './db.js';
 import { commitUnits, releaseUnits } from './ledger.js';
 import { decodeJpeg, encodeJpeg, applyStyle, cropTo, resize } from './engine/styleEngine.js';
-import { remoteConfig, createEdit } from './engine/remoteAdapter.js';
+import { remoteConfig, createEdit, generationStatus } from './engine/remoteAdapter.js';
 import { compileInstruction } from './engine/promptCompiler.js';
 import { cfg } from './configStore.js';
 
@@ -64,6 +64,17 @@ function qualityGate(result, source) {
 async function processJob(jobId) {
   const job = q1('SELECT * FROM generation_jobs WHERE id = ?', jobId);
   if (!job || ['succeeded', 'failed', 'cancelled'].includes(job.status)) return;
+
+  // Hard gate. With no image provider configured the service must not produce
+  // anything at all: the local pixel engine is a filter pass, not the model, and
+  // letting it stand in made an unconfigured deployment look fully functional
+  // while still charging a unit. Re-checked here (not just at job creation) so
+  // jobs queued before the key was cleared, or recovered at boot, also refuse.
+  const gen = generationStatus();
+  if (!gen.available) {
+    console.error(`[worker] job ${jobId} refused — ${gen.reason}${gen.missing.length ? ': ' + gen.missing.join(', ') : ''}`);
+    return failJob(job, 'GENERATION_UNAVAILABLE');
+  }
 
   setStage(jobId, 'running', 'preparing');
   await sleep(STAGE_DELAYS.preparing);
@@ -137,8 +148,11 @@ async function processJob(jobId) {
     }
   }
 
-  if (!result) {
-    // Backup model: deterministic local style engine.
+  // Backup model: deterministic local style engine. Only when this deployment is
+  // explicitly running local (IMAGE_PROVIDER=local), or an operator opted into
+  // the fallback — a filter pass is not the model's output and, off by default,
+  // must not be delivered and billed as one when the provider errors.
+  if (!result && (gen.mode === 'local' || cfg('local_engine_fallback'))) {
     attempt++;
     run('UPDATE generation_jobs SET attempt_count = ?, stage = ? WHERE id = ?', attempt, 'making', jobId);
     try {

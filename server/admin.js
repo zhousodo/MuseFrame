@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import { db, q, q1, run, ASSET_DIR } from './db.js';
 import { cfg, setCfg, listCfg, SECRET_KEYS } from './configStore.js';
 import { sendMail } from './email.js';
+import { generationStatus, imageProvider } from './engine/remoteAdapter.js';
 
 export function registerAdminRoutes(route, deps) {
   const { ApiError } = deps;
@@ -65,6 +66,7 @@ export function registerAdminRoutes(route, deps) {
     const dur = q1(`SELECT COUNT(*) AS n, AVG((julianday(finished_at)-julianday(created_at))*86400) AS avg_s
                     FROM generation_jobs WHERE status='succeeded' AND finished_at IS NOT NULL`);
     return {
+      generation: generationSummary(),
       users: q1('SELECT COUNT(*) AS n FROM users').n,
       usersToday: q1(`SELECT COUNT(*) AS n FROM users WHERE created_at >= datetime('now','-1 day')`).n,
       jobsByStatus,
@@ -325,6 +327,21 @@ export function registerAdminRoutes(route, deps) {
 
   // ---- runtime config ------------------------------------------------------
 
+  // Operator-facing answer to "can this deployment generate right now, and with
+  // what?". Names the missing settings so an unconfigured server is obvious in
+  // the panel rather than looking healthy while quietly refusing every job.
+  function generationSummary() {
+    const gen = generationStatus();
+    return {
+      available: gen.available,
+      mode: gen.mode,               // 'remote' | 'local' | 'none'
+      provider: imageProvider(),    // env-only IMAGE_PROVIDER
+      reason: gen.reason,
+      missing: gen.missing,
+      localFallback: !!cfg('local_engine_fallback'),
+    };
+  }
+
   route('GET', '/v1/admin/config', (ctx) => {
     requireAdmin(ctx);
     const settings = listCfg();
@@ -338,7 +355,7 @@ export function registerAdminRoutes(route, deps) {
         description: 'Google Play 收据校验服务账号是否已配置', secret: false, requiresRestart: true, readOnly: true,
       },
     );
-    return { settings };
+    return { settings, generation: generationSummary() };
   });
 
   route('PUT', '/v1/admin/config', (ctx) => {
@@ -349,7 +366,7 @@ export function registerAdminRoutes(route, deps) {
     } catch (e) {
       throw new ApiError(422, 'VALIDATION', e.message);
     }
-    return { ok: true, settings: listCfg() };
+    return { ok: true, settings: listCfg(), generation: generationSummary() };
   });
 
   // ---- products -------------------------------------------------------------
