@@ -93,7 +93,26 @@ sudo docker compose up -d
 | Google | 待配 | 后台填 `google_client_ids` |
 | Apple | 待配 | 后台填 `apple_bundle_ids` |
 
-免费额度：`free_units`（默认 1）；`free_requires_auth=true` 可要求登录后才发放（防刷）。
+免费额度：`free_units`（默认 1）；`free_requires_auth=true` 可要求登录后才发放。
+
+### 5.1 免费额度的四道闸（防白嫖）
+
+游客令牌零成本可换（`POST /v1/auth/exchange` 空 body 即可拿 token），所以只靠账号维度
+限制等于没限制。现在每次发放要同时过四关，任一不过就**不发**（账号照建，仍可登录/购买）：
+
+1. **游客必须带设备指纹**。没有 `deviceId` 一律不发——原先「没指纹就退回按 user_id 去重」
+   恰恰是匿名调用者的情形，等于对着白嫖脚本敞开。
+2. **同一设备 / 同一身份只发一次**（全局去重，换新账号也不再发）。
+3. **单 IP 每 24 小时上限** `free_grants_per_ip_day`（默认 3）。
+4. **全站每 24 小时上限** `free_grants_per_day`（默认 50）——攻击者换 IP 也吃这一刀，
+   这是最终的成本天花板。用尽后自动停发，滚动窗口到点自愈。
+
+发放记录在 `free_grants` 表（**不存原始 IP，只存加盐哈希**；盐取自 `ADMIN_TOKEN`，
+轮换令牌会重置计数）。后台 **概览 / 配置** 顶部第二条横幅实时显示用量与是否触顶。
+把任一上限设为 `0` 或 `free_units=0` 即**完全停发**免费额度。
+
+上限值都可在后台热改、即时生效。要更严就把 `free_requires_auth` 打开或 `allow_guest` 关掉。
+
 商品数量/价格/上下架：后台 **配置 → 商品管理**。风格紧急下线：**配置 → 风格管理**。
 
 ## 6. 备份与回滚
@@ -113,8 +132,10 @@ sudo docker compose up -d --build   # 用当前 /opt/museframe 源码重建
 - 登录 / 购买全部服务端验签（伪造被拒），详见 `STORE-READINESS.md`。
 - 后台令牌 header 传递、图片短令牌、DB 浏览器对密钥/会话掩码、查询台禁访问凭据表。
 - 容器 `mem_limit: 512m`，日志滚动 10m×3，不会拖垮同机 LensCript。
-- 生产 `.env`：`ALLOW_MOCK_PURCHASES=false`、`ALLOW_TEST_LOGIN=false`。
 - 未配置图像密钥时整站拒绝生成（见 §3.1），本地像素引擎不会顶替付费模型。
-- ⚠️ **仍未堵的洞**：`ALLOW_GUEST=true` + `FREE_REQUIRES_AUTH=false` 时，
-  `POST /v1/auth/exchange` 空 body 无凭据即可换令牌 → 循环建游客白嫖免费额度。
-  贴回付费密钥前先按 `docs/ops/额度暴露与临时处置-20260831.md` §三 处理。
+- 免费额度四道闸（见 §5.1），游客循环白嫖已封死；成本有硬天花板。
+- **开发开关双重门禁**：`ALLOW_MOCK_PURCHASES`（演示购买＝凭空发额度）与
+  `ALLOW_TEST_LOGIN`（任意邮箱冒充登录，可绕过 `free_requires_auth`）现在除了
+  env 开关，还**必须带管理员令牌**才生效；`/v1/auth/config` 也不再对公众声明
+  `billing.mock`。仍请在生产 `.env` 里设为 `false`——启动时会打印告警，
+  后台横幅也会红字提示。

@@ -110,6 +110,7 @@
 
   <section id="tab-overview" class="tabpane" style="display:none">
     <div id="genbarOverview"></div>
+    <div id="guardbarOverview"></div>
     <div class="cards" id="cards">加载中…</div>
     <h2>生成任务（最近 60 条）</h2>
     <div class="wrap"><table id="jobs"></table></div>
@@ -157,6 +158,7 @@
 
   <section id="tab-config" class="tabpane" style="display:none">
     <div id="genbarConfig"></div>
+    <div id="guardbarConfig"></div>
     <h2 style="margin-top:20px">系统配置</h2>
     <div id="configForm">加载中…</div>
     <h2>商品管理</h2>
@@ -259,6 +261,7 @@ async function loadOverview(){
     const o = await api('/v1/admin/overview');
     stamp();
     renderGenBar(o.generation);
+    renderGuardBar(o.abuse);
     const j = o.jobsByStatus || {};
     $('cards').innerHTML = [
       ['用户总数', o.users, '今日 +' + o.usersToday],
@@ -535,6 +538,31 @@ function renderGenBar(g){
   ['genbarOverview','genbarConfig'].forEach(id => { const el = $(id); if (el) { el.className = cls; el.innerHTML = html; } });
 }
 
+/* ---------- 反白嫖防护状态 ---------- */
+/* 游客令牌零成本可换（POST /v1/auth/exchange 空 body 即可），所以免费额度必须有天花板：
+   同一设备一次、每 IP 每日上限、全站每日上限。这条横幅让上限用掉多少一眼可见。 */
+function renderGuardBar(a){
+  if (!a) return;
+  const bits = [];
+  let cls = 'genbar';
+  if (a.grantsDisabled) {
+    bits.push('<b>🔒 免费额度已停发</b>新账号拿不到免费张数，只有已购买/已配额的账号能生成。');
+  } else {
+    const pct = a.perDayCap > 0 ? Math.round(a.freeGrants24h / a.perDayCap * 100) : 0;
+    if (a.capReached) { cls = 'genbar down'; bits.push('<b>⛔ 全站免费额度日上限已用尽</b>新账号暂时拿不到免费张数（滚动 24 小时，到点自动恢复）。'); }
+    else if (pct >= 70) { cls = 'genbar local'; bits.push('<b>⚠️ 免费额度接近日上限</b>'); }
+    else { bits.push('<b>🛡️ 免费额度防护生效中</b>'); }
+    bits.push(`近 24 小时发放 ${a.freeGrants24h}/${a.perDayCap} 次，来自 ${a.freeGrantIps24h} 个 IP；单 IP 上限 ${a.perIpCap} 次/24h，同一设备只发一次。`);
+    if (a.guestAllowed && !a.freeRequiresAuth) bits.push('游客免登录即可领（<code>allow_guest</code> 开、<code>free_requires_auth</code> 关）——上限是唯一的闸，要收紧就调这两个开关或把上限调小。');
+  }
+  if (a.mockPurchases || a.testLogin) {
+    cls = 'genbar down';
+    const f = [a.mockPurchases ? '<code>ALLOW_MOCK_PURCHASES</code>' : null, a.testLogin ? '<code>ALLOW_TEST_LOGIN</code>' : null].filter(Boolean).join(' 与 ');
+    bits.push(`<span class="bad">⚠️ 开发开关仍开着：${f}=true。已额外要求管理员令牌才可调用，但生产环境请在 <code>.env</code> 里设为 false 并重启。</span>`);
+  }
+  ['guardbarOverview','guardbarConfig'].forEach(id => { const el = $(id); if (el) { el.className = cls; el.innerHTML = bits.join('<br>'); } });
+}
+
 /* ---------- 配置 ---------- */
 function configRowHtml(s){
   const key = escapeHtml(s.key);
@@ -584,6 +612,7 @@ async function saveConfigItem(btn){
     const r = await api('/v1/admin/config', { method:'PUT', body:{ key, value } });
     renderConfig(r.settings || []);
     renderGenBar(r.generation);
+    renderGuardBar(r.abuse);
     toast('已保存');
   } catch(e) {
     if (e.status !== 401) toast('保存失败：' + e.message, true);
@@ -594,6 +623,7 @@ async function restoreConfigItem(key){
     const r = await api('/v1/admin/config', { method:'PUT', body:{ key, value:null } });
     renderConfig(r.settings || []);
     renderGenBar(r.generation);
+    renderGuardBar(r.abuse);
     toast('已恢复默认');
   } catch(e) {
     if (e.status !== 401) toast('操作失败：' + e.message, true);
@@ -696,6 +726,7 @@ async function loadConfig(){
     const r = await api('/v1/admin/config');
     renderConfig(r.settings || []);
     renderGenBar(r.generation);
+    renderGuardBar(r.abuse);
   } catch(e) { if (e.status !== 401) $('configForm').innerHTML = errHtml(e.message); }
   try {
     const r = await api('/v1/admin/products-admin');

@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { ASSET_DIR, q, q1, run, tx, uuid, now } from './db.js';
-import { grantUnits, reserveUnits, availableUnits } from './ledger.js';
+import { grantUnits, reserveUnits, availableUnits, freeGrantWindow } from './ledger.js';
 import { releaseUnits } from './ledger.js';
 import { verifyGoogleIdToken, verifyAppleIdToken, verifyPlayPurchase, verifyConfig } from './verify.js';
 import { enqueueJob } from './jobs.js';
@@ -12,7 +12,7 @@ import { decodeJpeg, analyzeImage, recommendStyles } from './engine/styleEngine.
 import { generationStatus } from './engine/remoteAdapter.js';
 import { cfg } from './configStore.js';
 import { sendLoginCode, smtpConfigured } from './email.js';
-import { registerAdminRoutes } from './admin.js';
+import { registerAdminRoutes, isAdminRequest } from './admin.js';
 
 const MAX_UPLOAD = 25 * 1024 * 1024;
 
@@ -32,19 +32,58 @@ function createUser(displayName, isGuest, locale) {
   return id;
 }
 
-// Free grant is deliberate and idempotent per identity — NOT handed out on every
-// createUser (which would let reinstall-farming mint infinite free generations).
-// Dedupe key preference: provider identity > device fingerprint > user id.
-// The lookup is GLOBAL (across users): a device or identity that has ever
-// claimed the free image can never mint another one via a fresh account.
-function maybeGrantFree(userId, isGuest, deviceId) {
+// Salted so the table never carries anything that maps straight back to a
+// visitor's address. Rotating ADMIN_TOKEN resets the counters — acceptable.
+const IP_SALT = process.env.ADMIN_TOKEN || 'museframe';
+const hash24 = (v, salt = '') => createHash('sha256').update(salt + String(v)).digest('hex').slice(0, 24);
+
+/**
+ * Hand out the free image — deliberately, idempotently, and with a ceiling.
+ *
+ * A guest token costs nothing to mint (POST /v1/auth/exchange takes an empty
+ * body), so anything keyed only on the account is not a limit at all: loop the
+ * exchange and every new user id collects another free generation on the paid
+ * model. The old dedupe fell back to the *user id* when no deviceId was sent,
+ * which is exactly the anonymous caller's case — so the loop was wide open.
+ *
+ * Four gates now, cheapest first. All of them are server-observed except the
+ * device hash, which is only ever used to make a grant rarer, never to permit one:
+ *   1. a guest with no device fingerprint gets nothing (no fallback to user id);
+ *   2. that device / identity may claim the free image exactly once, ever;
+ *   3. per-IP ceiling in a rolling 24h (`free_grants_per_ip_day`);
+ *   4. site-wide ceiling in a rolling 24h (`free_grants_per_day`) — the
+ *      circuit breaker that still bounds spend when an attacker rotates IPs.
+ *
+ * Refusing only skips the grant: the account is still created and can sign in,
+ * buy units, and browse. Returns a reason string for logging/telemetry.
+ */
+function maybeGrantFree(userId, isGuest, deviceId, clientIp) {
   const freeUnits = cfg('free_units');
-  if (freeUnits <= 0) return;
-  if (isGuest && verifyConfig.freeRequiresAuth) return;
-  const deviceHash = deviceId ? createHash('sha256').update(String(deviceId)).digest('hex').slice(0, 24) : null;
-  const dedupeId = isGuest ? (deviceHash || userId) : userId;
-  const already = q1(`SELECT id FROM credit_ledger WHERE reference_key = ? LIMIT 1`, `grant:free_grant:${dedupeId}`);
-  if (!already) grantUnits(userId, freeUnits, 'free_grant', dedupeId);
+  if (freeUnits <= 0) return 'FREE_UNITS_ZERO';
+  if (isGuest && verifyConfig.freeRequiresAuth) return 'REQUIRES_AUTH';
+
+  const deviceHash = deviceId ? hash24(deviceId) : null;
+  // Guests must present a device fingerprint. Without one there is nothing to
+  // dedupe on, and "no dedupe key" must mean "no free image", never "free image".
+  if (isGuest && !deviceHash) return 'NO_DEVICE_ID';
+  const dedupeId = isGuest ? deviceHash : userId;
+  if (q1('SELECT id FROM free_grants WHERE dedupe_key = ? LIMIT 1', dedupeId)) return 'ALREADY_CLAIMED';
+  // Pre-existing grants predate this table; keep honouring their dedupe key.
+  if (q1('SELECT id FROM credit_ledger WHERE reference_key = ? LIMIT 1', `grant:free_grant:${dedupeId}`)) return 'ALREADY_CLAIMED';
+
+  const perIp = cfg('free_grants_per_ip_day');
+  const perDay = cfg('free_grants_per_day');
+  if (perDay <= 0 || perIp <= 0) return 'GRANTS_DISABLED';
+  // An unknown address shares one bucket rather than being exempt from the cap.
+  const ipHash = hash24(clientIp || 'unknown', IP_SALT);
+  const w = freeGrantWindow(ipHash);
+  if (w.today >= perDay) { console.warn(`[free-grant] site cap reached (${w.today}/${perDay} in 24h) — refusing`); return 'SITE_CAP'; }
+  if (w.forIp >= perIp) return 'IP_CAP';
+
+  grantUnits(userId, freeUnits, 'free_grant', dedupeId);
+  run('INSERT INTO free_grants (id, user_id, dedupe_key, device_hash, ip_hash, units, created_at) VALUES (?,?,?,?,?,?,?)',
+    uuid(), userId, dedupeId, deviceHash, ipHash, freeUnits, now());
+  return 'GRANTED';
 }
 
 function createSession(userId, deviceId) {
@@ -155,12 +194,12 @@ const route = (method, pattern, handler) => routes.push({ method, pattern: new R
 
 route('POST', '/v1/auth/exchange', async (ctx) => {
   const { provider, deviceId, locale, displayName, identityToken } = ctx.body || {};
-  let userId;
+  let userId, grantOutcome = null;
 
   if (provider === 'guest' || !provider) {
     if (!verifyConfig.allowGuest) throw new ApiError(403, 'AUTH_REQUIRED', 'Sign in to continue.');
     userId = createUser(displayName || null, true, locale);
-    maybeGrantFree(userId, true, deviceId);
+    grantOutcome = maybeGrantFree(userId, true, deviceId, ctx.clientIp);
   } else if (provider === 'google' || provider === 'apple' || provider === 'dev') {
     // Cryptographically verify the ID token with the issuer's public keys.
     // A forged or replayed token cannot pass — identity is the provider's `sub`.
@@ -168,7 +207,12 @@ route('POST', '/v1/auth/exchange', async (ctx) => {
     if (provider === 'dev') {
       // DEV-ONLY test login (ALLOW_TEST_LOGIN=true, off in production). Exercises
       // the email-capture / guest-merge / admin-display path without live OAuth.
-      if (process.env.ALLOW_TEST_LOGIN !== 'true') throw new ApiError(403, 'AUTH_INVALID', 'Test login disabled.');
+      // Flag AND operator token. A flag left on in production would otherwise let
+      // anyone mint a "signed-in" account with any email — which also walks
+      // straight past free_requires_auth.
+      if (process.env.ALLOW_TEST_LOGIN !== 'true' || !isAdminRequest(ctx.req, ctx.url)) {
+        throw new ApiError(403, 'AUTH_INVALID', 'Test login disabled.');
+      }
       const email = String(ctx.body.email || '').trim().toLowerCase();
       if (!email) throw new ApiError(422, 'VALIDATION', 'email required for test login.');
       claims = { subject: 'dev:' + createHash('sha256').update(email).digest('hex').slice(0, 16), email, name: ctx.body.displayName || email.split('@')[0] };
@@ -198,10 +242,11 @@ route('POST', '/v1/auth/exchange', async (ctx) => {
       run('INSERT INTO auth_identities (id, user_id, provider, provider_subject, email_normalized, created_at) VALUES (?,?,?,?,?,?)',
         uuid(), userId, storedProvider, subject, claims.email || null, now());
     }
-    maybeGrantFree(userId, false, deviceId);
+    grantOutcome = maybeGrantFree(userId, false, deviceId, ctx.clientIp);
   } else {
     throw new ApiError(422, 'VALIDATION', 'Unknown provider.');
   }
+  if (grantOutcome && grantOutcome !== 'GRANTED') console.log(`[free-grant] not granted: ${grantOutcome}`);
 
   const token = createSession(userId, deviceId);
   const user = q1('SELECT id, is_guest, display_name FROM users WHERE id = ?', userId);
@@ -210,7 +255,7 @@ route('POST', '/v1/auth/exchange', async (ctx) => {
 
 // Resolve a verified provider identity to a user id, merging an in-flight guest
 // account (its projects + purchased units) into it. Shared by OAuth and email.
-function resolveIdentity({ provider, subject, email, name, ctxUser, locale, deviceId }) {
+function resolveIdentity({ provider, subject, email, name, ctxUser, locale, deviceId, clientIp }) {
   const existing = q1('SELECT user_id FROM auth_identities WHERE provider = ? AND provider_subject = ?', provider, subject);
   let userId;
   if (existing) {
@@ -227,7 +272,8 @@ function resolveIdentity({ provider, subject, email, name, ctxUser, locale, devi
     run('INSERT INTO auth_identities (id, user_id, provider, provider_subject, email_normalized, created_at) VALUES (?,?,?,?,?,?)',
       uuid(), userId, provider, subject, email || null, now());
   }
-  maybeGrantFree(userId, false, deviceId);
+  const outcome = maybeGrantFree(userId, false, deviceId, clientIp);
+  if (outcome !== 'GRANTED') console.log(`[free-grant] not granted: ${outcome}`);
   return userId;
 }
 
@@ -277,7 +323,7 @@ route('POST', '/v1/auth/email/verify', (ctx) => {
   run('DELETE FROM email_codes WHERE email = ?', email); // single-use
   const userId = resolveIdentity({
     provider: 'email', subject: 'email:' + email, email, name: email.split('@')[0],
-    ctxUser: ctx.user, locale: ctx.body?.locale, deviceId,
+    ctxUser: ctx.user, locale: ctx.body?.locale, deviceId, clientIp: ctx.clientIp,
   });
   const token = createSession(userId, deviceId);
   const user = q1('SELECT id, is_guest, display_name FROM users WHERE id = ?', userId);
@@ -299,7 +345,7 @@ function generationInfo() {
   };
 }
 
-route('GET', '/v1/auth/config', () => ({
+route('GET', '/v1/auth/config', (ctx) => ({
   guestAllowed: verifyConfig.allowGuest,
   generation: generationInfo(),
   freeRequiresAuth: verifyConfig.freeRequiresAuth,
@@ -312,7 +358,9 @@ route('GET', '/v1/auth/config', () => ({
   billing: {
     google: verifyConfig.playBilling,
     apple: false, // App Store Server API verification not yet configured
-    mock: verifyConfig.allowMockPurchases,
+    // Only advertised to the operator — the app hides the demo-buy path for
+    // everyone else and says purchases happen in the store app.
+    mock: verifyConfig.allowMockPurchases && isAdminRequest(ctx.req, ctx.url),
   },
 }));
 
@@ -642,8 +690,10 @@ route('POST', '/v1/purchases/verify', async (ctx) => {
   } else if (platform === 'apple') {
     // App Store Server API verification plugs in here (needs the .p8 signing key).
     throw new ApiError(501, 'PROVIDER_NOT_CONFIGURED', 'App Store verification is not configured on the server.');
-  } else if (verifyConfig.allowMockPurchases) {
-    // DEV ONLY — never enabled in production (ALLOW_MOCK_PURCHASES=true required).
+  } else if (verifyConfig.allowMockPurchases && isAdminRequest(ctx.req, ctx.url)) {
+    // DEV ONLY. Requires the flag AND the operator's admin token: on its own the
+    // flag is an open faucet — any caller could "buy" a pack and be granted
+    // paid units for nothing, which is a bigger hole than the free-unit loop.
     verified = true;
     externalTxId = transactionId || `mock_${uuid()}`;
     expiresAt = product.period ? new Date(Date.now() + (product.period === 'month' ? 30 : 365) * 86400000).toISOString() : null;

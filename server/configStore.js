@@ -21,6 +21,10 @@ const REGISTRY = {
   free_units: { type: 'number', envVar: 'FREE_UNITS', default: 1, description: '新用户免费生成张数' },
   allow_guest: { type: 'boolean', envVar: 'ALLOW_GUEST', default: true, description: '允许游客使用' },
   free_requires_auth: { type: 'boolean', envVar: 'FREE_REQUIRES_AUTH', default: false, description: '免费额度需登录后发放' },
+  // 反白嫖：游客可无凭据换令牌，若不设上限就能循环建号无限领免费额度。
+  // 两道闸都按滚动 24 小时统计；设为 0 = 完全停发免费额度。
+  free_grants_per_ip_day: { type: 'number', envVar: 'FREE_GRANTS_PER_IP_DAY', default: 3, description: '每个 IP 每 24 小时最多发放几次免费额度（0=停发）' },
+  free_grants_per_day: { type: 'number', envVar: 'FREE_GRANTS_PER_DAY', default: 50, description: '全站每 24 小时免费额度发放次数上限（0=停发）' },
   image_provider_base_url: { type: 'string', envVar: 'IMAGE_PROVIDER_BASE_URL', default: '', description: '图像模型接口地址' },
   image_provider_api_key: { type: 'string', envVar: 'IMAGE_PROVIDER_API_KEY', default: '', description: '图像模型 API 密钥', secret: true },
   image_provider_model: { type: 'string', envVar: 'IMAGE_PROVIDER_MODEL', default: 'gpt-image-2', description: '图像模型名称' },

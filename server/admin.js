@@ -8,22 +8,33 @@ import { db, q, q1, run, ASSET_DIR } from './db.js';
 import { cfg, setCfg, listCfg, SECRET_KEYS } from './configStore.js';
 import { sendMail } from './email.js';
 import { generationStatus, imageProvider } from './engine/remoteAdapter.js';
+import { freeGrantWindow } from './ledger.js';
+
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+const tokenBuf = Buffer.from(ADMIN_TOKEN);
+function tokenEq(t) {
+  if (!ADMIN_TOKEN || typeof t !== 'string') return false;
+  const b = Buffer.from(t);
+  return b.length === tokenBuf.length && crypto.timingSafeEqual(b, tokenBuf);
+}
+
+/**
+ * Does this request carry the operator's admin token? Exported so the dev-only
+ * escape hatches on the public API (mock purchases, test login) can require the
+ * operator to be present instead of trusting an env flag alone — a flag left on
+ * in production is otherwise a free-units faucet for anyone on the internet.
+ */
+export function isAdminRequest(req, url) {
+  return tokenEq(req?.headers?.['x-admin-token'] || url?.searchParams?.get('admin_token'));
+}
 
 export function registerAdminRoutes(route, deps) {
   const { ApiError } = deps;
 
-  const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
-  const tokenBuf = Buffer.from(ADMIN_TOKEN);
-  function tokenEq(t) {
-    if (!ADMIN_TOKEN || typeof t !== 'string') return false;
-    const b = Buffer.from(t);
-    return b.length === tokenBuf.length && crypto.timingSafeEqual(b, tokenBuf);
-  }
   function requireAdmin(ctx) {
     // Prefer the header; a short-lived image token is accepted only on the
     // asset route (checked there), never here.
-    const t = ctx.req.headers['x-admin-token'] || ctx.url.searchParams.get('admin_token');
-    if (!tokenEq(t)) throw new ApiError(401, 'AUTH_REQUIRED', 'Admin token required.');
+    if (!isAdminRequest(ctx.req, ctx.url)) throw new ApiError(401, 'AUTH_REQUIRED', 'Admin token required.');
   }
 
   // Short-lived HMAC image token so the long-lived admin token never rides in
@@ -67,6 +78,7 @@ export function registerAdminRoutes(route, deps) {
                     FROM generation_jobs WHERE status='succeeded' AND finished_at IS NOT NULL`);
     return {
       generation: generationSummary(),
+      abuse: abuseSummary(),
       users: q1('SELECT COUNT(*) AS n FROM users').n,
       usersToday: q1(`SELECT COUNT(*) AS n FROM users WHERE created_at >= datetime('now','-1 day')`).n,
       jobsByStatus,
@@ -342,6 +354,30 @@ export function registerAdminRoutes(route, deps) {
     };
   }
 
+  // Anti-farming state: guest tokens are free to mint, so the free grant is
+  // capped per device / per IP / site-wide. Surfaced so the operator can see how
+  // close the ceilings are before the paid key goes back in.
+  function abuseSummary() {
+    const w = freeGrantWindow(null);
+    const perIp = cfg('free_grants_per_ip_day');
+    const perDay = cfg('free_grants_per_day');
+    return {
+      freeGrants24h: w.today,
+      freeGrantIps24h: w.ips,
+      perIpCap: perIp,
+      perDayCap: perDay,
+      capReached: perDay > 0 && w.today >= perDay,
+      grantsDisabled: perDay <= 0 || perIp <= 0 || cfg('free_units') <= 0,
+      guestAllowed: !!cfg('allow_guest'),
+      freeRequiresAuth: !!cfg('free_requires_auth'),
+      freeUnits: cfg('free_units'),
+      // Dev faucets. Both now additionally require the admin token, but a flag
+      // left on in production is still worth flagging.
+      mockPurchases: process.env.ALLOW_MOCK_PURCHASES === 'true',
+      testLogin: process.env.ALLOW_TEST_LOGIN === 'true',
+    };
+  }
+
   route('GET', '/v1/admin/config', (ctx) => {
     requireAdmin(ctx);
     const settings = listCfg();
@@ -355,7 +391,7 @@ export function registerAdminRoutes(route, deps) {
         description: 'Google Play 收据校验服务账号是否已配置', secret: false, requiresRestart: true, readOnly: true,
       },
     );
-    return { settings, generation: generationSummary() };
+    return { settings, generation: generationSummary(), abuse: abuseSummary() };
   });
 
   route('PUT', '/v1/admin/config', (ctx) => {
@@ -366,7 +402,7 @@ export function registerAdminRoutes(route, deps) {
     } catch (e) {
       throw new ApiError(422, 'VALIDATION', e.message);
     }
-    return { ok: true, settings: listCfg(), generation: generationSummary() };
+    return { ok: true, settings: listCfg(), generation: generationSummary(), abuse: abuseSummary() };
   });
 
   // ---- products -------------------------------------------------------------

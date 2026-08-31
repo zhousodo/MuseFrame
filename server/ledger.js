@@ -3,6 +3,20 @@
 // idempotent via unique (user_id, reference_key).
 import { db, q, q1, run, tx, uuid, now } from './db.js';
 
+/**
+ * Free grants issued in the trailing 24h — overall, for one ip hash, and how
+ * many distinct addresses. Lives here (not in api.js) so the admin routes can
+ * read it without an api ⇄ admin import cycle.
+ */
+export function freeGrantWindow(ipHash) {
+  const since = new Date(Date.now() - 86400_000).toISOString();
+  return {
+    today: q1('SELECT COUNT(*) AS n FROM free_grants WHERE created_at >= ?', since).n,
+    forIp: ipHash ? q1('SELECT COUNT(*) AS n FROM free_grants WHERE ip_hash = ? AND created_at >= ?', ipHash, since).n : 0,
+    ips: q1('SELECT COUNT(DISTINCT ip_hash) AS n FROM free_grants WHERE created_at >= ?', since).n,
+  };
+}
+
 export function grantUnits(userId, units, sourceType, sourceId, expiresAt = null) {
   return tx(() => {
     const bucketId = uuid();

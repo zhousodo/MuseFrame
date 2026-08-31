@@ -250,6 +250,22 @@ db.exec(`CREATE TABLE IF NOT EXISTS email_codes (
   created_at TEXT NOT NULL
 )`);
 
+// Free-grant audit log. The credit ledger alone can't answer "how many free
+// images has this IP claimed today?" — and without that the guest loop
+// (POST /v1/auth/exchange with no credentials → 1 free image → repeat) is
+// unbounded. One row per granted free bucket; raw IPs are never stored.
+db.exec(`CREATE TABLE IF NOT EXISTS free_grants (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  device_hash TEXT,
+  ip_hash TEXT,
+  units INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_free_grants_ip ON free_grants (ip_hash, created_at)');
+db.exec('CREATE INDEX IF NOT EXISTS idx_free_grants_at ON free_grants (created_at)');
+
 export const uuid = () => randomUUID();
 export const now = () => new Date().toISOString();
 

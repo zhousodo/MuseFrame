@@ -85,7 +85,7 @@ const server = http.createServer(async (req, res) => {
           try { body = JSON.parse(raw.toString('utf8')); }
           catch { throw new ApiError(400, 'VALIDATION', 'Invalid JSON body.'); }
         }
-        const result = r.handler({ req, res, url, user, params: m.slice(1), body, raw });
+        const result = r.handler({ req, res, url, user, params: m.slice(1), body, raw, clientIp });
         const value = result instanceof Promise ? await result : result;
         if (value === null && res.writableEnded) return; // handler streamed its own response
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -117,5 +117,11 @@ const server = http.createServer(async (req, res) => {
     }
   }
 });
+
+// Dev escape hatches are gated on the admin token as well as their flag, but a
+// flag left on in production is still a mistake worth shouting about at boot.
+for (const [flag, what] of [['ALLOW_MOCK_PURCHASES', '演示购买'], ['ALLOW_TEST_LOGIN', '测试登录']]) {
+  if (process.env[flag] === 'true') console.warn(`[boot] ⚠️ ${flag}=true（${what}）——仅限开发；生产请设为 false。当前需管理员令牌才可调用。`);
+}
 
 server.listen(PORT, () => console.log(`MuseFrame running → http://localhost:${PORT}`));
