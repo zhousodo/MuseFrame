@@ -25,9 +25,16 @@ cp -a .env "$BAK" && chmod 600 "$BAK" && echo "已备份 → $APP/$BAK（含密�
 
 say "2. 取新代码"
 if [ -d .git ]; then
+  SELF_BEFORE=$(md5sum "$0" | cut -d' ' -f1)
   git fetch --all --prune || { echo "git fetch 失败"; exit 1; }
   git pull --ff-only || { echo "快进合并失败：服务器上有本地改动。先 git stash 或 git reset --hard origin/main 再重跑。"; exit 1; }
   echo "当前 $(git rev-parse --abbrev-ref HEAD) @ $(git rev-parse --short HEAD)"
+  # 本脚本自己也在仓库里：pull 换掉它之后，bash 会接着按旧内容往下跑（甚至跑出
+  # 半新半旧的混合体）。换了就原地重启一次，用新版本重来。
+  if [ "$SELF_BEFORE" != "$(md5sum "$0" | cut -d' ' -f1)" ] && [ "${MF_DEPLOY_REEXEC:-}" != "1" ]; then
+    echo "部署脚本自身已更新——用新版本重新执行"
+    MF_DEPLOY_REEXEC=1 exec bash "$0" "$@"
+  fi
 else
   cat <<'EOF'
 /opt/museframe 不是 git 仓库，脚本不去猜你的代码怎么放的。就地接上 GitHub 后重跑本脚本：
