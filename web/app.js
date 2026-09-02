@@ -824,7 +824,8 @@ async function saveResult() {
   if (S.saved) return;
   try {
     const exp = await post(`/v1/candidates/${S.job.candidate.id}/export`, { qualityTier: 'standard', format: 'jpeg' });
-    const blob = await fetch(apiUrl(exp.downloadUrl) + `?token=${encodeURIComponent(localStorage.getItem('mf.session'))}`).then(r => r.blob());
+    // Bearer header rather than ?token= — keeps the session out of proxy logs / Referer.
+    const blob = await fetch(apiUrl(exp.downloadUrl), { headers: { Authorization: `Bearer ${token}` } }).then(r => { if (!r.ok) throw new Error('download'); return r.blob(); });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `museframe-${(S.draft.style?.name || 'work').toLowerCase().replaceAll(' ', '-')}.jpg`;

@@ -288,6 +288,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS manual_grants (
   created_at TEXT NOT NULL
 )`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_manual_grants_user ON manual_grants (user_id, created_at)');
+ensureColumn('manual_grants', 'idempotency_key', 'idempotency_key TEXT');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_manual_grants_idem ON manual_grants (idempotency_key) WHERE idempotency_key IS NOT NULL');
 db.exec('CREATE INDEX IF NOT EXISTS idx_free_grants_at ON free_grants (created_at)');
 
 // Hot-path indexes. Every one of these covered a query that was a full table

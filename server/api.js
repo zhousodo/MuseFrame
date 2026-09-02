@@ -234,7 +234,7 @@ const CONTROL_ALLOWED = {
   composition: ['keep', 'reframe'],
 };
 export const ASPECT_RATIOS = ['original', '1:1', '4:5', '16:9'];
-export const QUALITY_TIERS = ['standard', 'high'];
+export const QUALITY_TIERS = ['standard', 'high']; // documented tiers; the request never picks 'high' by itself
 
 /**
  * Clamp the three user controls to the allow-list the StyleSpec itself declares
@@ -809,7 +809,6 @@ route('POST', '/v1/generation-jobs', (ctx) => {
     aspectRatio: ASPECT_RATIOS.includes(output.aspectRatio) ? output.aspectRatio : 'original',
     qualityTier: wantsHigh && canHigh ? 'high' : 'standard',
   };
-  void QUALITY_TIERS;
 
   const units = 1;
   // Cheap pre-check so a paywall bounce doesn't litter the project with failed

@@ -354,7 +354,7 @@ async function grantUnitsManual(){
   const note = ($('grantNote').value || '').trim();
   if (!who) return toast('请填写邮箱或用户 ID', true);
   if (!Number.isInteger(units) || units <= 0) return toast('张数必须是正整数', true);
-  const body = { units };
+  const body = { units, idempotencyKey: 'grant-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10) };
   if (who.includes('@')) body.email = who; else body.userId = who;
   if (daysRaw) body.expiresInDays = Number(daysRaw);
   if (note) body.note = note;

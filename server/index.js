@@ -125,6 +125,10 @@ const RL_RULES = [
   // Telemetry: fire-and-forget on the client, so a generous ceiling still turns
   // an ingest flood into 429s instead of unbounded rows in `events`.
   { re: /^\/v1\/events$/, m: 'POST', limit: 120, windowMs: 600_000 },
+  // Admin surface: the token is header-only and compared in constant time, but
+  // without a ceiling it could still be guessed online — and a guessed token now
+  // hands out credits. 120/min is far above any human operator's click rate.
+  { re: /^\/v1\/admin\//, limit: 120, windowMs: 60_000 },
 ];
 
 const server = http.createServer(async (req, res) => {
@@ -169,7 +173,7 @@ const server = http.createServer(async (req, res) => {
     let p = url.pathname === '/' ? '/index.html' : url.pathname;
     p = path.normalize(p).replace(/^([.][.][/\\])+/, '');
     const file = path.join(WEB, p);
-    if (file.startsWith(WEB) && existsSync(file) && statSync(file).isFile()) {
+    if (file.startsWith(WEB + path.sep) && existsSync(file) && statSync(file).isFile()) {
       const ext = path.extname(file);
       // HTML/JS/CSS must revalidate every load — a cached app.css without the
       // html.web rules is exactly how the desktop site came up in the phone frame.

@@ -112,6 +112,21 @@ describe('POST /v1/admin/users/grant — manual top-up after the user emails sup
   });
 });
 
+describe('grant idempotency and admin rate limit', () => {
+  test('the same idempotency key credits once', async () => {
+    const { accessToken } = await registeredUser('idem@example.com');
+    const body = { email: 'idem@example.com', units: 4, idempotencyKey: 'grant-test-0001' };
+    const a = await (await json('POST', '/v1/admin/users/grant', body, ADMIN)).json();
+    const b = await (await json('POST', '/v1/admin/users/grant', body, ADMIN)).json();
+    assert.equal(a.availableUnits, 7);
+    assert.equal(b.replayed, true);
+    assert.equal(b.availableUnits, 7);
+    assert.equal(await units(accessToken), 7);
+    const res = await json('POST', '/v1/admin/users/grant', { ...body, units: 5 }, ADMIN);
+    assert.equal(res.status, 409);
+  });
+});
+
 describe('catalogue (plan B) and quality tiers', () => {
   test('/v1/products lists the new packs with CNY and USD prices and hides retired ones', async () => {
     const { products } = await (await fetch(srv.base + '/v1/products')).json();

@@ -4,7 +4,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { db, q, q1, run, ASSET_DIR, uuid } from './db.js';
+import { db, q, q1, run, tx, ASSET_DIR, uuid } from './db.js';
 import { cfg, setCfg, listCfg, SECRET_KEYS } from './configStore.js';
 import { sendMail } from './email.js';
 import { generationStatus, imageProvider } from './engine/remoteAdapter.js';
@@ -167,7 +167,8 @@ export function registerAdminRoutes(route, deps) {
   // 目标用户用完整 ID 或邮箱指定；邮箱命中多个账号时拒绝，避免充错人。
   route('POST', '/v1/admin/users/grant', (ctx) => {
     requireAdmin(ctx);
-    const { userId, email, units, note, expiresInDays } = ctx.body || {};
+    const { userId, email, units, note, expiresInDays, idempotencyKey } = ctx.body || {};
+    if (idempotencyKey !== undefined && (typeof idempotencyKey !== 'string' || !/^[\w.-]{8,80}$/.test(idempotencyKey))) throw new ApiError(422, 'VALIDATION', 'idempotencyKey must be 8-80 chars of [A-Za-z0-9_.-].');
     if (!Number.isInteger(units) || units <= 0 || units > 10000) throw new ApiError(422, 'VALIDATION', 'units must be an integer between 1 and 10000.');
     if (note !== undefined && (typeof note !== 'string' || note.length > 300)) throw new ApiError(422, 'VALIDATION', 'note must be a string of at most 300 chars.');
     let expiresAt = null;
@@ -191,11 +192,25 @@ export function registerAdminRoutes(route, deps) {
       throw new ApiError(422, 'VALIDATION', 'Provide userId or email.');
     }
 
+    // Double-submit protection: the panel sends a fresh key per click; a retry of
+    // the same click returns the original grant instead of crediting twice.
+    if (idempotencyKey) {
+      const prior = q1('SELECT id, user_id, units FROM manual_grants WHERE idempotency_key = ?', idempotencyKey);
+      if (prior) {
+        if (prior.user_id !== target.id || prior.units !== units) throw new ApiError(409, 'IDEMPOTENCY_MISMATCH', 'That idempotency key was used for a different grant.');
+        return { ok: true, replayed: true, userId: target.id, isGuest: !!target.is_guest, granted: units, bucketId: null, availableUnits: availableUnits(target.id), expiresAt };
+      }
+    }
     const grantId = uuid();
-    const bucketId = grantUnits(target.id, units, 'manual', grantId, expiresAt);
-    run('INSERT INTO manual_grants (id, user_id, units, note, expires_at, created_at) VALUES (?,?,?,?,?,?)',
-      grantId, target.id, units, note ? note.trim() : null, expiresAt, new Date().toISOString());
-    console.log(`[admin] manual grant ${units} unit(s) → ${target.id} (${note || 'no note'})`);
+    const cleanNote = note ? note.trim().replace(/[\r\n\x00-\x1f\x7f]+/g, ' ') : null;
+    // Credits and their audit row commit together, or not at all.
+    const bucketId = tx(() => {
+      const b = grantUnits(target.id, units, 'manual', grantId, expiresAt);
+      run('INSERT INTO manual_grants (id, user_id, units, note, expires_at, idempotency_key, created_at) VALUES (?,?,?,?,?,?,?)',
+        grantId, target.id, units, cleanNote, expiresAt, idempotencyKey || null, new Date().toISOString());
+      return b;
+    });
+    console.log(`[admin] manual grant ${units} unit(s) → ${target.id} ${JSON.stringify(cleanNote || '')}`);
     return { ok: true, userId: target.id, isGuest: !!target.is_guest, granted: units, bucketId, availableUnits: availableUnits(target.id), expiresAt };
   });
 
