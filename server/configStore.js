@@ -23,6 +23,7 @@ const REGISTRY = {
   allow_guest: { type: 'boolean', envVar: 'ALLOW_GUEST', default: true, description: '允许游客浏览（游客不发免费额度时仍可看画廊）' },
   free_requires_auth: { type: 'boolean', envVar: 'FREE_REQUIRES_AUTH', default: true, description: '免费额度需登录（邮箱注册）后发放' },
   support_email: { type: 'string', envVar: 'SUPPORT_EMAIL', default: 'donaldkuke@gmail.com', description: '客服 / 加购联系邮箱（额度用完时展示给用户）' },
+  support_qq_group: { type: 'string', envVar: 'SUPPORT_QQ_GROUP', default: '824558022', description: '客服 QQ 群号（购买额度的主要入口，留空则不展示）' },
   // 反白嫖：游客可无凭据换令牌，若不设上限就能循环建号无限领免费额度。
   // 两道闸都按滚动 24 小时统计；设为 0 = 完全停发免费额度。
   free_grants_per_ip_day: { type: 'number', envVar: 'FREE_GRANTS_PER_IP_DAY', default: 3, description: '每个 IP 每 24 小时最多发放几次免费额度（0=停发）' },

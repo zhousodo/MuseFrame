@@ -528,7 +528,7 @@ route('GET', '/v1/auth/config', (ctx) => ({
   freeRequiresAuth: verifyConfig.freeRequiresAuth,
   // 注册即送几张 + 额度用完后的联系邮箱。两者都可在后台热改，客户端每次启动读取。
   freeUnits: cfg('free_units'),
-  support: { email: String(cfg('support_email') || '').trim() || null },
+  support: { email: String(cfg('support_email') || '').trim() || null, qqGroup: String(cfg('support_qq_group') || '').trim() || null },
   google: {
     enabled: verifyConfig.googleSignIn,
     // `enabled` reads the live config (admin panel) but this used to read only

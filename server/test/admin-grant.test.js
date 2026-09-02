@@ -37,6 +37,7 @@ describe('free-tier defaults (3 after sign-up, nothing for guests)', () => {
     assert.equal(cfg.freeUnits, 3);
     assert.equal(cfg.freeRequiresAuth, true);
     assert.equal(cfg.support.email, 'donaldkuke@gmail.com');
+    assert.equal(cfg.support.qqGroup, '824558022');
   });
 
   test('a guest session gets no free units', async () => {

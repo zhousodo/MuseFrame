@@ -127,6 +127,7 @@ const userLabel = () => localStorage.getItem('mf.userName') || '';
 const userEmail = () => localStorage.getItem('mf.userEmail') || '';
 const freeUnits = () => S.authConfig?.freeUnits ?? 3;
 const supportEmail = () => S.authConfig?.support?.email || 'donaldkuke@gmail.com';
+const supportQQ = () => S.authConfig?.support?.qqGroup || '';
 const freeNeedsAuth = () => S.authConfig?.freeRequiresAuth !== false;
 const nativeBilling = () => isNative() && !!(S.authConfig?.billing?.google || S.authConfig?.billing?.apple) && S.products.length > 0;
 
@@ -234,6 +235,7 @@ function webfooter() {
         link(t('Pricing'), () => openPaywall('footer')),
         link(t('Privacy & data'), () => openInfo('privacy')),
         link(t('About our styles'), () => openInfo('about')),
+        supportQQ() && link(t('QQ group {n}', { n: supportQQ() }), () => openPaywall('footer')),
         link(t('Contact us'), null, `mailto:${supportEmail()}`),
         link(t('Android app'), null, getLang() === 'zh' ? 'https://museframe.lenscript.cn/#download' : 'https://museframe.lenscript.cn/en/#download'),
         link(getLang() === 'zh' ? 'English' : '中文', toggleLang)),
@@ -378,6 +380,7 @@ function DiscoverScreen() {
         h('button', { class: 'linkbtn', style: { color: 'var(--ink-muted)', fontWeight: 400, fontSize: '11px' }, onClick: () => openInfo('about') }, t('About our styles')), ' · ',
         h('button', { class: 'linkbtn', style: { color: 'var(--ink-muted)', fontWeight: 400, fontSize: '11px' }, onClick: () => openInfo('privacy') }, t('Privacy')), ' · ',
         h('a', { class: 'linkbtn', style: { color: 'var(--ink-muted)', fontWeight: 400, fontSize: '11px', textDecoration: 'none' }, href: `mailto:${supportEmail()}` }, t('Contact us')),
+        supportQQ() && [' · ', h('button', { class: 'linkbtn', style: { color: 'var(--ink-muted)', fontWeight: 400, fontSize: '11px' }, onClick: () => openPaywall('discover') }, t('QQ group {n}', { n: supportQQ() }))],
       ),
     ),
   );
@@ -917,6 +920,7 @@ function ProfileScreen() {
     isNative() && !isFree && [t('Manage subscription'), () => openPaywall('manage')],
     isNative() && [t('Restore purchases'), async () => { await refreshEnt(); render(); toast(S.ent.plan === 'free' ? t('No active plan found') : t('Purchases restored')); }],
     [t('Purchase history'), () => openInfo('purchases')],
+    supportQQ() && [t('QQ group · buy credits') + ' · ' + supportQQ(), () => openPaywall('profile')],
     [t('Contact us'), () => { location.href = supportMailto(); }],
     [t('Privacy & data'), () => openInfo('privacy')],
     [t('About our styles'), () => openInfo('about')],
@@ -946,7 +950,7 @@ function ProfileScreen() {
         h('div', { style: { font: '400 12px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '4px' } },
           isFree
             ? (signedIn()
-              ? t('{n} artworks are included with your account. Packs start at {price}; email us to buy.', { n: freeUnits(), price: (offeredProducts().filter(p => p.productType === 'pack').sort((a, b) => a.grantedUnits - b.grantedUnits)[0] && productPrice(offeredProducts().filter(p => p.productType === 'pack').sort((a, b) => a.grantedUnits - b.grantedUnits)[0])) || '—' })
+              ? t('{n} artworks are included with your account. Packs start at {price}; buy in our QQ group or by email.', { n: freeUnits(), price: (offeredProducts().filter(p => p.productType === 'pack').sort((a, b) => a.grantedUnits - b.grantedUnits)[0] && productPrice(offeredProducts().filter(p => p.productType === 'pack').sort((a, b) => a.grantedUnits - b.grantedUnits)[0])) || '—' })
               : t('Register with your email to receive {n} free artworks.', { n: freeUnits() }))
             : t('All directions unlocked · priority creation')),
         isFree && h('button', { class: 'btn', style: { marginTop: '12px', height: '42px', borderRadius: '10px', fontSize: '13.5px' }, onClick: () => signedIn() ? openPaywall('profile') : openAuth('profile') },
@@ -990,6 +994,7 @@ function AuthScreen() {
           ? EmailLoginBox(back)
           : h('div', { style: { font: '500 12.5px/1.55 var(--sans)', color: 'var(--warning)', background: 'var(--warning-soft)', borderRadius: '10px', padding: '10px 12px' } },
             t('Email sign-in is not enabled on this server yet. Please contact {email}.', { email: supportEmail() })),
+        supportQQ() && h('div', { style: { font: '400 12px/1.55 var(--sans)', color: 'var(--ink-muted)', paddingTop: '14px' } }, t('Need help or more artworks? Join our QQ group {n}.', { n: supportQQ() })),
         (showGoogle || showApple) && [
           h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '18px 0 12px' } },
             h('div', { style: { flex: 1, height: '1px', background: 'var(--line)' } }),
@@ -1115,6 +1120,32 @@ async function copySupportEmail() {
   try { await navigator.clipboard.writeText(supportEmail()); toast(t('Address copied')); }
   catch { toast(supportEmail(), 3000); }
 }
+async function copyQQ() {
+  try { await navigator.clipboard.writeText(supportQQ()); toast(t('Group number copied')); }
+  catch { toast(supportQQ(), 3000); }
+}
+// QQ group first (fastest way to buy), email second. QR only where there is room.
+function ContactBlock(kind = 'more') {
+  const qq = supportQQ();
+  return h('div', { class: 'contact-card', style: { marginTop: '4px' } },
+    qq && h('div', { class: 'qq-row' },
+      isWeb() && h('img', { class: 'qq-qr', src: apiUrl('/qq-group.png'), alt: t('QQ group QR code'), width: 96, height: 96 }),
+      h('div', { style: { flex: 1, minWidth: 0 } },
+        h('div', { class: 'kicker', style: { paddingBottom: '4px' } }, t('QQ group · fastest')),
+        h('div', { class: 'email' }, qq),
+        h('div', { style: { font: '400 11.5px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '4px' } }, t('Join the group and message the admin to buy — credited within minutes during the day.')),
+        h('div', { style: { display: 'flex', gap: '8px', paddingTop: '10px' } },
+          h('button', { class: 'btn small', style: { flex: 'none', width: 'auto', padding: '0 14px', height: '40px' }, onClick: copyQQ }, t('Copy group number')),
+          !isWeb() && h('a', { class: 'btn secondary small', style: { flex: 'none', width: 'auto', padding: '0 14px', height: '40px', textDecoration: 'none' }, href: apiUrl('/qq-group.png'), target: '_blank', rel: 'noopener' }, t('QR code'))))),
+    h('div', { style: { paddingTop: qq ? '14px' : 0, marginTop: qq ? '12px' : 0, borderTop: qq ? '1px solid var(--line)' : 'none' } },
+      h('div', { class: 'kicker', style: { paddingBottom: '4px' } }, qq ? t('Or email us') : t('Email us')),
+      h('div', { class: 'email', style: { fontSize: '13.5px' } }, supportEmail()),
+      userEmail() && h('div', { style: { font: '400 11.5px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '4px' } }, t('Mention the address you registered with: {email}', { email: userEmail() })),
+      h('div', { style: { display: 'flex', gap: '8px', paddingTop: '10px' } },
+        h('a', { class: 'btn secondary small', style: { flex: 'none', width: 'auto', padding: '0 14px', height: '40px', textDecoration: 'none' }, href: supportMailto(kind) }, svg(icons.mail), t('Write to us')),
+        h('button', { class: 'btn secondary small', style: { flex: 'none', width: 'auto', padding: '0 14px', height: '40px' }, onClick: copySupportEmail }, t('Copy address')))),
+  );
+}
 function PaywallSheet() {
   const ctx = S.paywall.context;
   const close = () => { S.paywall = null; renderOverlay(); };
@@ -1128,23 +1159,16 @@ function PaywallSheet() {
     body = t('Sign up with your email — no password, no card. {n} complete artworks are on us. If you already have an account, the same steps sign you in.', { n });
   } else if (premium) {
     title = t('Premium direction');
-    body = t('Premium directions come with Creator. Pick the plan below and email us — we enable it on your account, usually within a day.');
+    body = t('Premium directions come with Creator. Pick the plan below, then join our QQ group or email us — we enable it on your account.');
   } else if ((S.ent?.availableUnits || 0) > 0) {
     title = t('Your artworks');
-    body = t('You have {n} left. Packs below add more; email us to buy and we credit your account, usually within a day.', { n: S.ent.availableUnits });
+    body = t('You have {n} left. Packs below add more — buy in our QQ group or by email and we credit your account.', { n: S.ent.availableUnits });
   } else {
     title = t('Your free artworks are used up');
-    body = t('You have used the {n} free artworks that come with your account. Pick a pack below and email us — we credit your account by hand, usually within a day.', { n });
+    body = t('You have used the {n} free artworks that come with your account. Pick a pack below, then join our QQ group or email us — we credit your account by hand.', { n });
   }
 
-  const contactCard = h('div', { class: 'contact-card', style: { marginTop: '4px' } },
-    h('div', { class: 'kicker', style: { paddingBottom: '6px' } }, t('Email us')),
-    h('div', { class: 'email' }, supportEmail()),
-    userEmail() && h('div', { style: { font: '400 11.5px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '6px' } }, t('Mention the address you registered with: {email}', { email: userEmail() })),
-    h('div', { style: { display: 'flex', gap: '10px', paddingTop: '12px' } },
-      h('a', { class: 'btn', style: { flex: 1, height: '46px', fontSize: '14px', textDecoration: 'none' }, href: supportMailto(premium ? 'premium' : 'more') }, svg(icons.mail), t('Write to us')),
-      h('button', { class: 'btn secondary small', style: { flex: 'none', width: 'auto', padding: '0 14px', height: '46px' }, onClick: copySupportEmail }, t('Copy address'))),
-  );
+  const contactCard = ContactBlock(premium ? 'premium' : 'more');
 
   return h('div', { class: 'sheet-backdrop', onClick: close },
     h('div', { class: 'sheet', onClick: (e) => e.stopPropagation() },
@@ -1158,7 +1182,7 @@ function PaywallSheet() {
         ? [
           h('button', { class: 'btn', onClick: () => openAuth(S.screen) }, t('Register with email')),
           h('div', { style: { textAlign: 'center', font: '400 11.5px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '12px' } },
-            t('Questions? '), h('a', { class: 'linkbtn', style: { textDecoration: 'none', fontWeight: 500 }, href: `mailto:${supportEmail()}` }, supportEmail())),
+            t('Questions? '), supportQQ() && [t('QQ group '), h('b', null, supportQQ()), ' · '], h('a', { class: 'linkbtn', style: { textDecoration: 'none', fontWeight: 500 }, href: `mailto:${supportEmail()}` }, supportEmail())),
         ]
         : [
           Catalogue(premium),
@@ -1190,7 +1214,7 @@ function Catalogue(premiumFirst) {
               : t('{n} artworks · {each} each · never expire', { n: p.grantedUnits, each: perImage(p) }))),
         h('div', { style: { textAlign: 'right', flex: 'none' } },
           h('div', { style: { font: '600 15px var(--sans)' } }, productPrice(p), sub && h('span', { style: { font: '400 11px var(--sans)', color: 'var(--ink-muted)' } }, ' / ' + t('period.' + p.period))),
-          h('div', { style: { font: '600 11px var(--sans)', color: 'var(--cobalt)' } }, t('Email to buy'))));
+          h('div', { style: { font: '600 11px var(--sans)', color: 'var(--cobalt)' } }, supportQQ() ? t('QQ / email to buy') : t('Email to buy'))));
     }));
 }
 
