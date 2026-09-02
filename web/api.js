@@ -12,17 +12,28 @@ export function setToken(t) {
   token = t;
   localStorage.setItem(KEY, t);
 }
+export function clearToken() {
+  token = null;
+  localStorage.removeItem(KEY);
+}
 
+/**
+ * Make sure there is a usable session. Returns 'kept' when the stored token
+ * still works, 'guest' when a fresh guest session had to be minted (the caller
+ * then knows any "signed in" flag it kept locally is stale), or 'offline' when
+ * the existing token could not be checked because the network failed.
+ */
 export async function ensureSession(deviceId) {
   if (token) {
-    try { await get('/v1/entitlements/me'); return; }
-    catch (e) { if (e.code !== 'AUTH_REQUIRED') return; token = null; }
+    try { await get('/v1/entitlements/me'); return 'kept'; }
+    catch (e) { if (e.code !== 'AUTH_REQUIRED') return 'offline'; token = null; }
   }
   const res = await fetch(apiUrl('/v1/auth/exchange'), {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ provider: 'guest', locale: navigator.language, deviceId }),
   }).then(r => r.json());
   if (res.accessToken) setToken(res.accessToken);
+  return 'guest';
 }
 
 async function request(method, path, body, extraHeaders = {}, raw = false) {

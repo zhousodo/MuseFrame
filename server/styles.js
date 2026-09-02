@@ -526,11 +526,16 @@ export function seedCatalog({ db, uuid, now, q1, run }) {
 
 // storeProductId 默认与 internalKey 一致 —— 在 Play Console / App Store Connect
 // 建商品时直接用同名 ID（mini_pack / creator_monthly / creator_annual）即可零配置。
+// 2026-09-02 定价（推荐方案 B）：三档点数包 + Creator 月订。priceMinor 是美分（英文站），
+// priceCnyMinor 是人民币分（中文站），两边分别定价。可在后台「产品」页热改。
 export const PRODUCTS = [
-  { internalKey: 'mini_pack', productType: 'pack', displayName: 'Mini Pack', grantedUnits: 8, priceMinor: 399, period: null, featureFlags: {}, googleProductId: 'mini_pack', appleProductId: 'mini_pack' },
-  { internalKey: 'creator_monthly', productType: 'subscription', displayName: 'Creator Monthly', grantedUnits: 40, priceMinor: 999, period: 'month', featureFlags: { premiumStyles: true, priorityQueue: true, highResolution: true }, googleProductId: 'creator_monthly', appleProductId: 'creator_monthly' },
-  { internalKey: 'creator_annual', productType: 'subscription', displayName: 'Creator Annual', grantedUnits: 480, priceMinor: 6999, period: 'year', featureFlags: { premiumStyles: true, priorityQueue: true, highResolution: true }, googleProductId: 'creator_annual', appleProductId: 'creator_annual' },
+  { internalKey: 'pack_10', productType: 'pack', displayName: 'Pack 10', displayNameZh: '10 张包', grantedUnits: 10, priceMinor: 499, priceCnyMinor: 2900, period: null, featureFlags: {}, googleProductId: 'pack_10', appleProductId: 'pack_10' },
+  { internalKey: 'pack_30', productType: 'pack', displayName: 'Pack 30', displayNameZh: '30 张包', grantedUnits: 30, priceMinor: 999, priceCnyMinor: 6900, period: null, featureFlags: {}, googleProductId: 'pack_30', appleProductId: 'pack_30' },
+  { internalKey: 'pack_100', productType: 'pack', displayName: 'Pack 100', displayNameZh: '100 张包', grantedUnits: 100, priceMinor: 2999, priceCnyMinor: 19900, period: null, featureFlags: {}, googleProductId: 'pack_100', appleProductId: 'pack_100' },
+  { internalKey: 'creator_monthly', productType: 'subscription', displayName: 'Creator Monthly', displayNameZh: 'Creator 月订', grantedUnits: 30, priceMinor: 799, priceCnyMinor: 4900, period: 'month', featureFlags: { premiumStyles: true, priorityQueue: true, highResolution: true }, googleProductId: 'creator_monthly', appleProductId: 'creator_monthly' },
 ];
+// 旧目录里不再销售的产品：下架但保留行（历史购买引用它们）。
+export const RETIRED_PRODUCTS = ['mini_pack', 'creator_annual'];
 
 export function seedProducts({ q1, run, uuid }) {
   // Upsert: edit PRODUCTS above and restart to change units/pricing in place.
@@ -538,12 +543,16 @@ export function seedProducts({ q1, run, uuid }) {
   for (const p of PRODUCTS) {
     const existing = q1('SELECT id FROM products WHERE internal_key = ?', p.internalKey);
     if (existing) {
-      run('UPDATE products SET display_name = ?, granted_units = ?, price_minor = ?, period = ?, feature_flags = ?, google_product_id = ?, apple_product_id = ?, active = 1 WHERE id = ?',
-        p.displayName, p.grantedUnits, p.priceMinor, p.period, JSON.stringify(p.featureFlags), p.googleProductId, p.appleProductId, existing.id);
+      // Units / prices are operator-owned once the row exists (admin panel);
+      // the seed only refreshes names, flags and store ids, and fills a CNY
+      // price that has never been set.
+      run('UPDATE products SET display_name = ?, period = ?, feature_flags = ?, google_product_id = ?, apple_product_id = ?, price_cny_minor = COALESCE(price_cny_minor, ?) WHERE id = ?',
+        p.displayName, p.period, JSON.stringify(p.featureFlags), p.googleProductId, p.appleProductId, p.priceCnyMinor ?? null, existing.id);
       continue;
     }
-    run(`INSERT INTO products (id, internal_key, product_type, display_name, granted_units, price_minor, currency, period, feature_flags, google_product_id, apple_product_id, active)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,1)`,
-      uuid(), p.internalKey, p.productType, p.displayName, p.grantedUnits, p.priceMinor, 'USD', p.period, JSON.stringify(p.featureFlags), p.googleProductId, p.appleProductId);
+    run(`INSERT INTO products (id, internal_key, product_type, display_name, granted_units, price_minor, price_cny_minor, currency, period, feature_flags, google_product_id, apple_product_id, active)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1)`,
+      uuid(), p.internalKey, p.productType, p.displayName, p.grantedUnits, p.priceMinor, p.priceCnyMinor ?? null, 'USD', p.period, JSON.stringify(p.featureFlags), p.googleProductId, p.appleProductId);
   }
+  for (const key of RETIRED_PRODUCTS) run('UPDATE products SET active = 0 WHERE internal_key = ?', key);
 }

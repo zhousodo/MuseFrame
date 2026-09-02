@@ -121,8 +121,22 @@
   </section>
 
   <section id="tab-users" class="tabpane" style="display:none">
-    <h2 style="margin-top:20px">用户列表</h2>
-    <div class="wrap"><table id="usersTable"></table></div>
+    <h2 style="margin-top:20px">手动加额度</h2>
+    <p class="muted" style="margin:4px 0 10px;font-size:12.5px">用户额度用完后会看到客服邮箱（后台「配置」里的 <code>support_email</code>）。收到邮件后在这里按<b>发件邮箱</b>或完整用户 ID 充值；发放走正规账本（<code>source_type = manual</code>），可在「数据库」的 <code>manual_grants</code> 表查备注。</p>
+    <div class="bar" style="align-items:flex-end;gap:10px">
+      <label style="flex:2;min-width:220px"><span class="muted" style="font-size:11px">邮箱或完整用户 ID</span><input id="grantWho" placeholder="someone@example.com 或 用户 ID" autocomplete="off"></label>
+      <label style="flex:0 0 110px"><span class="muted" style="font-size:11px">张数</span><input id="grantUnits" type="number" min="1" max="10000" step="1" value="10"></label>
+      <label style="flex:0 0 130px"><span class="muted" style="font-size:11px">有效期（天，可空）</span><input id="grantDays" type="number" min="1" max="3650" step="1" placeholder="不过期"></label>
+      <label style="flex:3;min-width:220px"><span class="muted" style="font-size:11px">备注（如：微信转账 ¥xx / 邮件日期）</span><input id="grantNote" maxlength="300" placeholder="可选"></label>
+      <button id="grantBtn" class="small" style="height:42px;padding:0 18px" onclick="grantUnitsManual()">加额度</button>
+    </div>
+    <div id="grantResult" class="muted" style="margin-top:8px;font-size:12.5px"></div>
+
+    <div class="bar" style="margin-top:22px">
+      <h2 style="margin:0">用户列表</h2>
+      <input id="userSearch" placeholder="按邮箱 / 显示名 / ID 搜索，回车" style="max-width:320px;padding:8px 10px;font-size:13px" onkeydown="if(event.key==='Enter')loadUsers()">
+    </div>
+    <div class="wrap" style="margin-top:10px"><table id="usersTable"></table></div>
   </section>
 
   <section id="tab-stats" class="tabpane" style="display:none">
@@ -308,8 +322,9 @@ async function loadOverview(){
 async function loadUsers(){
   $('usersTable').innerHTML = '加载中…';
   try {
-    const users = (await api('/v1/admin/users')).users || [];
-    $('usersTable').innerHTML = '<tr><th>邮箱</th><th>显示名</th><th>登录方式</th><th>身份</th><th>点数</th><th>生成数</th><th>ID</th><th>注册时间</th></tr>' +
+    const search = ($('userSearch').value || '').trim();
+    const users = (await api('/v1/admin/users' + (search ? '?q=' + encodeURIComponent(search) : ''))).users || [];
+    $('usersTable').innerHTML = '<tr><th>邮箱</th><th>显示名</th><th>登录方式</th><th>身份</th><th>余额</th><th>生成数</th><th>ID</th><th>注册时间</th><th></th></tr>' +
       (users.length ? users.map(u=>`<tr>
         <td>${u.email ? escapeHtml(u.email) : '<span class="muted">—</span>'}</td>
         <td>${escapeHtml(u.displayName||'')}</td>
@@ -317,13 +332,43 @@ async function loadUsers(){
         <td>${u.isGuest ? '<span class="badge badge-gray">游客</span>' : '<span class="badge badge-cobalt">已登录</span>'}</td>
         <td>${u.units ?? 0}</td>
         <td>${u.jobs ?? 0}</td>
-        <td class="muted">${escapeHtml(u.id)}</td>
+        <td class="muted" title="${escapeHtml(u.userId||'')}">${escapeHtml(u.id)}</td>
         <td class="muted">${ago(u.createdAt)}</td>
-      </tr>`).join('') : '<tr><td colspan=8 class=muted>暂无用户</td></tr>');
+        <td><button class="small ghost" data-grant-user="${escapeHtml(u.userId||'')}" data-grant-label="${escapeHtml(u.email || u.id)}" onclick="pickGrantUser(this)">加额度</button></td>
+      </tr>`).join('') : '<tr><td colspan=9 class=muted>暂无用户</td></tr>');
   } catch(e) {
     if (e.status === 401) return;
     $('usersTable').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
   }
+}
+function pickGrantUser(btn){
+  $('grantWho').value = btn.dataset.grantUser;
+  $('grantResult').textContent = '已选中：' + btn.dataset.grantLabel + '（用完整 ID 充值，不会认错人）';
+  $('grantUnits').focus();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+async function grantUnitsManual(){
+  const who = ($('grantWho').value || '').trim();
+  const units = Number($('grantUnits').value);
+  const daysRaw = ($('grantDays').value || '').trim();
+  const note = ($('grantNote').value || '').trim();
+  if (!who) return toast('请填写邮箱或用户 ID', true);
+  if (!Number.isInteger(units) || units <= 0) return toast('张数必须是正整数', true);
+  const body = { units };
+  if (who.includes('@')) body.email = who; else body.userId = who;
+  if (daysRaw) body.expiresInDays = Number(daysRaw);
+  if (note) body.note = note;
+  const btn = $('grantBtn'); btn.disabled = true;
+  try {
+    const r = await api('/v1/admin/users/grant', { method:'POST', body });
+    $('grantResult').innerHTML = `已给 <b>${escapeHtml(who)}</b> 加 <b>${r.granted}</b> 张，当前可用 <b>${r.availableUnits}</b> 张` +
+      (r.expiresAt ? `，${r.expiresAt.slice(0,10)} 到期` : '') + (r.isGuest ? '<span class="badge badge-warn">游客账号</span>' : '');
+    toast('已加额度');
+    $('grantNote').value = '';
+    loadUsers();
+  } catch(e) {
+    if (e.status !== 401) { toast('加额度失败：' + e.message, true); $('grantResult').textContent = e.message; }
+  } finally { btn.disabled = false; }
 }
 
 /* ---------- 统计 / 图表 ---------- */
@@ -632,13 +677,14 @@ async function restoreConfigItem(key){
 
 function renderProducts(products){
   $('productsTable').innerHTML = products.length ? `<table>
-    <tr><th>名称</th><th>internal_key</th><th>类型</th><th>数量</th><th>价格(美分)</th><th>状态</th><th></th></tr>
+    <tr><th>名称</th><th>internal_key</th><th>类型</th><th>张数</th><th>美元价(美分)</th><th>人民币价(分)</th><th>状态</th><th></th></tr>
     ${products.map(p => `<tr>
       <td>${escapeHtml(p.displayName||'')}</td>
       <td class="muted">${escapeHtml(p.internalKey)}</td>
       <td class="muted">${escapeHtml(p.productType||'')}</td>
       <td><input type="number" class="pgu" value="${p.grantedUnits}" style="width:80px"></td>
       <td><input type="number" class="ppm" value="${p.priceMinor}" style="width:90px"></td>
+      <td><input type="number" class="pcny" value="${p.priceCnyMinor ?? ''}" placeholder="空=不卖人民币" style="width:110px"></td>
       <td>${p.active ? '<span class="badge badge-cobalt">上架</span>' : '<span class="badge badge-gray">下架</span>'}</td>
       <td style="white-space:nowrap"><button class="small" data-save-product="${escapeHtml(p.internalKey)}">保存</button>
           <button class="small ghost" data-toggle-product="${escapeHtml(p.internalKey)}" data-active="${p.active?'1':'0'}">${p.active?'下架':'上架'}</button></td>
@@ -652,9 +698,11 @@ async function saveProduct(btn){
   const row = btn.closest('tr');
   const grantedUnits = Number(row.querySelector('.pgu').value);
   const priceMinor = Number(row.querySelector('.ppm').value);
+  const cnyRaw = row.querySelector('.pcny').value.trim();
+  const priceCnyMinor = cnyRaw === '' ? null : Number(cnyRaw);
   const active = row.querySelector('[data-toggle-product]').dataset.active === '1';
   try {
-    await api('/v1/admin/products-admin/' + encodeURIComponent(key), { method:'PATCH', body:{ grantedUnits, priceMinor, active } });
+    await api('/v1/admin/products-admin/' + encodeURIComponent(key), { method:'PATCH', body:{ grantedUnits, priceMinor, priceCnyMinor, active } });
     const r = await api('/v1/admin/products-admin');
     renderProducts(r.products || []);
     toast('已保存');

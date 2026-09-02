@@ -11,6 +11,7 @@ import { enqueueJob, queueDepth } from './jobs.js';
 import { decodeJpeg, analyzeImage, recommendStyles } from './engine/styleEngine.js';
 import { generationStatus } from './engine/remoteAdapter.js';
 import { cfg } from './configStore.js';
+import { PRODUCTS } from './styles.js';
 import { sendLoginCode, smtpConfigured } from './email.js';
 import { registerAdminRoutes, isAdminRequest } from './admin.js';
 
@@ -525,6 +526,9 @@ route('GET', '/v1/auth/config', (ctx) => ({
   guestAllowed: verifyConfig.allowGuest,
   generation: generationInfo(),
   freeRequiresAuth: verifyConfig.freeRequiresAuth,
+  // 注册即送几张 + 额度用完后的联系邮箱。两者都可在后台热改，客户端每次启动读取。
+  freeUnits: cfg('free_units'),
+  support: { email: String(cfg('support_email') || '').trim() || null },
   google: {
     enabled: verifyConfig.googleSignIn,
     // `enabled` reads the live config (admin panel) but this used to read only
@@ -797,10 +801,15 @@ route('POST', '/v1/generation-jobs', (ctx) => {
   const safeControls = coerceControls(JSON.parse(sv.spec), controls);
   // aspectRatio reaches the prompt builder and the crop step; qualityTier is
   // echoed back to the client. Both were taken verbatim from the request.
+  // The high tier is a Creator feature (highResolution); anyone else asking for
+  // it is quietly served the standard tier rather than refused.
+  const wantsHigh = output.qualityTier === 'high';
+  const canHigh = plan.startsWith('creator');
   const safeOutput = {
     aspectRatio: ASPECT_RATIOS.includes(output.aspectRatio) ? output.aspectRatio : 'original',
-    qualityTier: QUALITY_TIERS.includes(output.qualityTier) ? output.qualityTier : 'standard',
+    qualityTier: wantsHigh && canHigh ? 'high' : 'standard',
   };
+  void QUALITY_TIERS;
 
   const units = 1;
   // Cheap pre-check so a paywall bounce doesn't litter the project with failed
@@ -925,10 +934,12 @@ route('POST', '/v1/candidates/([\\w-]+)/export', (ctx) => {
 
 route('GET', '/v1/entitlements/me', (ctx) => entitlements(requireUser(ctx).id));
 
+const ZH_PRODUCT_NAMES = Object.fromEntries(PRODUCTS.map(p => [p.internalKey, p.displayNameZh || p.displayName]));
 route('GET', '/v1/products', () => ({
   products: q('SELECT * FROM products WHERE active = 1').map(p => ({
     internalKey: p.internal_key, productType: p.product_type, displayName: p.display_name,
-    grantedUnits: p.granted_units, priceMinor: p.price_minor, currency: p.currency, period: p.period,
+    displayNameZh: ZH_PRODUCT_NAMES[p.internal_key] || p.display_name,
+    grantedUnits: p.granted_units, priceMinor: p.price_minor, priceCnyMinor: p.price_cny_minor ?? null, currency: p.currency, period: p.period,
     googleProductId: p.google_product_id || p.internal_key,
     appleProductId: p.apple_product_id || p.internal_key,
   })),

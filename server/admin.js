@@ -4,11 +4,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { db, q, q1, run, ASSET_DIR } from './db.js';
+import { db, q, q1, run, ASSET_DIR, uuid } from './db.js';
 import { cfg, setCfg, listCfg, SECRET_KEYS } from './configStore.js';
 import { sendMail } from './email.js';
 import { generationStatus, imageProvider } from './engine/remoteAdapter.js';
-import { freeGrantWindow } from './ledger.js';
+import { freeGrantWindow, grantUnits, availableUnits } from './ledger.js';
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const tokenBuf = Buffer.from(ADMIN_TOKEN);
@@ -141,17 +141,62 @@ export function registerAdminRoutes(route, deps) {
   });
 
   // 用户列表：id、邮箱、登录方式、身份、点数余额、生成数（spec §19 运营可见性）。
+  // `q` 按邮箱 / 显示名 / ID 前缀模糊搜索——客服收到「加额度」邮件后按发件邮箱找人。
   route('GET', '/v1/admin/users', (ctx) => {
     requireAdmin(ctx);
     const limit = Math.min(200, Number(ctx.url.searchParams.get('limit')) || 100);
+    const search = String(ctx.url.searchParams.get('q') || '').trim().toLowerCase().slice(0, 120);
+    const like = `%${search.replace(/[%_\\]/g, (c) => '\\' + c)}%`;
+    const where = search
+      ? `AND (u.id LIKE ? ESCAPE '\\' OR lower(u.display_name) LIKE ? ESCAPE '\\'
+             OR EXISTS (SELECT 1 FROM auth_identities ai WHERE ai.user_id=u.id AND ai.email_normalized LIKE ? ESCAPE '\\'))`
+      : '';
+    const params = search ? [like, like, like, limit] : [limit];
     return {
-      users: q(`SELECT substr(u.id,1,8) AS id, u.display_name AS displayName, u.is_guest AS isGuest, u.created_at AS createdAt,
+      users: q(`SELECT u.id AS userId, substr(u.id,1,8) AS id, u.display_name AS displayName, u.is_guest AS isGuest, u.created_at AS createdAt,
                        (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=u.id AND ai.email_normalized IS NOT NULL LIMIT 1) AS email,
                        (SELECT group_concat(DISTINCT ai.provider) FROM auth_identities ai WHERE ai.user_id=u.id) AS providers,
                        (SELECT COALESCE(SUM(l.units),0) FROM credit_ledger l WHERE l.user_id=u.id) AS units,
                        (SELECT COUNT(*) FROM generation_jobs j WHERE j.user_id=u.id) AS jobs
-                FROM users u WHERE u.deleted_at IS NULL ORDER BY u.created_at DESC LIMIT ?`, limit),
+                FROM users u WHERE u.deleted_at IS NULL ${where} ORDER BY u.created_at DESC LIMIT ?`, ...params),
     };
+  });
+
+  // 手动加额度（「额度用完 → 邮件联系我们 → 后台充值」流程的落点）。
+  // 只走 ledger 的正规 grant 路径：append-only、有 reference_key，和购买发放同一套账。
+  // 目标用户用完整 ID 或邮箱指定；邮箱命中多个账号时拒绝，避免充错人。
+  route('POST', '/v1/admin/users/grant', (ctx) => {
+    requireAdmin(ctx);
+    const { userId, email, units, note, expiresInDays } = ctx.body || {};
+    if (!Number.isInteger(units) || units <= 0 || units > 10000) throw new ApiError(422, 'VALIDATION', 'units must be an integer between 1 and 10000.');
+    if (note !== undefined && (typeof note !== 'string' || note.length > 300)) throw new ApiError(422, 'VALIDATION', 'note must be a string of at most 300 chars.');
+    let expiresAt = null;
+    if (expiresInDays !== undefined && expiresInDays !== null) {
+      if (!Number.isInteger(expiresInDays) || expiresInDays <= 0 || expiresInDays > 3650) throw new ApiError(422, 'VALIDATION', 'expiresInDays must be an integer between 1 and 3650.');
+      expiresAt = new Date(Date.now() + expiresInDays * 86400000).toISOString();
+    }
+
+    let target = null;
+    if (typeof userId === 'string' && userId.trim()) {
+      target = q1('SELECT id, is_guest FROM users WHERE id = ? AND deleted_at IS NULL', userId.trim());
+      if (!target) throw new ApiError(404, 'NOT_FOUND', 'No user with that id.');
+    } else if (typeof email === 'string' && email.trim()) {
+      const norm = email.trim().toLowerCase();
+      const rows = q(`SELECT DISTINCT u.id, u.is_guest FROM users u JOIN auth_identities ai ON ai.user_id = u.id
+                      WHERE ai.email_normalized = ? AND u.deleted_at IS NULL`, norm);
+      if (rows.length === 0) throw new ApiError(404, 'NOT_FOUND', 'No user with that email.');
+      if (rows.length > 1) throw new ApiError(409, 'AMBIGUOUS', `That email matches ${rows.length} accounts — grant by userId instead.`);
+      target = rows[0];
+    } else {
+      throw new ApiError(422, 'VALIDATION', 'Provide userId or email.');
+    }
+
+    const grantId = uuid();
+    const bucketId = grantUnits(target.id, units, 'manual', grantId, expiresAt);
+    run('INSERT INTO manual_grants (id, user_id, units, note, expires_at, created_at) VALUES (?,?,?,?,?,?)',
+      grantId, target.id, units, note ? note.trim() : null, expiresAt, new Date().toISOString());
+    console.log(`[admin] manual grant ${units} unit(s) → ${target.id} (${note || 'no note'})`);
+    return { ok: true, userId: target.id, isGuest: !!target.is_guest, granted: units, bucketId, availableUnits: availableUnits(target.id), expiresAt };
   });
 
   // 发送测试邮件：验证 SMTP 配置是否可用（换服务商后一键自检）。
@@ -417,18 +462,18 @@ export function registerAdminRoutes(route, deps) {
     return {
       products: q('SELECT * FROM products ORDER BY product_type, price_minor').map((p) => ({
         id: p.id, internalKey: p.internal_key, productType: p.product_type, displayName: p.display_name,
-        grantedUnits: p.granted_units, priceMinor: p.price_minor, currency: p.currency, period: p.period,
+        grantedUnits: p.granted_units, priceMinor: p.price_minor, priceCnyMinor: p.price_cny_minor ?? null, currency: p.currency, period: p.period,
         active: !!p.active, googleProductId: p.google_product_id, appleProductId: p.apple_product_id,
       })),
     };
   });
 
-  route('PATCH', '/v1/admin/products-admin/([a-z_]+)', (ctx) => {
+  route('PATCH', '/v1/admin/products-admin/([a-z0-9_]+)', (ctx) => {
     requireAdmin(ctx);
     const key = ctx.params[0];
     const product = q1('SELECT * FROM products WHERE internal_key = ?', key);
     if (!product) throw new ApiError(404, 'NOT_FOUND', 'Unknown product.');
-    const { grantedUnits, priceMinor, active } = ctx.body || {};
+    const { grantedUnits, priceMinor, priceCnyMinor, active } = ctx.body || {};
     if (grantedUnits !== undefined) {
       if (!Number.isInteger(grantedUnits) || grantedUnits < 0) throw new ApiError(422, 'VALIDATION', 'grantedUnits must be an integer >= 0.');
       run('UPDATE products SET granted_units = ? WHERE internal_key = ?', grantedUnits, key);
@@ -436,6 +481,10 @@ export function registerAdminRoutes(route, deps) {
     if (priceMinor !== undefined) {
       if (!Number.isInteger(priceMinor) || priceMinor < 0) throw new ApiError(422, 'VALIDATION', 'priceMinor must be an integer >= 0.');
       run('UPDATE products SET price_minor = ? WHERE internal_key = ?', priceMinor, key);
+    }
+    if (priceCnyMinor !== undefined) {
+      if (priceCnyMinor !== null && (!Number.isInteger(priceCnyMinor) || priceCnyMinor < 0)) throw new ApiError(422, 'VALIDATION', 'priceCnyMinor must be an integer >= 0 or null.');
+      run('UPDATE products SET price_cny_minor = ? WHERE internal_key = ?', priceCnyMinor, key);
     }
     if (active !== undefined) {
       if (typeof active !== 'boolean') throw new ApiError(422, 'VALIDATION', 'active must be a boolean.');

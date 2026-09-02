@@ -1,8 +1,15 @@
 // MuseFrame web app — curated-gallery P0 flow (spec §6):
 // Onboarding → Discover → Exhibition → Styles → Preview settings → Progress → Result,
-// plus Projects, Profile, Paywall. Vanilla DOM, no build step.
-import { ensureSession, setToken, get, post, put, del, assetUrl, apiUrl, track } from './api.js';
+// plus Projects, Profile, Auth (email code), Paywall. Vanilla DOM, no build step.
+//
+// 2026-09: two presentations of the same screens — `phone` (native app and
+// mobile browsers: tab bar, bottom sheets) and `web` (desktop browsers: sticky
+// top nav, centred column, wrapped grids, centred dialogs). Chinese / English
+// copy via i18n.js. Free tier = N artworks after email registration; when they
+// are used up the paywall asks the user to email support (manual top-up).
+import { ensureSession, setToken, clearToken, get, post, put, del, assetUrl, apiUrl, track } from './api.js';
 import { deviceId, getAuthConfig, nativeSignIn, nativePurchase, isNative, platform, emailRequestCode, emailVerifyCode } from './native.js';
+import { t, getLang, setLang, initLang } from './i18n.js?v=20260902b';
 
 // ---------- tiny DOM helper ----------
 function h(tag, attrs, ...children) {
@@ -36,11 +43,35 @@ const icons = {
   compare: '<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M6.5 0.5v12M1 3.5h3.5v6H1zM8.5 3.5H12v6H8.5z" stroke="currentColor" stroke-width="1.3"/></svg>',
   lock: '<svg width="12" height="14" viewBox="0 0 12 14" fill="none"><rect x="1" y="6" width="10" height="7" rx="1.6" stroke="currentColor" stroke-width="1.4"/><path d="M3.2 6V4.2a2.8 2.8 0 015.6 0V6" stroke="currentColor" stroke-width="1.4"/></svg>',
   chev: '<svg width="7" height="12" viewBox="0 0 7 12" fill="none"><path d="M1 1l5 5-5 5" stroke="#B9B5AC" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  mail: '<svg width="16" height="13" viewBox="0 0 16 13" fill="none"><rect x="1" y="1" width="14" height="11" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M1.5 2.5L8 7.5l6.5-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
+
+// ---------- layout: phone vs web ----------
+const params = new URLSearchParams(location.search);
+const WEB_MQ = window.matchMedia('(min-width: 900px)');
+function computeLayout() {
+  if (isNative()) return 'phone';
+  const forced = params.get('ui');
+  if (forced === 'phone' || forced === 'web') return forced;
+  return WEB_MQ.matches ? 'web' : 'phone';
+}
+const isWeb = () => S.layout === 'web';
+function applyLayout() {
+  document.documentElement.classList.toggle('web', isWeb());
+}
+WEB_MQ.addEventListener('change', () => {
+  if (isNative() || params.get('ui')) return;
+  const next = computeLayout();
+  if (next === S.layout) return;
+  S.layout = next; applyLayout();
+  if (S.screen === 'onboarding' && next === 'web') S.screen = 'discover';
+  render();
+});
 
 // ---------- state ----------
 const S = {
-  screen: localStorage.getItem('mf.onboarded') ? 'discover' : 'onboarding',
+  layout: computeLayout(),
+  screen: 'discover',
   obPage: 0,
   discover: null,
   ent: null,
@@ -54,16 +85,22 @@ const S = {
   saved: false,
   fb: 'none',
   compareOn: false, compare: 50, hold: false,
-  projects: [], projTab: 'All',
+  projects: [], projTab: 'all',
   purchases: [],
   paywall: null,           // {context}
   payPlan: 'creator_monthly',
   detail: null,            // style card for detail sheet
-  infoSheet: null,         // {title, body}
+  infoSheet: null,         // key
   analyzing: false,
   toast: null,
   booted: false,
+  authReturn: 'discover',  // where to go after sign-in
+  emailLogin: null,
 };
+// Onboarding is a phone-app ritual; the website goes straight to the gallery.
+if (S.layout === 'phone' && !localStorage.getItem('mf.onboarded')) S.screen = 'onboarding';
+applyLayout();
+
 function newDraft() {
   return {
     projectId: null, assetId: null, previewUrl: null, analysis: null,
@@ -81,6 +118,32 @@ function toast(msg, ms = 1900) {
 function go(screen) {
   S.screen = screen; S.compareOn = false; S.hold = false;
   render();
+  if (isWeb()) window.scrollTo({ top: 0 });
+}
+
+// ---------- session helpers ----------
+const signedIn = () => localStorage.getItem('mf.signedIn') === '1';
+const userLabel = () => localStorage.getItem('mf.userName') || '';
+const userEmail = () => localStorage.getItem('mf.userEmail') || '';
+const freeUnits = () => S.authConfig?.freeUnits ?? 3;
+const supportEmail = () => S.authConfig?.support?.email || 'donaldkuke@gmail.com';
+const freeNeedsAuth = () => S.authConfig?.freeRequiresAuth !== false;
+const nativeBilling = () => isNative() && !!(S.authConfig?.billing?.google || S.authConfig?.billing?.apple) && S.products.length > 0;
+
+// Catalogue helpers: Chinese UI shows the CNY price, English the USD price.
+// A product with no CNY price is simply not offered to Chinese-language users.
+function productPrice(p) {
+  if (getLang() === 'zh') return p.priceCnyMinor != null ? `¥${(p.priceCnyMinor / 100).toFixed(p.priceCnyMinor % 100 ? 2 : 0)}` : null;
+  return p.priceMinor != null ? `$${(p.priceMinor / 100).toFixed(2)}` : null;
+}
+const productName = (p) => (getLang() === 'zh' ? (p.displayNameZh || p.displayName) : p.displayName);
+const offeredProducts = () => S.products.filter(p => productPrice(p) !== null);
+function perImage(p) {
+  if (!p.grantedUnits) return null;
+  const minor = getLang() === 'zh' ? p.priceCnyMinor : p.priceMinor;
+  if (minor == null) return null;
+  const v = minor / 100 / p.grantedUnits;
+  return (getLang() === 'zh' ? '¥' : '$') + (v < 1 ? v.toFixed(2) : v.toFixed(1));
 }
 
 // ---------- data ----------
@@ -101,15 +164,20 @@ async function refreshEnt() { S.ent = await get('/v1/entitlements/me'); }
 function unitsBadgeText() {
   if (!S.ent) return '…';
   const u = S.ent.availableUnits;
-  if (S.ent.plan === 'free') return u > 0 ? `${u} image${u === 1 ? '' : 's'} left` : 'No images left';
-  return `${u} units`;
+  if (S.ent.plan === 'free') {
+    if (u <= 0 && !signedIn() && freeNeedsAuth()) return t('Sign up · {n} free', { n: freeUnits() });
+    return u > 0 ? t('{n} left', { n: u }) : t('No artworks left');
+  }
+  return t('{n} left', { n: u });
 }
+const fmtDate = (iso, opts = { month: 'short', day: 'numeric' }) =>
+  new Date(iso).toLocaleDateString(getLang() === 'zh' ? 'zh-CN' : 'en-US', opts);
 
 // ---------- shared components ----------
 function topbar(title, onBack, opts = {}) {
   return h('div', { class: 'topbar' + (opts.clear ? ' clear' : '') },
     onBack
-      ? h('button', { class: 'iconbtn', 'aria-label': 'Back', onClick: onBack }, svg(icons.back))
+      ? h('button', { class: 'iconbtn', 'aria-label': t('Back'), onClick: onBack }, svg(icons.back))
       : h('div', { style: { width: '38px' } }),
     h('div', { class: 'topbar-title' + (opts.serif ? ' serif' : '') }, title),
     opts.right || h('div', { style: { width: '38px' } }),
@@ -120,12 +188,61 @@ function tabbar(active) {
   const tab = (id, icon, label, onClick) =>
     h('button', { class: 'tab' + (active === id ? ' active' : ''), onClick }, svg(icon), h('div', null, label));
   return h('div', { class: 'tabbar' },
-    tab('discover', icons.discover, 'Discover', () => go('discover')),
+    tab('discover', icons.discover, t('Discover'), () => go('discover')),
     h('button', { class: 'tab', onClick: () => startImport(S.screen) },
-      h('div', { class: 'create-dot' }, svg(icons.plus)), h('div', null, 'Create')),
-    tab('projects', icons.projects, 'Projects', () => { loadProjects(); go('projects'); }),
-    tab('profile', icons.profile, 'Profile', () => { loadProfile(); go('profile'); }),
+      h('div', { class: 'create-dot' }, svg(icons.plus)), h('div', null, t('Create'))),
+    tab('projects', icons.projects, t('Projects'), () => { loadProjects(); go('projects'); }),
+    tab('profile', icons.profile, t('Profile'), () => { loadProfile(); go('profile'); }),
   );
+}
+
+// Website chrome: brand, section nav, language, quota badge, sign-in, create.
+function webnav(active) {
+  const nav = (id, label, onClick) => h('button', { class: active === id ? 'active' : '', onClick }, label);
+  return h('header', { class: 'webnav' },
+    h('button', { class: 'brand', onClick: () => go('discover') }, 'MUSEFRAME'),
+    h('nav', null,
+      nav('discover', t('Discover'), () => go('discover')),
+      nav('projects', t('Projects'), () => { loadProjects(); go('projects'); }),
+      nav('profile', t('Profile'), () => { loadProfile(); go('profile'); }),
+    ),
+    h('div', { class: 'spacer' }),
+    h('button', { class: 'lang', onClick: toggleLang, 'aria-label': 'Language' }, getLang() === 'zh' ? 'EN' : '中文'),
+    S.ent && h('button', { class: 'pillbtn', onClick: () => openPaywall('badge') }, unitsBadgeText()),
+    !signedIn() && h('button', { class: 'btn secondary cta', onClick: () => openAuth(S.screen) }, t('Sign in / Register')),
+    h('button', { class: 'btn cta', onClick: () => startImport(S.screen) }, t('Create')),
+  );
+}
+
+// Every screen: web → top nav first (+ footer on the main sections); phone → tab bar last (only tab screens).
+function shell(active, ...children) {
+  const extra = children.length && typeof children[children.length - 1] === 'object' && children[children.length - 1]?.screenClass
+    ? children.pop().screenClass : '';
+  return h('div', { class: 'screen' + (extra ? ' ' + extra : '') },
+    isWeb() && webnav(active),
+    ...children,
+    isWeb() && active && webfooter(),
+    !isWeb() && active && tabbar(active),
+  );
+}
+function webfooter() {
+  const link = (label, onClick, href) => h(href ? 'a' : 'button', { class: 'flink', href, onClick }, label);
+  return h('footer', { class: 'webfooter' },
+    h('div', { class: 'inner' },
+      h('div', { class: 'brand' }, 'MUSEFRAME', h('span', null, t('Curated image making'))),
+      h('nav', null,
+        link(t('Pricing'), () => openPaywall('footer')),
+        link(t('Privacy & data'), () => openInfo('privacy')),
+        link(t('About our styles'), () => openInfo('about')),
+        link(t('Contact us'), null, `mailto:${supportEmail()}`),
+        link(t('Android app'), null, getLang() === 'zh' ? 'https://museframe.lenscript.cn/#download' : 'https://museframe.lenscript.cn/en/#download'),
+        link(getLang() === 'zh' ? 'English' : '中文', toggleLang)),
+      h('div', { class: 'fine' }, t('Photos are re-encoded on your device before upload; failed generations never use an artwork.'))));
+}
+
+function toggleLang() {
+  setLang(getLang() === 'zh' ? 'en' : 'zh');
+  render();
 }
 
 // Card artwork: real sample image when available (spec §5.1), gradient fallback.
@@ -144,9 +261,10 @@ function styleCardEl(card, { selected, onClick, width, showTags, reason } = {}) 
     reason
       ? h('div', { style: { font: '500 10px/1.45 ui-monospace,Menlo,monospace', letterSpacing: '.4px', color: 'var(--cobalt)', padding: '6px 2px 0', textTransform: 'uppercase' } }, reason)
       : h('div', { class: 'card-caption' }, card.shortCaption),
-    showTags && h('div', { class: 'card-tags' }, 'Best with — ' + card.suitabilityTags.join(' · ')),
+    showTags && h('div', { class: 'card-tags' }, t('Best with — ') + card.suitabilityTags.map(tagLabel).join(' · ')),
   );
 }
+const tagLabel = (tag) => t('tag.' + tag);
 
 function selectStyle(card, from) {
   S.draft.style = card;
@@ -159,14 +277,15 @@ function selectStyle(card, from) {
   track('style_opened', { styleId: card.styleId, source: from });
 }
 
-// ---------- onboarding ----------
-const OB = [
-  { title: 'Your photos, newly seen.', body: 'One photo in, one artwork out — identity kept, direction clear.', art: 'linear-gradient(160deg,#C9BFB2 0%,#8F8275 55%,#4E463D 100%)' },
-  { title: 'Choose a direction, not a prompt.', body: 'Curated exhibitions and style cards replace prompt engineering.', art: 'linear-gradient(145deg,#F1EEE4 0%,#F1EEE4 44%,#22335F 44%,#22335F 72%,#B4432E 72%,#B4432E 100%)' },
-  { title: 'Private by default.', body: 'Your photos are used only to create and improve your requested result. Location data is removed.', art: 'linear-gradient(170deg,#EBECEC 0%,#C0C5C8 50%,#8F979D 100%)' },
+// ---------- onboarding (phone only) ----------
+const OB = () => [
+  { title: t('Your photos, newly seen.'), body: t('One photo in, one artwork out — identity kept, direction clear.'), art: 'linear-gradient(160deg,#C9BFB2 0%,#8F8275 55%,#4E463D 100%)' },
+  { title: t('Choose a direction, not a prompt.'), body: t('Curated exhibitions and style cards replace prompt engineering.'), art: 'linear-gradient(145deg,#F1EEE4 0%,#F1EEE4 44%,#22335F 44%,#22335F 72%,#B4432E 72%,#B4432E 100%)' },
+  { title: t('Private by default.'), body: t('Your photos are used only to create and improve your requested result. Location data is removed.'), art: 'linear-gradient(170deg,#EBECEC 0%,#C0C5C8 50%,#8F979D 100%)' },
 ];
 function OnboardingScreen() {
-  const p = OB[S.obPage];
+  const pages = OB();
+  const p = pages[S.obPage];
   const finish = (dest) => {
     localStorage.setItem('mf.onboarded', '1');
     track('onboarding_completed', {});
@@ -175,17 +294,18 @@ function OnboardingScreen() {
   return h('div', { class: 'screen' },
     h('div', { class: 'scroll', style: { display: 'flex', flexDirection: 'column', padding: '60px 24px 24px' } },
       h('div', { style: { font: '600 22px var(--serif)', letterSpacing: '6px', textAlign: 'center', paddingBottom: '6px' } }, 'MUSEFRAME'),
-      h('div', { class: 'kicker', style: { textAlign: 'center', paddingBottom: '26px' } }, 'Curated image making'),
+      h('div', { class: 'kicker', style: { textAlign: 'center', paddingBottom: '26px' } }, t('Curated image making')),
       h('div', { style: { borderRadius: '14px', border: '1px solid var(--line)', aspectRatio: '4/5', background: 'repeating-linear-gradient(115deg,rgba(23,23,23,.03) 0 2px,rgba(255,255,255,.02) 2px 4px),' + p.art } }),
       h('div', { style: { font: '600 26px/1.2 var(--serif)', padding: '22px 0 8px' } }, p.title),
       h('div', { style: { font: '400 14px/1.55 var(--sans)', color: 'var(--ink-muted)' } }, p.body),
       h('div', { style: { display: 'flex', gap: '6px', padding: '18px 0', justifyContent: 'center' } },
-        OB.map((_, i) => h('div', { style: { width: '7px', height: '7px', borderRadius: '99px', background: i === S.obPage ? 'var(--cobalt)' : 'var(--line)' } }))),
+        pages.map((_, i) => h('div', { style: { width: '7px', height: '7px', borderRadius: '99px', background: i === S.obPage ? 'var(--cobalt)' : 'var(--line)' } }))),
       h('div', { style: { flex: 1 } }),
-      S.obPage < OB.length - 1
-        ? h('button', { class: 'btn', onClick: () => { S.obPage++; render(); } }, 'Continue')
-        : h('button', { class: 'btn', onClick: () => finish('import') }, 'Choose a photo'),
-      h('button', { class: 'linkbtn', style: { padding: '14px 0 4px', textAlign: 'center', width: '100%' }, onClick: () => finish('discover') }, 'Explore first'),
+      S.obPage < pages.length - 1
+        ? h('button', { class: 'btn', onClick: () => { S.obPage++; render(); } }, t('Continue'))
+        : h('button', { class: 'btn', onClick: () => finish('import') }, t('Choose a photo')),
+      h('button', { class: 'linkbtn', style: { padding: '14px 0 4px', textAlign: 'center', width: '100%' }, onClick: () => finish('discover') }, t('Explore first')),
+      h('button', { class: 'linkbtn', style: { padding: '10px 0 0', textAlign: 'center', width: '100%', color: 'var(--ink-muted)', fontWeight: 500 }, onClick: toggleLang }, getLang() === 'zh' ? 'English' : '中文'),
     ),
   );
 }
@@ -195,73 +315,81 @@ function DiscoverScreen() {
   const d = S.discover;
   if (!d) {
     // No dead spinners (spec §6.1): connection failure gets a clear message + retry.
-    if (S.bootError) return h('div', { class: 'screen' },
-      h('div', { style: { margin: 'auto', textAlign: 'center', padding: '0 40px' } },
-        h('div', { style: { font: '600 22px var(--serif)', paddingBottom: '8px' } }, 'Can’t reach the gallery'),
+    if (S.bootError) return shell('discover',
+      h('div', { style: { margin: 'auto', textAlign: 'center', padding: '60px 40px' } },
+        h('div', { style: { font: '600 22px var(--serif)', paddingBottom: '8px' } }, t('Can’t reach the gallery')),
         h('div', { style: { font: '400 13px/1.6 var(--sans)', color: 'var(--ink-muted)', paddingBottom: '20px' } },
-          'Check your connection and try again. Your drafts and works are safe.'),
-        h('button', { class: 'btn', style: { width: 'auto', padding: '0 28px', margin: '0 auto' }, onClick: bootApp }, 'Try again')),
-      tabbar('discover'));
-    return h('div', { class: 'screen' }, h('div', { style: { margin: 'auto' } }, h('div', { class: 'spinner' })));
+          t('Check your connection and try again. Your drafts and works are safe.')),
+        h('button', { class: 'btn', style: { width: 'auto', padding: '0 28px', margin: '0 auto' }, onClick: bootApp }, t('Try again'))));
+    return shell(null, h('div', { style: { margin: 'auto', padding: '80px 0' } }, h('div', { class: 'spinner' })));
   }
   const hero = d.heroExhibition;
-  return h('div', { class: 'screen' },
+  const guestNudge = !signedIn() && freeNeedsAuth() && S.ent?.plan === 'free' && (S.ent?.availableUnits || 0) === 0;
+  return shell('discover',
     h('div', { class: 'scroll', style: { paddingBottom: '110px' } },
       h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'max(22px, env(safe-area-inset-top)) 20px 2px' } },
-        h('div', { class: 'kicker' }, `${hero.edition} · AUG 2026`),
-        h('button', { class: 'pillbtn', onClick: () => openPaywall('badge') }, unitsBadgeText()),
+        h('div', { class: 'kicker' }, `${hero.edition} · ${t('AUG 2026')}`),
+        !isWeb() && h('button', { class: 'pillbtn', onClick: () => openPaywall('badge') }, unitsBadgeText()),
       ),
-      h('div', { class: 'page-title', style: { padding: '4px 20px 16px' } }, 'Discover'),
+      h('div', { class: 'page-title', style: { padding: '4px 20px 16px' } }, t('Discover')),
       // hero exhibition
-      h('div', { style: { padding: '0 20px' } },
-        h('div', { style: { position: 'relative', borderRadius: '14px', overflow: 'hidden', border: '1px solid var(--line)' } },
-          h('div', { style: { aspectRatio: '4/5', background: artBg(hero.styles[0]) } }),
-          h('div', { style: { position: 'absolute', inset: 0, background: 'linear-gradient(180deg,rgba(0,0,0,0) 40%,rgba(0,0,0,.6) 100%)' } }),
-          h('div', { style: { position: 'absolute', left: '18px', right: '18px', bottom: '18px', display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'flex-start' } },
-            h('div', { style: { font: '500 10px var(--mono)', letterSpacing: '1.8px', color: 'rgba(247,245,239,.85)' } }, `EXHIBITION · ${hero.styles.length} STYLES`),
-            h('div', { style: { font: '600 30px/1.1 var(--serif)', color: '#fff' } }, hero.title),
-            h('div', { style: { font: '400 13px/1.5 var(--sans)', color: 'rgba(247,245,239,.92)' } }, hero.curatorialNote),
+      h('div', { style: { padding: isWeb() ? 0 : '0 20px' } },
+        h('div', { class: 'hero' },
+          h('div', { class: 'hero-art', style: { background: artBg(hero.styles[0]) } }),
+          h('div', { class: 'hero-shade' }),
+          h('div', { class: 'hero-text' },
+            h('div', { class: 'hero-kicker' }, t('EXHIBITION · {n} STYLES', { n: hero.styles.length })),
+            h('div', { class: 'hero-title' }, hero.title),
+            h('div', { class: 'hero-note' }, hero.curatorialNote),
             h('button', {
-              style: { marginTop: '4px', background: '#fff', color: 'var(--ink)', font: '600 13px var(--sans)', padding: '10px 18px', borderRadius: '999px', border: 'none', cursor: 'pointer' },
+              class: 'hero-btn',
               onClick: () => { S.exhibition = hero.slug; track('exhibition_opened', { slug: hero.slug }); go('exhibition'); },
-            }, 'View exhibition'),
+            }, t('View exhibition')),
           ),
         ),
       ),
+      // registration nudge (free tier needs an account)
+      guestNudge && h('div', { style: { margin: isWeb() ? '14px 0 0' : '14px 20px 0', display: 'flex', alignItems: 'center', gap: '12px', background: 'var(--cobalt-soft)', border: '1px solid rgba(28,73,216,.25)', borderRadius: '14px', padding: '12px 14px' } },
+        h('div', { style: { flex: 1, minWidth: 0 } },
+          h('div', { style: { font: '600 13.5px var(--sans)', color: 'var(--cobalt)' } }, t('{n} free artworks when you register', { n: freeUnits() })),
+          h('div', { style: { font: '400 11.5px/1.4 var(--sans)', color: 'var(--ink-muted)' } }, t('Email only — no password, no card.')),
+        ),
+        h('button', { class: 'btn small', style: { width: 'auto', padding: '0 16px', flex: 'none' }, onClick: () => openAuth('discover') }, t('Register')),
+      ),
       // for-your-photo card
-      h('div', { style: { margin: '14px 20px 0', display: 'flex', alignItems: 'center', gap: '12px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '14px', padding: '12px 14px' } },
+      h('div', { style: { margin: isWeb() ? '14px 0 0' : '14px 20px 0', display: 'flex', alignItems: 'center', gap: '12px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '14px', padding: '12px 14px' } },
         h('div', { style: { width: '46px', height: '46px', borderRadius: '10px', flex: 'none', background: S.draft.previewUrl ? `url(${S.draft.previewUrl}) center/cover` : 'linear-gradient(170deg,#B9AE9A 0%,#8E8878 45%,#544F45 100%)', filter: S.draft.previewUrl ? 'none' : 'blur(1px)' } }),
         h('div', { style: { flex: 1, minWidth: 0 } },
-          h('div', { style: { font: '600 13.5px var(--sans)' } }, 'For your photo'),
-          h('div', { style: { font: '400 11.5px/1.4 var(--sans)', color: 'var(--ink-muted)' } }, 'Directions matched to your shot.'),
+          h('div', { style: { font: '600 13.5px var(--sans)' } }, t('For your photo')),
+          h('div', { style: { font: '400 11.5px/1.4 var(--sans)', color: 'var(--ink-muted)' } }, t('Directions matched to your shot.')),
         ),
-        h('button', { class: 'linkbtn', style: { flex: 'none' }, onClick: () => startImport('discover') }, 'Find a direction'),
+        h('button', { class: 'linkbtn', style: { flex: 'none' }, onClick: () => startImport('discover') }, t('Find a direction')),
       ),
       // shelves
       d.shelves.map(sh => h('div', { style: { marginTop: '30px' } },
-        h('div', { style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', padding: '0 20px 10px' } },
+        h('div', { style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', padding: isWeb() ? '0 0 12px' : '0 20px 10px' } },
           h('div', { style: { font: '600 20px var(--serif)' } }, sh.title),
-          h('button', { class: 'linkbtn', style: { fontWeight: 500, fontSize: '12px' }, onClick: () => { S.exhibition = sh.slug; go('exhibition'); } }, 'View all'),
+          h('button', { class: 'linkbtn', style: { fontWeight: 500, fontSize: '12px' }, onClick: () => { S.exhibition = sh.slug; go('exhibition'); } }, t('View all')),
         ),
         h('div', { class: 'hrow' },
           sh.styles.map(c => styleCardEl(c, { width: '146px', onClick: () => selectStyle(c, 'discover') }))),
       )),
       h('div', { style: { textAlign: 'center', font: '400 11px var(--sans)', color: 'var(--ink-muted)', padding: '34px 20px 8px' } },
-        h('button', { class: 'linkbtn', style: { color: 'var(--ink-muted)', fontWeight: 400, fontSize: '11px' }, onClick: () => openInfo('about') }, 'About our styles'), ' · ',
-        h('button', { class: 'linkbtn', style: { color: 'var(--ink-muted)', fontWeight: 400, fontSize: '11px' }, onClick: () => openInfo('privacy') }, 'Privacy'),
+        h('button', { class: 'linkbtn', style: { color: 'var(--ink-muted)', fontWeight: 400, fontSize: '11px' }, onClick: () => openInfo('about') }, t('About our styles')), ' · ',
+        h('button', { class: 'linkbtn', style: { color: 'var(--ink-muted)', fontWeight: 400, fontSize: '11px' }, onClick: () => openInfo('privacy') }, t('Privacy')), ' · ',
+        h('a', { class: 'linkbtn', style: { color: 'var(--ink-muted)', fontWeight: 400, fontSize: '11px', textDecoration: 'none' }, href: `mailto:${supportEmail()}` }, t('Contact us')),
       ),
     ),
-    tabbar('discover'),
   );
 }
 
 // ---------- exhibition ----------
 function ExhibitionScreen() {
   const exh = allShelves().find(s => s.slug === S.exhibition) || S.discover.heroExhibition;
-  return h('div', { class: 'screen' },
-    topbar('Exhibition', () => go('discover')),
-    h('div', { class: 'scroll', style: { padding: '14px 20px 120px' } },
-      h('div', { style: { position: 'relative', borderRadius: '14px', overflow: 'hidden', border: '1px solid var(--line)', aspectRatio: '16/10', background: artBg(exh.styles[0]) } },
+  return shell(null,
+    topbar(t('Exhibition'), () => go('discover')),
+    h('div', { class: 'scroll reading', style: { padding: '14px 20px 120px' } },
+      h('div', { style: { position: 'relative', borderRadius: '14px', overflow: 'hidden', border: '1px solid var(--line)', aspectRatio: isWeb() ? '21/9' : '16/10', background: artBg(exh.styles[0]) } },
         h('div', { style: { position: 'absolute', inset: 0, background: 'linear-gradient(180deg,rgba(0,0,0,0) 45%,rgba(0,0,0,.45) 100%)' } }),
         h('div', { style: { position: 'absolute', left: '14px', bottom: '12px', font: '500 9.5px var(--mono)', letterSpacing: '1.6px', color: 'rgba(247,245,239,.85)' } }, `${exh.edition} · ${exh.title.toUpperCase()}`),
       ),
@@ -275,7 +403,7 @@ function ExhibitionScreen() {
         }))),
     ),
     h('div', { class: 'bottom-bar' },
-      h('button', { class: 'btn', onClick: () => startImport('exhibition') }, 'Choose a photo')),
+      h('button', { class: 'btn', onClick: () => startImport('exhibition') }, t('Choose a photo'))),
   );
 }
 
@@ -289,27 +417,34 @@ function startImport(from) {
 function ImportScreen() {
   const fileInput = h('input', { type: 'file', accept: 'image/*', style: { display: 'none' }, onChange: (e) => e.target.files[0] && handleFile(e.target.files[0]) });
   const cameraInput = h('input', { type: 'file', accept: 'image/*', capture: 'environment', style: { display: 'none' }, onChange: (e) => e.target.files[0] && handleFile(e.target.files[0]) });
-  return h('div', { class: 'screen' },
-    topbar('Choose a photo', () => go(S.importFrom === 'exhibition' ? 'exhibition' : 'discover')),
-    h('div', { class: 'scroll', style: { padding: '18px 20px 40px' } },
+  const dropHandlers = isWeb() ? {
+    onDragOver: (e) => { e.preventDefault(); e.currentTarget.style.borderColor = 'var(--cobalt)'; },
+    onDragLeave: (e) => { e.currentTarget.style.borderColor = 'var(--line)'; },
+    onDrop: (e) => { e.preventDefault(); const f = e.dataTransfer?.files?.[0]; if (f) handleFile(f); },
+  } : {};
+  return shell(null,
+    topbar(t('Choose a photo'), () => go(S.importFrom === 'exhibition' ? 'exhibition' : 'discover')),
+    h('div', { class: 'scroll narrow', style: { padding: '18px 20px 40px' } },
       fileInput, cameraInput,
-      h('div', { class: 'kicker', style: { paddingBottom: '10px' } }, 'Photo library'),
+      h('div', { class: 'kicker', style: { paddingBottom: '10px' } }, t('Photo library')),
       h('div', {
-        style: { border: '1px dashed var(--line)', borderRadius: '14px', background: 'var(--surface)', padding: '38px 20px', textAlign: 'center', cursor: 'pointer' },
-        onClick: () => fileInput.click(),
+        style: { border: '1px dashed var(--line)', borderRadius: '14px', background: 'var(--surface)', padding: isWeb() ? '64px 20px' : '38px 20px', textAlign: 'center', cursor: 'pointer' },
+        onClick: () => fileInput.click(), ...dropHandlers,
       },
-        h('div', { style: { font: '600 17px var(--serif)' } }, 'Choose from your photos'),
-        h('div', { style: { font: '400 12.5px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '6px' } }, 'JPEG, PNG or HEIC · up to 20 MB'),
-        h('div', { style: { paddingTop: '14px' } }, h('span', { class: 'chip active' }, 'Browse')),
+        h('div', { style: { font: '600 17px var(--serif)' } }, isWeb() ? t('Drop a photo here, or browse') : t('Choose from your photos')),
+        h('div', { style: { font: '400 12.5px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '6px' } }, t('JPEG, PNG or HEIC · up to 20 MB')),
+        h('div', { style: { paddingTop: '14px' } }, h('span', { class: 'chip active' }, t('Browse'))),
       ),
-      h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '22px 0 14px' } },
-        h('div', { style: { flex: 1, height: '1px', background: 'var(--line)' } }),
-        h('div', { style: { font: '400 11px var(--sans)', color: 'var(--ink-muted)' } }, 'or'),
-        h('div', { style: { flex: 1, height: '1px', background: 'var(--line)' } })),
-      h('button', { class: 'btn secondary', onClick: () => cameraInput.click() }, svg(icons.camera), 'Take a photo'),
+      !isWeb() && [
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '22px 0 14px' } },
+          h('div', { style: { flex: 1, height: '1px', background: 'var(--line)' } }),
+          h('div', { style: { font: '400 11px var(--sans)', color: 'var(--ink-muted)' } }, t('or')),
+          h('div', { style: { flex: 1, height: '1px', background: 'var(--line)' } })),
+        h('button', { class: 'btn secondary', onClick: () => cameraInput.click() }, svg(icons.camera), t('Take a photo')),
+      ],
       h('div', { style: { display: 'flex', alignItems: 'flex-start', gap: '8px', paddingTop: '20px', color: 'var(--ink-muted)' } },
         svg(icons.lock, ''),
-        h('div', { style: { font: '400 11px/1.55 var(--sans)' } }, 'Location data is removed. Your photo is used only to create the result you request, then follows your retention setting.')),
+        h('div', { style: { font: '400 11px/1.55 var(--sans)' } }, t('Location data is removed. Your photo is used only to create the result you request, then follows your retention setting.'))),
     ),
   );
 }
@@ -343,9 +478,9 @@ async function toJpeg(file, maxEdge = 2048) {
 async function handleFile(file) {
   S.analyzing = true; renderOverlay();
   try {
-    if (file.size > 20 * 1024 * 1024) { toast('Images up to 20 MB are supported'); S.analyzing = false; renderOverlay(); return; }
+    if (file.size > 20 * 1024 * 1024) { toast(t('Images up to 20 MB are supported')); S.analyzing = false; renderOverlay(); return; }
     const { blob, width, height } = await toJpeg(file);
-    if (Math.min(width, height) < 320) { toast('This photo is too small to style well'); S.analyzing = false; renderOverlay(); return; }
+    if (Math.min(width, height) < 320) { toast(t('This photo is too small to style well')); S.analyzing = false; renderOverlay(); return; }
     const intent = await post('/v1/assets/upload-intents', { contentType: 'image/jpeg', byteSize: blob.size });
     await put(intent.uploadUrl, blob);
     await post(`/v1/assets/${intent.assetId}/complete`);
@@ -357,7 +492,7 @@ async function handleFile(file) {
     S.draft.assetId = intent.assetId;
     S.draft.previewUrl = URL.createObjectURL(blob);
     S.draft.style = keepStyle;
-    if (Math.min(width, height) < 768) toast('Low resolution — quality may be reduced', 2500);
+    if (Math.min(width, height) < 768) toast(t('Low resolution — quality may be reduced'), 2500);
     track('photo_import_completed', { megapixelBucket: Math.round(width * height / 1e6) });
 
     // Poll analysis briefly; don't block browsing styles (spec §6.7).
@@ -375,40 +510,41 @@ async function handleFile(file) {
     S.analyzing = false; renderOverlay();
     // Distinguish decode problems from connectivity problems (spec §23 recoverable errors).
     if (e.code === 'ASSET_UNSUPPORTED') toast(e.message);
-    else if (e.message === 'decode' || e.message === 'unsupported') toast('Could not read that image — try another');
-    else toast('Connection problem — check your network and try again', 2600);
+    else if (e.message === 'decode' || e.message === 'unsupported') toast(t('Could not read that image — try another'));
+    else toast(t('Connection problem — check your network and try again'), 2600);
   }
 }
 
 // ---------- styles ----------
-const FILTERS = [['all', 'All'], ['portrait', 'Portrait'], ['landscape', 'Landscape'], ['object', 'Object'], ['pet', 'Pet']];
+const FILTERS = ['all', 'portrait', 'landscape', 'object', 'pet'];
 function StylesScreen() {
   const a = S.draft.analysis;
   const recs = (a?.recommendations || [])
     .map(r => ({ card: findStyle(c => c.styleVersionId === r.styleVersionId), reason: r.reasonCode.replaceAll('_', ' ') }))
     .filter(r => r.card);
   const subjectLabel = a?.status === 'ready'
-    ? `${a.subjectType}${a.subjectType === 'person' ? `, ${a.personCount} person` : ''}`
-    : 'reading…';
+    ? `${tagLabel(a.subjectType)}${a.subjectType === 'person' ? `, ${t('{n} person', { n: a.personCount })}` : ''}`
+    : t('reading…');
   const match = (c) => S.filter === 'all' || c.suitabilityTags.includes(S.filter);
-  return h('div', { class: 'screen' },
-    topbar('Choose a direction', () => go('import')),
+  const pad = isWeb() ? '0' : '0 20px';
+  return shell(null,
+    topbar(t('Choose a direction'), () => go('import')),
     h('div', { class: 'scroll', style: { paddingBottom: '130px' } },
       // photo chip
-      h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', margin: '14px 20px 0', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '12px', padding: '9px 12px' } },
+      h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', margin: isWeb() ? '0' : '14px 20px 0', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '12px', padding: '9px 12px' } },
         h('div', { style: { width: '34px', height: '34px', borderRadius: '8px', flex: 'none', background: `url(${S.draft.previewUrl}) center/cover` } }),
-        h('div', { style: { flex: 1, font: '500 12.5px var(--sans)' } }, 'For this photo ', h('span', { style: { color: 'var(--ink-muted)', fontWeight: 400 } }, `· ${subjectLabel}`)),
-        h('button', { class: 'linkbtn', onClick: () => go('import') }, 'Change'),
+        h('div', { style: { flex: 1, font: '500 12.5px var(--sans)' } }, t('For this photo '), h('span', { style: { color: 'var(--ink-muted)', fontWeight: 400 } }, `· ${subjectLabel}`)),
+        h('button', { class: 'linkbtn', onClick: () => go('import') }, t('Change')),
       ),
       // filters
-      h('div', { style: { display: 'flex', gap: '8px', padding: '14px 20px 0', overflowX: 'auto' } },
-        FILTERS.map(([key, label]) => h('button', {
+      h('div', { style: { display: 'flex', gap: '8px', padding: isWeb() ? '14px 0 0' : '14px 20px 0', overflowX: 'auto' } },
+        FILTERS.map((key) => h('button', {
           class: 'chip' + (S.filter === key ? ' active' : ''),
           onClick: () => { S.filter = key; render(); },
-        }, label))),
+        }, key === 'all' ? t('All') : tagLabel(key)))),
       // recommended
       recs.length > 0 && [
-        h('div', { class: 'kicker', style: { padding: '22px 20px 10px' } }, 'Recommended'),
+        h('div', { class: 'kicker', style: { padding: isWeb() ? '22px 0 10px' : '22px 20px 10px' } }, t('Recommended')),
         h('div', { class: 'hrow' },
           recs.map(({ card, reason }) => styleCardEl(card, {
             width: '138px', reason,
@@ -421,9 +557,9 @@ function StylesScreen() {
         const cards = sh.styles.filter(match);
         if (!cards.length) return null;
         return h('div', { style: { paddingTop: '26px' } },
-          h('div', { style: { font: '600 19px var(--serif)', padding: '0 20px 2px' } }, sh.title),
-          h('div', { style: { font: '400 12px/1.5 var(--sans)', color: 'var(--ink-muted)', padding: '0 20px 12px' } }, sh.curatorialNote),
-          h('div', { class: 'grid2', style: { padding: '0 20px' } },
+          h('div', { style: { font: '600 19px var(--serif)', padding: pad, paddingBottom: '2px' } }, sh.title),
+          h('div', { style: { font: '400 12px/1.5 var(--sans)', color: 'var(--ink-muted)', padding: pad, paddingBottom: '12px' } }, sh.curatorialNote),
+          h('div', { class: 'grid2', style: { padding: pad } },
             cards.map(c => styleCardEl(c, {
               selected: S.draft.style?.styleId === c.styleId,
               onClick: () => { S.draft.style = c; render(); },
@@ -433,10 +569,10 @@ function StylesScreen() {
     ),
     S.draft.style && h('div', { class: 'bottom-bar', style: { display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,.94)' } },
       h('div', { style: { flex: 1, minWidth: 0 } },
-        h('div', { class: 'kicker', style: { fontSize: '10px', letterSpacing: '1.4px' } }, 'Selected'),
+        h('div', { class: 'kicker', style: { fontSize: '10px', letterSpacing: '1.4px' } }, t('Selected')),
         h('div', { style: { font: '600 14px var(--serif)' } }, S.draft.style.name)),
-      h('button', { class: 'linkbtn', onClick: () => { S.detail = S.draft.style; renderOverlay(); } }, 'Details'),
-      h('button', { class: 'btn', style: { width: 'auto', height: '46px', padding: '0 20px', fontSize: '14.5px' }, onClick: () => go('configure') }, 'Preview settings'),
+      h('button', { class: 'linkbtn', onClick: () => { S.detail = S.draft.style; renderOverlay(); } }, t('Details')),
+      h('button', { class: 'btn', style: { width: 'auto', height: '46px', padding: '0 20px', fontSize: '14.5px', margin: 0 }, onClick: () => go('configure') }, t('Preview settings')),
     ),
   );
 }
@@ -450,38 +586,43 @@ function ConfigureScreen() {
       options.map((v, i) => h('button', {
         class: d[key] === v ? 'active' : '',
         onClick: () => { d[key] = v; render(); },
-      }, labels ? labels[i] : v[0].toUpperCase() + v.slice(1)))),
+      }, labels ? labels[i] : t('opt.' + v)))),
   );
   const premiumNote = card.premium && S.ent?.plan === 'free';
-  return h('div', { class: 'screen' },
-    topbar('Preview settings', () => go('styles')),
-    h('div', { class: 'scroll', style: { padding: '18px 20px 120px' } },
+  const needsAccount = !signedIn() && freeNeedsAuth() && (S.ent?.availableUnits || 0) <= 0;
+  return shell(null,
+    topbar(t('Preview settings'), () => go('styles')),
+    h('div', { class: 'scroll narrow', style: { padding: '18px 20px 120px' } },
       h('div', { class: 'panel', style: { display: 'flex', alignItems: 'center', gap: '14px', padding: '14px' } },
         h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'center' } },
           h('div', { style: { width: '64px', height: '80px', borderRadius: '10px', background: `url(${d.previewUrl}) center/cover` } }),
-          h('div', { style: { font: '500 9px var(--mono)', letterSpacing: '1px', color: 'var(--ink-muted)' } }, 'YOUR PHOTO')),
+          h('div', { style: { font: '500 9px var(--mono)', letterSpacing: '1px', color: 'var(--ink-muted)' } }, t('YOUR PHOTO'))),
         h('div', { html: '<svg width="18" height="12" viewBox="0 0 18 12" fill="none"><path d="M1 6h15M12 1.5L16.5 6 12 10.5" stroke="#6E6B66" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>', style: { flex: 'none', display: 'flex' } }),
         h('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'center' } },
           h('div', { style: { width: '64px', height: '80px', borderRadius: '10px', background: artBg(card), backgroundSize: 'cover' } }),
-          h('div', { style: { font: '500 9px var(--mono)', letterSpacing: '1px', color: 'var(--ink-muted)' } }, 'DIRECTION')),
+          h('div', { style: { font: '500 9px var(--mono)', letterSpacing: '1px', color: 'var(--ink-muted)' } }, t('DIRECTION'))),
         h('div', { style: { flex: 1, minWidth: 0, paddingLeft: '2px' } },
           h('div', { style: { font: '600 16px var(--serif)' } }, card.name),
           h('div', { style: { font: '400 11.5px/1.45 var(--sans)', color: 'var(--ink-muted)', paddingTop: '2px' } }, card.shortCaption)),
       ),
       premiumNote && h('div', { style: { marginTop: '12px', font: '500 11.5px/1.5 var(--sans)', color: 'var(--warning)', background: 'var(--warning-soft)', borderRadius: '10px', padding: '9px 12px' } },
-        'Premium direction — included with Creator. You can preview settings freely.'),
-      seg('Style strength', 'strength', ['soft', 'balanced', 'bold']),
-      seg('Subject fidelity', 'fidelity', ['high', 'natural']),
-      seg('Composition', 'composition', ['keep', 'reframe']),
-      seg('Output ratio', 'ratio', ['original', '1:1', '4:5', '16:9'], ['Original', '1:1', '4:5', '16:9']),
+        t('Premium direction — opened on request. You can preview settings freely.')),
+      seg(t('Style strength'), 'strength', ['soft', 'balanced', 'bold']),
+      seg(t('Subject fidelity'), 'fidelity', ['high', 'natural']),
+      seg(t('Composition'), 'composition', ['keep', 'reframe']),
+      seg(t('Output ratio'), 'ratio', ['original', '1:1', '4:5', '16:9'], [t('Original'), '1:1', '4:5', '16:9']),
       h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '24px', borderTop: '1px solid var(--line)', paddingTop: '14px' } },
         h('div', { class: 'kicker', style: { letterSpacing: '1.2px' } }, estimateLabel()),
         h('div', { style: { font: '500 11px var(--sans)', color: 'var(--ink-muted)' } }, unitsBadgeText())),
+      needsAccount && h('div', { style: { marginTop: '14px', font: '400 12.5px/1.55 var(--sans)', color: 'var(--ink-muted)', background: 'var(--cobalt-soft)', borderRadius: '10px', padding: '10px 12px' } },
+        t('Register with your email to receive {n} free artworks — the first one is this photo.', { n: freeUnits() })),
     ),
     h('div', { class: 'bottom-bar' },
       generationOffline()
-        ? h('button', { class: 'btn', disabled: true, style: { opacity: .55 } }, 'Generating is paused')
-        : h('button', { class: 'btn', onClick: generate }, 'Generate')),
+        ? h('button', { class: 'btn', disabled: true, style: { opacity: .55 } }, t('Generating is paused'))
+        : needsAccount
+          ? h('button', { class: 'btn', onClick: () => openAuth('configure') }, t('Register to get {n} free artworks', { n: freeUnits() }))
+          : h('button', { class: 'btn', onClick: generate }, t('Generate'))),
   );
 }
 
@@ -494,16 +635,17 @@ function generationOffline() {
 
 // ---------- generation ----------
 function estimateLabel() {
-  if (generationOffline()) return 'Generating is paused — nothing will be charged';
+  if (generationOffline()) return t('Generating is paused — nothing will be charged');
   const r = S.lastEstimate || S.discover?.generation?.estimatedRangeSeconds;
-  if (r && r[1] > 120) return `Estimate — 1 standard image · ${Math.round(r[0] / 60)}–${Math.round(r[1] / 60)} min`;
-  return 'Estimate — 1 standard image · 20–90 s';
+  if (r && r[1] > 120) return t('Estimate — 1 artwork · {a}–{b} min', { a: Math.round(r[0] / 60), b: Math.round(r[1] / 60) });
+  return t('Estimate — 1 artwork · 20–90 s');
 }
 let pollTimer = null;
 async function generate() {
   const d = S.draft;
-  if (generationOffline()) { toast('Generating is paused right now — no units used', 2600); return; }
+  if (generationOffline()) { toast(t('Generating is paused right now — nothing used'), 2600); return; }
   if (!d.projectId || !d.assetId) { startImport(S.screen); return; }
+  if (!signedIn() && freeNeedsAuth() && (S.ent?.availableUnits || 0) <= 0) { openAuth('configure'); return; }
   try {
     track('generation_submitted', { styleId: d.style.styleId });
     const res = await post('/v1/generation-jobs', {
@@ -526,9 +668,9 @@ async function generate() {
     else if (e.code === 'GENERATION_UNAVAILABLE') {
       // Key was cleared while the app was open — reflect it and re-render.
       if (S.discover?.generation) S.discover.generation.available = false;
-      toast('Generating is paused right now — no units used', 2600);
+      toast(t('Generating is paused right now — nothing used'), 2600);
       render();
-    } else toast(e.message || 'Could not start — try again');
+    } else toast(e.message || t('Could not start — try again'));
   }
 }
 
@@ -543,16 +685,16 @@ function pollJob(jobId) {
         await refreshEnt();
         track('generation_succeeded', { jobId });
         if (S.screen === 'progress') go('result');
-        else { toast('Your image is ready — see Projects'); render(); }
+        else { toast(t('Your artwork is ready — see Projects')); render(); }
       } else if (job.status === 'failed' || job.status === 'cancelled') {
         clearInterval(pollTimer);
         await refreshEnt();
         track('generation_failed', { jobId, errorCode: job.error?.code });
         if (S.screen === 'progress') {
           const code = job.error?.code;
-          toast(code === 'GENERATION_REJECTED' ? 'This request can’t be created — no units used'
-            : code === 'GENERATION_UNAVAILABLE' ? 'Generating is paused right now — no units used'
-            : 'Something went wrong — no units used', 2600);
+          toast(code === 'GENERATION_REJECTED' ? t('This request can’t be created — nothing used')
+            : code === 'GENERATION_UNAVAILABLE' ? t('Generating is paused right now — nothing used')
+            : t('Something went wrong — nothing used'), 2600);
           go('configure');
         }
       } else if (S.screen === 'progress') render();
@@ -560,31 +702,33 @@ function pollJob(jobId) {
   }, 2000);
 }
 
-const STAGES = [
-  ['preparing', 'Preparing your photo'],
-  ['building', 'Building the direction'],
-  ['making', 'Making the image'],
-  ['checking', 'Checking the result'],
+const STAGES = () => [
+  ['preparing', t('Preparing your photo')],
+  ['building', t('Building the direction')],
+  ['making', t('Making the image')],
+  ['checking', t('Checking the result')],
 ];
 function ProgressScreen() {
-  const stageIdx = Math.max(0, STAGES.findIndex(([k]) => k === S.job?.stage));
-  return h('div', { class: 'screen', style: { overflow: 'hidden' } },
-    h('div', { style: { position: 'absolute', inset: '-30px', background: S.draft.previewUrl ? `url(${S.draft.previewUrl}) center/cover` : 'var(--canvas)', filter: 'blur(30px) saturate(.65) brightness(.95)' } }),
-    h('div', { style: { position: 'absolute', inset: 0, background: 'rgba(247,245,239,.78)' } }),
-    h('div', { style: { position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '0 36px' } },
+  const stages = STAGES();
+  const stageIdx = Math.max(0, stages.findIndex(([k]) => k === S.job?.stage));
+  return shell(null,
+    h('div', { class: 'progress-bg', style: { background: S.draft.previewUrl ? `url(${S.draft.previewUrl}) center/cover` : 'var(--canvas)' } }),
+    h('div', { class: 'progress-veil' }),
+    h('div', { class: 'progress-body' },
       h('div', { class: 'spinner', style: { width: '34px', height: '34px' } }),
-      h('div', { style: { font: '600 24px var(--serif)', padding: '18px 0 4px', textAlign: 'center' } }, STAGES[stageIdx][1]),
-      h('div', { class: 'kicker', style: { paddingBottom: '26px' } }, `Step ${stageIdx + 1} of 4`),
-      h('div', { style: { display: 'flex', flexDirection: 'column', gap: '11px', alignSelf: 'stretch', background: 'rgba(255,255,255,.75)', border: '1px solid rgba(217,213,204,.8)', borderRadius: '14px', padding: '16px 18px' } },
-        STAGES.map(([, label], i) => h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
+      h('div', { style: { font: '600 24px var(--serif)', padding: '18px 0 4px', textAlign: 'center' } }, stages[stageIdx][1]),
+      h('div', { class: 'kicker', style: { paddingBottom: '26px' } }, t('Step {a} of {b}', { a: stageIdx + 1, b: 4 })),
+      h('div', { class: 'panelish', style: { display: 'flex', flexDirection: 'column', gap: '11px', alignSelf: 'stretch', width: '100%', margin: '0 auto', background: 'rgba(255,255,255,.75)', border: '1px solid rgba(217,213,204,.8)', borderRadius: '14px', padding: '16px 18px' } },
+        stages.map(([, label], i) => h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } },
           h('div', { style: { width: '8px', height: '8px', borderRadius: '999px', flex: 'none', background: i < stageIdx ? 'var(--success)' : i === stageIdx ? 'var(--cobalt)' : 'var(--line)', animation: i === stageIdx ? 'mfPulse 1.1s ease infinite' : 'none' } }),
           h('div', { style: { font: '500 13px var(--sans)', color: i <= stageIdx ? 'var(--ink)' : 'var(--ink-muted)' } }, label)))),
       h('div', { style: { font: '400 12px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '22px', textAlign: 'center' } },
         S.jobStartedAt && S.lastEstimate && (Date.now() - S.jobStartedAt) / 1000 > S.lastEstimate[1]
-          ? 'Still working — this one is taking longer than usual.'
-          : 'You can leave — creation continues in the background.'),
-      h('button', { class: 'linkbtn', style: { paddingTop: '10px', fontSize: '13px' }, onClick: () => go('discover') }, 'Back to Discover'),
+          ? t('Still working — this one is taking longer than usual.')
+          : t('You can leave — creation continues in the background.')),
+      h('button', { class: 'linkbtn', style: { paddingTop: '10px', fontSize: '13px' }, onClick: () => go('discover') }, t('Back to Discover')),
     ),
+    { screenClass: 'progress' },
   );
 }
 
@@ -595,21 +739,21 @@ function ResultScreen() {
   const cand = job.candidate;
   const resultUrl = assetUrl(cand.assetId);
   const sourceUrl = S.draft.previewUrl || (S.draft.assetId ? assetUrl(S.draft.assetId) : null);
-  const styleName = S.draft.style?.name || 'Result';
+  const styleName = S.draft.style?.name || t('Result');
 
   const artBox = h('div', {
     style: {
       position: 'relative', borderRadius: '14px', overflow: 'hidden', border: '1px solid var(--line)',
       aspectRatio: `${cand.width}/${cand.height}`, cursor: 'pointer', userSelect: 'none', touchAction: 'none',
-      maxHeight: '58vh', margin: '0 auto',
+      maxHeight: isWeb() ? '78vh' : '58vh', margin: '0 auto',
     },
     onPointerDown: (e) => { if (!S.compareOn) { e.preventDefault(); S.hold = true; render(); } },
     onPointerUp: () => { if (S.hold) { S.hold = false; render(); } },
     onPointerLeave: () => { if (S.hold) { S.hold = false; render(); } },
   },
-    sourceUrl && h('img', { src: sourceUrl, style: { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }, alt: 'Original photo' }),
+    sourceUrl && h('img', { src: sourceUrl, style: { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }, alt: t('Original photo') }),
     h('img', {
-      src: resultUrl, alt: `Styled result — ${styleName}`,
+      src: resultUrl, alt: `${t('Styled result')} — ${styleName}`,
       style: {
         position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover',
         opacity: S.hold ? 0 : 1, transition: 'opacity .16s',
@@ -618,40 +762,43 @@ function ResultScreen() {
     }),
     S.compareOn && [
       h('div', { style: { position: 'absolute', top: 0, bottom: 0, left: `${S.compare}%`, width: '2px', background: 'rgba(255,255,255,.95)', boxShadow: '0 0 10px rgba(0,0,0,.4)' } }),
-      h('div', { style: { position: 'absolute', top: '10px', left: '10px', font: '500 10px var(--sans)', color: '#fff', background: 'var(--overlay)', borderRadius: '6px', padding: '3px 8px' } }, 'Before'),
-      h('div', { style: { position: 'absolute', top: '10px', right: '10px', font: '500 10px var(--sans)', color: '#fff', background: 'var(--overlay)', borderRadius: '6px', padding: '3px 8px' } }, 'After'),
+      h('div', { style: { position: 'absolute', top: '10px', left: '10px', font: '500 10px var(--sans)', color: '#fff', background: 'var(--overlay)', borderRadius: '6px', padding: '3px 8px' } }, t('Before')),
+      h('div', { style: { position: 'absolute', top: '10px', right: '10px', font: '500 10px var(--sans)', color: '#fff', background: 'var(--overlay)', borderRadius: '6px', padding: '3px 8px' } }, t('After')),
     ],
-    !S.compareOn && !S.hold && h('div', { style: { position: 'absolute', bottom: '10px', left: '50%', transform: 'translateX(-50%)', font: '500 10.5px var(--sans)', color: '#fff', background: 'var(--overlay)', borderRadius: '999px', padding: '5px 12px', whiteSpace: 'nowrap' } }, 'Hold to see original'),
+    !S.compareOn && !S.hold && h('div', { style: { position: 'absolute', bottom: '10px', left: '50%', transform: 'translateX(-50%)', font: '500 10.5px var(--sans)', color: '#fff', background: 'var(--overlay)', borderRadius: '999px', padding: '5px 12px', whiteSpace: 'nowrap' } }, t('Hold to see original')),
   );
 
-  return h('div', { class: 'screen' },
+  const actions = h('div', null,
+    h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 2px 0' } },
+      h('button', {
+        class: 'chip', style: S.compareOn ? { background: 'var(--ink)', color: '#fff', borderColor: 'var(--ink)', display: 'flex', gap: '7px', alignItems: 'center' } : { display: 'flex', gap: '7px', alignItems: 'center' },
+        onClick: () => { S.compareOn = !S.compareOn; S.hold = false; render(); },
+      }, svg(icons.compare), t('Compare')),
+      h('div', { style: { font: '500 9.5px var(--mono)', letterSpacing: '1px', color: 'var(--ink-muted)' } }, `${cand.width} × ${cand.height} · ${t('STANDARD')} · ${t('PRIVATE')}`)),
+    S.compareOn && h('input', {
+      type: 'range', min: 0, max: 100, value: S.compare, style: { marginTop: '12px' },
+      onInput: (e) => { S.compare = +e.target.value; render(); },
+    }),
+    h('button', { class: 'btn' + (S.saved ? ' success' : ''), style: { marginTop: '14px' }, onClick: saveResult }, S.saved ? t('Saved ✓') : t('Save')),
+    h('div', { style: { display: 'flex', gap: '10px', paddingTop: '10px' } },
+      h('button', { class: 'btn secondary small', style: { flex: 1 }, onClick: shareResult }, t('Share')),
+      h('button', { class: 'btn secondary small', style: { flex: 1 }, onClick: generate }, t('Try again')),
+      h('button', { class: 'btn secondary small', style: { flex: 1 }, onClick: () => go('configure') }, t('Refine'))),
+    FeedbackRow(cand.id),
+  );
+
+  return shell(null,
     topbar(styleName, () => go('discover'), { serif: true }),
     h('div', { class: 'scroll', style: { padding: '6px 16px 40px' } },
-      artBox,
-      h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 2px 0' } },
-        h('button', {
-          class: 'chip', style: S.compareOn ? { background: 'var(--ink)', color: '#fff', borderColor: 'var(--ink)', display: 'flex', gap: '7px', alignItems: 'center' } : { display: 'flex', gap: '7px', alignItems: 'center' },
-          onClick: () => { S.compareOn = !S.compareOn; S.hold = false; render(); },
-        }, svg(icons.compare), 'Compare'),
-        h('div', { style: { font: '500 9.5px var(--mono)', letterSpacing: '1px', color: 'var(--ink-muted)' } }, `${cand.width} × ${cand.height} · STANDARD · PRIVATE`)),
-      S.compareOn && h('input', {
-        type: 'range', min: 0, max: 100, value: S.compare, style: { marginTop: '12px' },
-        onInput: (e) => { S.compare = +e.target.value; render(); },
-      }),
-      h('button', { class: 'btn' + (S.saved ? ' success' : ''), style: { marginTop: '14px' }, onClick: saveResult }, S.saved ? 'Saved ✓' : 'Save'),
-      h('div', { style: { display: 'flex', gap: '10px', paddingTop: '10px' } },
-        h('button', { class: 'btn secondary small', style: { flex: 1 }, onClick: shareResult }, 'Share'),
-        h('button', { class: 'btn secondary small', style: { flex: 1 }, onClick: generate }, 'Try again'),
-        h('button', { class: 'btn secondary small', style: { flex: 1 }, onClick: () => go('configure') }, 'Refine')),
-      FeedbackRow(cand.id),
+      h('div', { class: 'result-grid' }, artBox, actions),
     ),
   );
 }
 
 function FeedbackRow(candidateId) {
-  if (S.fb === 'done') return h('div', { style: { textAlign: 'center', font: '400 12px var(--sans)', color: 'var(--success)', paddingTop: '20px' } }, 'Thanks — noted for this direction.');
+  if (S.fb === 'done') return h('div', { style: { textAlign: 'center', font: '400 12px var(--sans)', color: 'var(--success)', paddingTop: '20px' } }, t('Thanks — noted for this direction.'));
   if (S.fb === 'pick') {
-    const reasons = [['FACE_CHANGED', 'Face changed'], ['WRONG_STYLE', 'Wrong style'], ['BAD_DETAILS', 'Bad details'], ['TOO_STRONG', 'Too strong']];
+    const reasons = [['FACE_CHANGED', t('Face changed')], ['WRONG_STYLE', t('Wrong style')], ['BAD_DETAILS', t('Bad details')], ['TOO_STRONG', t('Too strong')]];
     return h('div', { style: { display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '8px', paddingTop: '18px' } },
       reasons.map(([code, label]) => h('button', {
         class: 'chip', style: { fontWeight: 500, fontSize: '11.5px' },
@@ -659,9 +806,9 @@ function FeedbackRow(candidateId) {
       }, label)));
   }
   return h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', paddingTop: '20px' } },
-    h('div', { style: { font: '400 12px var(--sans)', color: 'var(--ink-muted)' } }, 'How did it come out?'),
-    h('button', { class: 'chip', onClick: () => { post(`/v1/candidates/${S.job.candidate.id}/feedback`, { rating: 'positive' }).catch(() => {}); S.fb = 'done'; render(); } }, 'Love it'),
-    h('button', { class: 'chip', onClick: () => { S.fb = 'pick'; render(); } }, 'Not quite'));
+    h('div', { style: { font: '400 12px var(--sans)', color: 'var(--ink-muted)' } }, t('How did it come out?')),
+    h('button', { class: 'chip', onClick: () => { post(`/v1/candidates/${S.job.candidate.id}/feedback`, { rating: 'positive' }).catch(() => {}); S.fb = 'done'; render(); } }, t('Love it')),
+    h('button', { class: 'chip', onClick: () => { S.fb = 'pick'; render(); } }, t('Not quite')));
 }
 
 async function saveResult() {
@@ -674,9 +821,10 @@ async function saveResult() {
     a.download = `museframe-${(S.draft.style?.name || 'work').toLowerCase().replaceAll(' ', '-')}.jpg`;
     a.click();
     S.saved = true; render();
-    toast('Saved');
-    if (S.ent?.plan === 'free') setTimeout(() => openPaywall('post_save'), 1800);
-  } catch (e) { toast('Could not save — try again'); }
+    toast(t('Saved'));
+    // The last free artwork is the moment to explain how to get more.
+    if (S.ent?.plan === 'free' && (S.ent?.availableUnits || 0) === 0) setTimeout(() => openPaywall('post_save'), 1800);
+  } catch (e) { toast(t('Could not save — try again')); }
 }
 
 async function shareResult() {
@@ -690,50 +838,49 @@ async function shareResult() {
       return;
     }
   } catch { /* fall through */ }
-  toast('Sharing not available here — use Save');
+  toast(t('Sharing not available here — use Save'));
 }
 
 // ---------- projects ----------
 async function loadProjects() {
   try { S.projects = (await get('/v1/projects')).projects; render(); } catch { }
 }
-const STATUS_LABEL = { draft: 'Draft', generating: 'In progress', ready: 'New', saved: 'Saved' };
 const STATUS_COLOR = { draft: ['#6E6B66', '#EFEDE6'], generating: ['#A36513', '#F6EBD9'], ready: ['#1C49D8', '#E8EDFF'], saved: ['#217A54', '#E3F0E9'] };
 function ProjectsScreen() {
-  const tabs = ['All', 'In progress', 'Saved'];
+  const tabs = [['all', t('All')], ['generating', t('In progress')], ['saved', t('Saved')]];
   const filtered = S.projects.filter(p => {
-    if (S.projTab === 'In progress') return p.status === 'generating';
-    if (S.projTab === 'Saved') return p.status === 'saved';
+    if (S.projTab === 'generating') return p.status === 'generating';
+    if (S.projTab === 'saved') return p.status === 'saved';
     return true;
   });
-  return h('div', { class: 'screen' },
+  return shell('projects',
     h('div', { class: 'scroll', style: { padding: 'max(22px, env(safe-area-inset-top)) 20px 116px' } },
-      h('div', { class: 'page-title', style: { padding: '14px 0' } }, 'Projects'),
+      h('div', { class: 'page-title', style: { padding: '14px 0' } }, t('Projects')),
       h('div', { style: { display: 'flex', gap: '8px', paddingBottom: '16px' } },
-        tabs.map(t => h('button', { class: 'chip' + (S.projTab === t ? ' active' : ''), onClick: () => { S.projTab = t; render(); } }, t))),
+        tabs.map(([key, label]) => h('button', { class: 'chip' + (S.projTab === key ? ' active' : ''), onClick: () => { S.projTab = key; render(); } }, label))),
       filtered.length === 0
         ? h('div', { style: { textAlign: 'center', padding: '60px 20px', border: '1px dashed var(--line)', borderRadius: '14px' } },
-          h('div', { style: { font: '600 17px var(--serif)' } }, 'Nothing here yet'),
-          h('div', { style: { font: '400 12.5px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '6px' } }, 'Works you create will appear in this room.'))
+          h('div', { style: { font: '600 17px var(--serif)' } }, t('Nothing here yet')),
+          h('div', { style: { font: '400 12.5px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '6px' } }, t('Works you create will appear in this room.')),
+          h('button', { class: 'btn small', style: { width: 'auto', padding: '0 18px', margin: '16px auto 0' }, onClick: () => startImport('projects') }, t('Create')))
         : h('div', { class: 'grid2', style: { gap: '14px' } },
           filtered.map(p => {
             const [fg, bg] = STATUS_COLOR[p.status] || STATUS_COLOR.ready;
             const imgId = p.candidateAssetId || p.sourceAssetId;
             return h('div', { style: { cursor: 'pointer' }, onClick: () => openProject(p) },
               h('div', { class: 'card-art' },
-                imgId && h('img', { src: assetUrl(imgId), style: { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }, loading: 'lazy', alt: p.styleName || 'Project' }),
-                h('div', { style: { position: 'absolute', top: '8px', left: '8px', font: '600 9.5px var(--sans)', letterSpacing: '.4px', color: fg, background: bg, borderRadius: '999px', padding: '3px 8px' } }, STATUS_LABEL[p.status] || p.status)),
-              h('div', { style: { font: '600 13px var(--sans)', padding: '7px 2px 0' } }, p.styleName || p.title || 'Untitled'),
-              h('div', { style: { font: '400 11px var(--sans)', color: 'var(--ink-muted)', padding: '2px 2px 0' } }, new Date(p.updatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })),
+                imgId && h('img', { src: assetUrl(imgId), style: { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }, loading: 'lazy', alt: p.styleName || t('Project') }),
+                h('div', { style: { position: 'absolute', top: '8px', left: '8px', font: '600 9.5px var(--sans)', letterSpacing: '.4px', color: fg, background: bg, borderRadius: '999px', padding: '3px 8px' } }, t('status.' + p.status))),
+              h('div', { style: { font: '600 13px var(--sans)', padding: '7px 2px 0' } }, p.styleName || p.title || t('Untitled')),
+              h('div', { style: { font: '400 11px var(--sans)', color: 'var(--ink-muted)', padding: '2px 2px 0' } }, fmtDate(p.updatedAt)),
             );
           })),
     ),
-    tabbar('projects'),
   );
 }
 
 async function openProject(p) {
-  if (!p.jobId) { toast('This project has no work yet'); return; }
+  if (!p.jobId) { toast(t('This project has no work yet')); return; }
   try {
     // Prefer a live attempt, else the newest succeeded one — a failed retry
     // must never hide an earlier finished work (spec §6.13).
@@ -751,8 +898,8 @@ async function openProject(p) {
     S.saved = p.status === 'saved'; S.fb = 'none';
     if (job.status === 'succeeded') go('result');
     else if (['queued', 'running', 'quality_check', 'created'].includes(job.status)) { go('progress'); pollJob(job.id); }
-    else toast('That attempt failed — try a new one');
-  } catch { toast('Could not open project'); }
+    else toast(t('That attempt failed — try a new one'));
+  } catch { toast(t('Could not open project')); }
 }
 
 // ---------- profile ----------
@@ -765,127 +912,330 @@ async function loadProfile() {
 function ProfileScreen() {
   const ent = S.ent || { plan: 'free', availableUnits: 0 };
   const isFree = ent.plan === 'free';
-  const planName = isFree ? 'Free plan' : (S.products.find(p => p.internalKey === ent.plan)?.displayName || 'Creator');
+  const planName = isFree ? t('Free account') : (S.products.find(p => p.internalKey === ent.plan)?.displayName || 'Creator');
   const rows = [
-    ['Manage subscription', () => openPaywall('manage')],
-    ['Restore purchases', async () => { await refreshEnt(); render(); toast(S.ent.plan === 'free' ? 'No active plan found' : 'Purchases restored'); }],
-    ['Purchase history', () => openInfo('purchases')],
-    ['Privacy & data', () => openInfo('privacy')],
-    ['About our styles', () => openInfo('about')],
-    ['Delete account', () => openInfo('delete')],
-  ];
-  return h('div', { class: 'screen' },
-    h('div', { class: 'scroll', style: { padding: 'max(22px, env(safe-area-inset-top)) 20px 116px' } },
-      h('div', { class: 'page-title', style: { padding: '14px 0 16px' } }, 'Profile'),
-      (() => {
-        const signedIn = localStorage.getItem('mf.signedIn') === '1';
-        const name = localStorage.getItem('mf.userName') || (signedIn ? 'Creator' : 'Guest');
-        const cfg = S.authConfig || {};
-        const showGoogle = !signedIn && cfg.google?.enabled;
-        const showApple = !signedIn && cfg.apple?.enabled && platform() === 'ios';
-        const showEmail = !signedIn && cfg.email?.enabled;
-        return h('div', { style: { paddingBottom: '18px' } },
-          h('div', { style: { display: 'flex', alignItems: 'center', gap: '14px' } },
-            h('div', { style: { width: '54px', height: '54px', borderRadius: '999px', background: 'var(--ink)', color: 'var(--canvas)', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '600 22px var(--serif)' } }, (name[0] || 'G').toUpperCase()),
-            h('div', null,
-              h('div', { style: { font: '600 16px var(--sans)' } }, name),
-              h('div', { style: { font: '400 12px var(--sans)', color: 'var(--ink-muted)' } },
-                signedIn ? '已登录 — 作品与权益跨设备同步' : '作品当前保存在本设备'))),
-          (showGoogle || showApple) && h('div', { style: { display: 'flex', gap: '10px', paddingTop: '14px' } },
-            showGoogle && h('button', { class: 'btn secondary small', style: { flex: 1 }, onClick: () => signIn('google') }, '使用 Google 登录'),
-            showApple && h('button', { class: 'btn secondary small', style: { flex: 1 }, onClick: () => signIn('apple') }, '通过 Apple 登录')),
-          showEmail && EmailLoginBox(),
-          !signedIn && !showGoogle && !showApple && !showEmail && isNative() && h('div', { style: { font: '400 11.5px var(--sans)', color: 'var(--ink-muted)', paddingTop: '10px' } },
-            '登录开通后，可跨设备同步你的作品与权益。'),
-        );
-      })(),
+    isNative() && !isFree && [t('Manage subscription'), () => openPaywall('manage')],
+    isNative() && [t('Restore purchases'), async () => { await refreshEnt(); render(); toast(S.ent.plan === 'free' ? t('No active plan found') : t('Purchases restored')); }],
+    [t('Purchase history'), () => openInfo('purchases')],
+    [t('Contact us'), () => { location.href = supportMailto(); }],
+    [t('Privacy & data'), () => openInfo('privacy')],
+    [t('About our styles'), () => openInfo('about')],
+    [t('Language') + ' · ' + (getLang() === 'zh' ? 'English' : '中文'), toggleLang],
+    signedIn() && [t('Sign out'), signOut],
+    [t('Delete account'), () => openInfo('delete')],
+  ].filter(Boolean);
+  const name = userLabel() || (signedIn() ? t('Creator') : t('Guest'));
+  return shell('profile',
+    h('div', { class: 'scroll narrow', style: { padding: 'max(22px, env(safe-area-inset-top)) 20px 116px' } },
+      h('div', { class: 'page-title', style: { padding: '14px 0 16px' } }, t('Profile')),
+      h('div', { style: { paddingBottom: '18px' } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: '14px' } },
+          h('div', { style: { width: '54px', height: '54px', borderRadius: '999px', background: 'var(--ink)', color: 'var(--canvas)', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '600 22px var(--serif)' } }, (name[0] || 'G').toUpperCase()),
+          h('div', { style: { minWidth: 0 } },
+            h('div', { style: { font: '600 16px var(--sans)', overflow: 'hidden', textOverflow: 'ellipsis' } }, name),
+            h('div', { style: { font: '400 12px var(--sans)', color: 'var(--ink-muted)' } },
+              signedIn() ? t('Signed in — works and credits sync across devices') : t('Works are kept on this device only')))),
+        !signedIn() && h('div', { style: { paddingTop: '14px' } },
+          h('button', { class: 'btn', style: { height: '46px', fontSize: '14.5px' }, onClick: () => openAuth('profile') },
+            t('Sign in / Register — {n} free artworks', { n: freeUnits() }))),
+      ),
       h('div', { class: 'panel', style: { padding: '16px' } },
         h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
           h('div', { style: { font: '600 15px var(--serif)' } }, planName),
           h('span', { class: 'pillbtn', style: { cursor: 'default' } }, unitsBadgeText())),
         h('div', { style: { font: '400 12px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '4px' } },
-          isFree ? 'First artwork included. Subscribe for more directions and priority creation.' : 'All directions unlocked · priority creation'),
-        isFree && h('button', { class: 'btn', style: { marginTop: '12px', height: '42px', borderRadius: '10px', fontSize: '13.5px' }, onClick: () => openPaywall('profile') }, 'See plans')),
+          isFree
+            ? (signedIn()
+              ? t('{n} artworks are included with your account. Packs start at {price}; email us to buy.', { n: freeUnits(), price: (offeredProducts().filter(p => p.productType === 'pack').sort((a, b) => a.grantedUnits - b.grantedUnits)[0] && productPrice(offeredProducts().filter(p => p.productType === 'pack').sort((a, b) => a.grantedUnits - b.grantedUnits)[0])) || '—' })
+              : t('Register with your email to receive {n} free artworks.', { n: freeUnits() }))
+            : t('All directions unlocked · priority creation')),
+        isFree && h('button', { class: 'btn', style: { marginTop: '12px', height: '42px', borderRadius: '10px', fontSize: '13.5px' }, onClick: () => signedIn() ? openPaywall('profile') : openAuth('profile') },
+          signedIn() ? t('See packs & prices') : t('Register'))),
       h('div', { class: 'panel', style: { marginTop: '16px', overflow: 'hidden' } },
         rows.map(([label, onClick], i) => h('button', {
           style: {
             display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', background: 'none', cursor: 'pointer',
             padding: '13px 16px', border: 'none', borderBottom: i < rows.length - 1 ? '1px solid rgba(217,213,204,.55)' : 'none',
-            font: '500 13.5px var(--sans)', color: label === 'Delete account' ? 'var(--danger)' : 'var(--ink)',
+            font: '500 13.5px var(--sans)', color: label === t('Delete account') ? 'var(--danger)' : 'var(--ink)', textAlign: 'left',
           }, onClick,
         }, label, svg(icons.chev)))),
-      h('div', { style: { textAlign: 'center', font: '400 10.5px var(--mono)', letterSpacing: '1px', color: 'var(--ink-muted)', padding: '24px 0 8px' } }, 'MUSEFRAME 0.1 · MVP'),
+      h('div', { style: { textAlign: 'center', font: '400 10.5px var(--mono)', letterSpacing: '1px', color: 'var(--ink-muted)', padding: '24px 0 8px' } }, 'MUSEFRAME 0.2'),
     ),
-    tabbar('profile'),
   );
 }
 
-// ---------- paywall ----------
+// ---------- auth (email verification code = registration + sign-in) ----------
+function openAuth(returnTo) {
+  S.authReturn = returnTo || S.screen;
+  S.paywall = null;
+  S.emailLogin = { stage: 'email', email: S.emailLogin?.email || '', busy: false };
+  track('auth_opened', { from: S.authReturn });
+  go('auth');
+}
+function AuthScreen() {
+  const cfg = S.authConfig || {};
+  const emailOn = !!cfg.email?.enabled;
+  const showGoogle = !!cfg.google?.enabled;
+  const showApple = !!cfg.apple?.enabled && platform() === 'ios';
+  const back = () => go(S.authReturn && S.authReturn !== 'auth' ? S.authReturn : 'discover');
+  return shell(null,
+    topbar(t('Sign in / Register'), back),
+    h('div', { class: 'scroll narrow', style: { padding: '18px 20px 40px' } },
+      h('div', { class: 'auth-card' },
+        h('div', { class: 'kicker', style: { paddingBottom: '8px' } }, t('MuseFrame account')),
+        h('div', { style: { font: '600 26px/1.2 var(--serif)' } }, t('Register with your email')),
+        h('div', { style: { font: '400 13.5px/1.6 var(--sans)', color: 'var(--ink-muted)', padding: '8px 0 18px' } },
+          t('{n} free artworks on sign-up. No password — we email you a 6-digit code. Signing in on a new device uses the same steps.', { n: freeUnits() })),
+        emailOn
+          ? EmailLoginBox(back)
+          : h('div', { style: { font: '500 12.5px/1.55 var(--sans)', color: 'var(--warning)', background: 'var(--warning-soft)', borderRadius: '10px', padding: '10px 12px' } },
+            t('Email sign-in is not enabled on this server yet. Please contact {email}.', { email: supportEmail() })),
+        (showGoogle || showApple) && [
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', padding: '18px 0 12px' } },
+            h('div', { style: { flex: 1, height: '1px', background: 'var(--line)' } }),
+            h('div', { style: { font: '400 11px var(--sans)', color: 'var(--ink-muted)' } }, t('or')),
+            h('div', { style: { flex: 1, height: '1px', background: 'var(--line)' } })),
+          h('div', { style: { display: 'flex', gap: '10px' } },
+            showGoogle && h('button', { class: 'btn secondary small', style: { flex: 1 }, onClick: () => signIn('google', back) }, t('Continue with Google')),
+            showApple && h('button', { class: 'btn secondary small', style: { flex: 1 }, onClick: () => signIn('apple', back) }, t('Continue with Apple'))),
+        ],
+        h('div', { style: { font: '400 11px/1.55 var(--sans)', color: 'var(--ink-muted)', paddingTop: '18px' } },
+          t('Your address is used for sign-in codes and, if you ask for more artworks, to reply to you. Nothing else.'), ' ',
+          h('button', { class: 'linkbtn', style: { fontSize: '11px', fontWeight: 500 }, onClick: () => openInfo('privacy') }, t('Privacy & data'))),
+      ),
+    ),
+  );
+}
+
+function afterSignIn(res) {
+  setToken(res.accessToken);
+  S.user = res.user;
+  localStorage.setItem('mf.userName', res.user.displayName || res.user.email || '');
+  localStorage.setItem('mf.userEmail', res.user.email || '');
+  localStorage.setItem('mf.signedIn', '1');
+}
+async function signIn(provider, done) {
+  try {
+    const res = await nativeSignIn(provider);
+    afterSignIn(res);
+    await refreshEnt();
+    toast(t('Welcome, {name}', { name: res.user.displayName || t('Creator') }));
+    done ? done() : render();
+    renderOverlay();
+  } catch (e) {
+    toast(e.userMessage || t('Sign-in failed — please try again'));
+  }
+}
+async function signOut() {
+  clearToken();
+  localStorage.removeItem('mf.signedIn');
+  localStorage.removeItem('mf.userName');
+  localStorage.removeItem('mf.userEmail');
+  S.user = null; S.ent = null; S.projects = []; S.purchases = [];
+  try { await ensureSession(await deviceId()); await loadCore(); } catch { /* shown on next render */ }
+  toast(t('Signed out'));
+  go('discover');
+}
+
+// Email verification-code login. `done` runs after a successful sign-in.
+function EmailLoginBox(done) {
+  const st = S.emailLogin || (S.emailLogin = { stage: 'email', email: '', busy: false });
+  const input = (ph, val, oninput, extra) => h('input', {
+    class: 'input', type: extra?.type || 'text', inputmode: extra?.inputmode, autocomplete: extra?.autocomplete, placeholder: ph, value: val,
+    onInput: (e) => oninput(e.target.value),
+    onKeyDown: (e) => { if (e.key === 'Enter') extra?.onEnter?.(); },
+  });
+  const wrap = (...kids) => h('div', { style: { paddingTop: '4px' } }, kids);
+  const requestCode = async () => {
+    const email = st.email.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast(t('Please enter a valid email address')); return; }
+    st.busy = true; render();
+    try { await emailRequestCode(email); st.stage = 'code'; st.code = ''; toast(t('Code sent — check your inbox (and spam)')); }
+    catch (e) {
+      toast(e.code === 'PROVIDER_NOT_CONFIGURED' ? t('Email sign-in is not enabled yet')
+        : e.code === 'RATE_LIMITED' ? t('Too many codes requested — wait a few minutes')
+        : t('Could not send the code — try again later'));
+    }
+    finally { st.busy = false; render(); }
+  };
+  const verify = async () => {
+    st.busy = true; render();
+    try {
+      const res = await emailVerifyCode(st.email.trim(), (st.code || '').trim());
+      afterSignIn(res); S.emailLogin = null;
+      await refreshEnt();
+      const gained = S.ent?.availableUnits || 0;
+      toast(gained > 0 ? t('Welcome — {n} free artworks are on your account', { n: gained }) : t('Signed in'), 2600);
+      track('signin_completed', { provider: 'email' });
+      done ? done() : render();
+      renderOverlay();
+    } catch (e) {
+      toast(e.message || t('That code is not right')); st.busy = false; render();
+    }
+  };
+  if (st.stage === 'email') {
+    return wrap(
+      input(t('Your email address'), st.email, (v) => { st.email = v; }, { type: 'email', inputmode: 'email', autocomplete: 'email', onEnter: requestCode }),
+      h('button', { class: 'btn', disabled: st.busy, onClick: requestCode }, st.busy ? t('Sending…') : t('Send me a code')),
+    );
+  }
+  return wrap(
+    h('div', { style: { font: '400 12px var(--sans)', color: 'var(--ink-muted)', paddingBottom: '6px' } }, t('We sent a code to {email}', { email: st.email })),
+    input(t('6-digit code'), st.code || '', (v) => { st.code = v; }, { inputmode: 'numeric', autocomplete: 'one-time-code', onEnter: verify }),
+    h('button', { class: 'btn', disabled: st.busy, onClick: verify }, st.busy ? t('Checking…') : t('Continue')),
+    h('div', { style: { display: 'flex', justifyContent: 'center', gap: '18px', paddingTop: '12px' } },
+      h('button', { class: 'linkbtn', onClick: () => { S.emailLogin = { stage: 'email', email: st.email, busy: false }; render(); } }, t('Use another email')),
+      h('button', { class: 'linkbtn', disabled: st.busy, onClick: requestCode }, t('Resend code'))),
+  );
+}
+
+// ---------- paywall → "register" or "email us" ----------
 function openPaywall(context) {
   S.paywall = { context };
   track('paywall_viewed', { context });
   renderOverlay();
 }
+function supportMailto(kind = 'more', product = null) {
+  const who = userEmail() || userLabel() || '';
+  if (kind === 'buy' && product) {
+    const price = productPrice(product) || '';
+    const subject = t('MuseFrame — buy {name} ({price}) for {email}', { name: productName(product), price, email: who || t('my account') });
+    const body = t('Hello MuseFrame,\n\nI would like to buy {name} ({n} artworks, {price}) for my account ({email}).\nPlease tell me how to pay.\n\nThanks!', { name: productName(product), n: product.grantedUnits, price, email: who || '…' });
+    return `mailto:${supportEmail()}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  }
+  const subject = kind === 'premium'
+    ? t('MuseFrame — Premium directions for {email}', { email: who || t('my account') })
+    : t('MuseFrame — more artworks for {email}', { email: who || t('my account') });
+  const body = kind === 'premium'
+    ? t('Hello MuseFrame,\n\nI would like Premium directions enabled on my account ({email}).\n\nThanks!', { email: who || '…' })
+    : t('Hello MuseFrame,\n\nI have used my free artworks and would like more on my account ({email}).\nHow many I would like: \n\nThanks!', { email: who || '…' });
+  return `mailto:${supportEmail()}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+async function copySupportEmail() {
+  try { await navigator.clipboard.writeText(supportEmail()); toast(t('Address copied')); }
+  catch { toast(supportEmail(), 3000); }
+}
 function PaywallSheet() {
-  const plans = S.products.filter(p => p.productType === 'subscription');
-  const mini = S.products.find(p => p.internalKey === 'mini_pack');
-  const sel = plans.find(p => p.internalKey === S.payPlan) || plans[0];
-  const price = (m) => `$${(m / 100).toFixed(2)}`;
-  const buy = async (key) => {
-    const product = S.products.find(p => p.internalKey === key);
-    try {
-      // Native store purchase → server-side receipt verification (the only
-      // path that grants entitlements in production).
-      let payload = null;
-      const native = await nativePurchase(product).catch(e => { throw e; });
-      if (native) {
-        payload = { ...native, productKey: key };
-      } else if (S.authConfig?.billing?.mock) {
-        payload = { platform: 'web', productKey: key, transactionId: `web_${crypto.randomUUID()}` }; // dev only
-      } else {
-        toast('请在手机 App 内完成购买'); return;
-      }
-      const res = await post('/v1/purchases/verify', payload);
-      S.ent = res.entitlements; S.paywall = null;
-      render(); renderOverlay();
-      toast(key === 'mini_pack' ? 'Mini Pack added — 8 images' : 'Welcome to Creator');
-      track('purchase_completed', { productId: key });
-    } catch (e) {
-      if (e.userMessage) toast(e.userMessage);
-      else if (e.code === 'PROVIDER_NOT_CONFIGURED') toast('商店购买尚未开通，敬请期待');
-      else if (e.code === 'PURCHASE_INVALID') toast('购买校验未通过，如已扣款请联系客服');
-      else toast('Purchase failed — you were not charged');
-    }
-  };
-  return h('div', { class: 'sheet-backdrop', onClick: () => { S.paywall = null; renderOverlay(); } },
+  const ctx = S.paywall.context;
+  const close = () => { S.paywall = null; renderOverlay(); };
+  const guest = !signedIn();
+  const premium = ctx === 'premium';
+  const n = freeUnits();
+
+  let title, body;
+  if (guest && freeNeedsAuth()) {
+    title = t('Register to get {n} free artworks', { n });
+    body = t('Sign up with your email — no password, no card. {n} complete artworks are on us. If you already have an account, the same steps sign you in.', { n });
+  } else if (premium) {
+    title = t('Premium direction');
+    body = t('Premium directions come with Creator. Pick the plan below and email us — we enable it on your account, usually within a day.');
+  } else if ((S.ent?.availableUnits || 0) > 0) {
+    title = t('Your artworks');
+    body = t('You have {n} left. Packs below add more; email us to buy and we credit your account, usually within a day.', { n: S.ent.availableUnits });
+  } else {
+    title = t('Your free artworks are used up');
+    body = t('You have used the {n} free artworks that come with your account. Pick a pack below and email us — we credit your account by hand, usually within a day.', { n });
+  }
+
+  const contactCard = h('div', { class: 'contact-card', style: { marginTop: '4px' } },
+    h('div', { class: 'kicker', style: { paddingBottom: '6px' } }, t('Email us')),
+    h('div', { class: 'email' }, supportEmail()),
+    userEmail() && h('div', { style: { font: '400 11.5px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '6px' } }, t('Mention the address you registered with: {email}', { email: userEmail() })),
+    h('div', { style: { display: 'flex', gap: '10px', paddingTop: '12px' } },
+      h('a', { class: 'btn', style: { flex: 1, height: '46px', fontSize: '14px', textDecoration: 'none' }, href: supportMailto(premium ? 'premium' : 'more') }, svg(icons.mail), t('Write to us')),
+      h('button', { class: 'btn secondary small', style: { flex: 'none', width: 'auto', padding: '0 14px', height: '46px' }, onClick: copySupportEmail }, t('Copy address'))),
+  );
+
+  return h('div', { class: 'sheet-backdrop', onClick: close },
     h('div', { class: 'sheet', onClick: (e) => e.stopPropagation() },
       h('div', { class: 'sheet-grab' }),
       h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', paddingBottom: '8px' } },
         h('div', { style: { width: '44px', height: '55px', borderRadius: '8px', flex: 'none', background: artBg(S.draft.style) || 'linear-gradient(135deg,#1C49D8,#0A1C52)', backgroundSize: 'cover' } }),
-        h('div', { style: { flex: 1, font: '600 19px var(--serif)' } }, 'Keep creating in this exhibition'),
-        h('button', { class: 'iconbtn', style: { width: '30px', height: '30px', background: 'var(--canvas)', color: 'var(--ink-muted)', fontSize: '13px' }, onClick: () => { S.paywall = null; renderOverlay(); } }, '✕')),
-      h('div', { style: { font: '400 13px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingBottom: '16px' } }, 'More directions, higher resolution, and priority creation.'),
-      h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
-        plans.map(p => h('div', {
-          class: 'plan-row' + (S.payPlan === p.internalKey ? ' selected' : ''),
-          onClick: () => { S.payPlan = p.internalKey; renderOverlay(); },
-        },
-          h('div', { class: 'radio' }),
-          h('div', { style: { flex: 1 } },
-            h('div', { style: { font: '600 14px var(--sans)' } }, p.displayName),
-            h('div', { style: { font: '400 11.5px var(--sans)', color: 'var(--ink-muted)' } }, `${p.grantedUnits} units / ${p.period} · all directions`)),
-          p.period === 'year' && h('span', { style: { font: '600 10px var(--sans)', color: 'var(--success)', background: 'var(--success-soft)', borderRadius: '999px', padding: '3px 8px' } }, 'SAVE 42%'),
-          h('div', { style: { font: '600 14px var(--sans)' } }, price(p.priceMinor))))),
-      h('button', { class: 'btn', style: { marginTop: '14px', height: '50px', fontSize: '15px' }, onClick: () => buy(sel.internalKey) },
-        `Continue — ${price(sel.priceMinor)} / ${sel.period}`),
-      mini && h('button', { class: 'linkbtn', style: { width: '100%', textAlign: 'center', paddingTop: '14px', color: 'var(--ink)', fontSize: '12.5px' }, onClick: () => buy('mini_pack') },
-        `Not ready? Mini Pack — 8 images for ${price(mini.priceMinor)}`),
-      S.authConfig?.freeRequiresAuth && localStorage.getItem('mf.signedIn') !== '1' && S.authConfig?.google?.enabled &&
-        h('button', { class: 'linkbtn', style: { width: '100%', textAlign: 'center', paddingTop: '12px', fontSize: '12.5px' }, onClick: () => signIn('google') },
-          '登录即可领取免费生成额度'),
-      h('button', { class: 'linkbtn', style: { width: '100%', textAlign: 'center', paddingTop: '10px', fontWeight: 500, fontSize: '12px' }, onClick: async () => { await refreshEnt(); render(); toast(S.ent.plan === 'free' ? 'No previous purchases found' : 'Purchases restored'); } }, 'Restore purchases'),
-      h('div', { style: { textAlign: 'center', font: '400 10px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '12px' } }, 'Demo checkout — no real charge. Auto-renews until cancelled. Terms · Privacy'),
+        h('div', { style: { flex: 1, font: '600 19px/1.25 var(--serif)' } }, title),
+        h('button', { class: 'iconbtn', style: { width: '30px', height: '30px', background: 'var(--canvas)', color: 'var(--ink-muted)', fontSize: '13px' }, onClick: close, 'aria-label': t('Close') }, '✕')),
+      h('div', { style: { font: '400 13px/1.55 var(--sans)', color: 'var(--ink-muted)', paddingBottom: '16px' } }, body),
+      guest && freeNeedsAuth()
+        ? [
+          h('button', { class: 'btn', onClick: () => openAuth(S.screen) }, t('Register with email')),
+          h('div', { style: { textAlign: 'center', font: '400 11.5px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '12px' } },
+            t('Questions? '), h('a', { class: 'linkbtn', style: { textDecoration: 'none', fontWeight: 500 }, href: `mailto:${supportEmail()}` }, supportEmail())),
+        ]
+        : [
+          Catalogue(premium),
+          contactCard,
+          nativeBilling() && StorePlans(close),
+          h('div', { style: { textAlign: 'center', font: '400 10.5px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '14px' } },
+            t('Failed or rejected generations never use an artwork.')),
+        ],
     ),
+  );
+}
+
+// Price list (email-to-buy). Packs first, then the Creator plan; the Premium
+// context leads with Creator since packs alone do not unlock those directions.
+function Catalogue(premiumFirst) {
+  let items = offeredProducts();
+  if (!items.length) return null;
+  const packs = items.filter(p => p.productType === 'pack').sort((a, b) => a.grantedUnits - b.grantedUnits);
+  const subs = items.filter(p => p.productType === 'subscription');
+  items = premiumFirst ? [...subs, ...packs] : [...packs, ...subs];
+  return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', paddingBottom: '14px' } },
+    items.map(p => {
+      const sub = p.productType === 'subscription';
+      return h('a', { class: 'plan-row' + (sub ? ' selected' : ''), href: supportMailto('buy', p), style: { textDecoration: 'none', color: 'inherit' } },
+        h('div', { style: { flex: 1, minWidth: 0 } },
+          h('div', { style: { font: '600 14px var(--sans)' } }, productName(p), sub && h('span', { style: { font: '600 9.5px var(--sans)', letterSpacing: '.5px', color: 'var(--cobalt)', marginLeft: '8px' } }, t('PREMIUM + HIGH-RES'))),
+          h('div', { style: { font: '400 11.5px var(--sans)', color: 'var(--ink-muted)' } },
+            sub ? t('{n} artworks every {period} · all directions · high tier', { n: p.grantedUnits, period: t('period.' + p.period) })
+              : t('{n} artworks · {each} each · never expire', { n: p.grantedUnits, each: perImage(p) }))),
+        h('div', { style: { textAlign: 'right', flex: 'none' } },
+          h('div', { style: { font: '600 15px var(--sans)' } }, productPrice(p), sub && h('span', { style: { font: '400 11px var(--sans)', color: 'var(--ink-muted)' } }, ' / ' + t('period.' + p.period))),
+          h('div', { style: { font: '600 11px var(--sans)', color: 'var(--cobalt)' } }, t('Email to buy'))));
+    }));
+}
+
+// Store purchases (Android/iOS only, and only once billing is configured
+// server-side). Prices come from the server catalogue; the web never shows them.
+function StorePlans(close) {
+  const plans = S.products.filter(p => p.productType === 'subscription');
+  const mini = S.products.filter(p => p.productType === 'pack').sort((a, b) => a.grantedUnits - b.grantedUnits)[0];
+  const sel = plans.find(p => p.internalKey === S.payPlan) || plans[0];
+  const price = (m, cur, p) => (p && productPrice(p)) || `${cur === 'CNY' ? '¥' : '$'}${(m / 100).toFixed(2)}`;
+  const buy = async (key) => {
+    const product = S.products.find(p => p.internalKey === key);
+    try {
+      const native = await nativePurchase(product);
+      if (!native) { toast(t('Store purchases are only available in the app')); return; }
+      const res = await post('/v1/purchases/verify', { ...native, productKey: key });
+      S.ent = res.entitlements; close();
+      render();
+      toast(product.productType === 'pack' ? t('Pack added — {n} artworks', { n: product.grantedUnits }) : t('Welcome to Creator'));
+      track('purchase_completed', { productId: key });
+    } catch (e) {
+      if (e.userMessage) toast(e.userMessage);
+      else if (e.code === 'PROVIDER_NOT_CONFIGURED') toast(t('Store purchases are not open yet'));
+      else if (e.code === 'PURCHASE_INVALID') toast(t('Purchase could not be verified — contact us if you were charged'));
+      else toast(t('Purchase failed — you were not charged'));
+    }
+  };
+  if (!plans.length && !mini) return null;
+  return h('div', { style: { paddingTop: '18px' } },
+    h('div', { class: 'kicker', style: { paddingBottom: '10px' } }, t('Or buy in the store')),
+    h('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } },
+      plans.map(p => h('div', {
+        class: 'plan-row' + (S.payPlan === p.internalKey ? ' selected' : ''),
+        onClick: () => { S.payPlan = p.internalKey; renderOverlay(); },
+      },
+        h('div', { class: 'radio' }),
+        h('div', { style: { flex: 1 } },
+          h('div', { style: { font: '600 14px var(--sans)' } }, productName(p)),
+          h('div', { style: { font: '400 11.5px var(--sans)', color: 'var(--ink-muted)' } }, t('{n} artworks / {period} · all directions', { n: p.grantedUnits, period: t('period.' + p.period) }))),
+        h('div', { style: { font: '600 14px var(--sans)' } }, price(p.priceMinor, p.currency, p))))),
+    sel && h('button', { class: 'btn', style: { marginTop: '14px', height: '50px', fontSize: '15px' }, onClick: () => buy(sel.internalKey) },
+      t('Continue — {price} / {period}', { price: price(sel.priceMinor, sel.currency, sel), period: t('period.' + sel.period) })),
+    mini && h('button', { class: 'linkbtn', style: { width: '100%', textAlign: 'center', paddingTop: '14px', color: 'var(--ink)', fontSize: '12.5px' }, onClick: () => buy(mini.internalKey) },
+      t('Not ready? {name} — {n} artworks for {price}', { name: productName(mini), n: mini.grantedUnits, price: price(mini.priceMinor, mini.currency, mini) })),
+    h('button', { class: 'linkbtn', style: { width: '100%', textAlign: 'center', paddingTop: '10px', fontWeight: 500, fontSize: '12px' }, onClick: async () => { await refreshEnt(); render(); toast(S.ent.plan === 'free' ? t('No previous purchases found') : t('Purchases restored')); } }, t('Restore purchases')),
   );
 }
 
@@ -901,45 +1251,46 @@ function StyleDetailSheet() {
         h('div', { style: { flex: 1 } },
           h('div', { style: { font: '600 22px var(--serif)' } }, c.name),
           h('div', { style: { font: '400 13px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '4px' } }, c.shortCaption),
-          h('div', { class: 'card-tags', style: { paddingTop: '8px' } }, 'Works best with — ' + c.suitabilityTags.join(' · ')),
+          h('div', { class: 'card-tags', style: { paddingTop: '8px' } }, t('Works best with — ') + c.suitabilityTags.map(tagLabel).join(' · ')),
           c.premium && h('div', { style: { paddingTop: '8px' } }, h('span', { style: { font: '600 9px var(--sans)', letterSpacing: '.6px', background: 'var(--canvas)', border: '1px solid var(--line)', borderRadius: '999px', padding: '3px 7px' } }, 'PREMIUM')))),
       h('div', { style: { font: '400 12.5px/1.6 var(--sans)', color: 'var(--ink-muted)', padding: '14px 0' } },
-        'An original MuseFrame direction. Identity, pose and key objects are preserved; light, color and texture follow the direction. May change: background detail, fine texture.'),
+        t('An original MuseFrame direction. Identity, pose and key objects are preserved; light, color and texture follow the direction. May change: background detail, fine texture.')),
       locked && h('div', { style: { font: '500 11.5px/1.5 var(--sans)', color: 'var(--warning)', background: 'var(--warning-soft)', borderRadius: '10px', padding: '9px 12px', marginBottom: '12px' } },
-        'Premium direction — included with Creator.'),
+        t('Premium direction — opened on request.')),
       h('button', {
         class: 'btn', onClick: () => {
           S.draft.style = c; S.detail = null; renderOverlay();
           S.draft.assetId ? go('configure') : startImport(S.screen);
         },
-      }, 'Use this direction'),
+      }, t('Use this direction')),
     ),
   );
 }
 
-const INFO = {
-  privacy: ['Privacy & data', 'Your photos are used only to create the results you request. Uploads are re-encoded on your device, which removes location and camera metadata. Source photos are kept for 30 days by default; results stay until you delete them. Deleting a project removes its images from storage.'],
-  about: ['About our styles', 'All 24 directions are original MuseFrame StyleSpecs, organized in six curated exhibitions. Each is a versioned, tested product asset built from public-domain visual principles — no third-party prompt packs, no living artists’ names. Published versions are immutable: your old works always re-render the version they used.'],
-  delete: ['Delete account', 'In the shipping product this starts an asynchronous deletion workflow: sign-in is revoked, images enter a purge queue, and legally required payment records are separated and de-identified. In this demo you can clear this device’s session from your browser storage.'],
+const INFO = () => ({
+  privacy: [t('Privacy & data'), t('Your photos are used only to create the results you request. Uploads are re-encoded on your device, which removes location and camera metadata. Source photos are kept for 30 days by default; results stay until you delete them. Deleting a project removes its images from storage.')],
+  about: [t('About our styles'), t('All directions are original MuseFrame StyleSpecs, organized in curated exhibitions. Each is a versioned, tested product asset built from public-domain visual principles — no third-party prompt packs, no living artists’ names. Published versions are immutable: your old works always re-render the version they used.')],
+  delete: [t('Delete account'), t('To delete your account and its images, email us from the address you registered with. Sign-in is revoked, images enter a purge queue, and legally required payment records are separated and de-identified. To only clear this device, sign out.')],
   purchases: null, // rendered dynamically
-};
+});
 function openInfo(key) { S.infoSheet = key; renderOverlay(); }
 function InfoSheet() {
   const key = S.infoSheet;
   let title, body;
   if (key === 'purchases') {
-    title = 'Purchase history';
+    title = t('Purchase history');
     body = S.purchases.length
       ? h('div', null, S.purchases.map(p => h('div', { style: { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid rgba(217,213,204,.5)', font: '400 13px var(--sans)' } },
-        h('span', null, p.product), h('span', { style: { color: 'var(--ink-muted)' } }, `$${(p.amountMinor / 100).toFixed(2)} · ${new Date(p.purchasedAt).toLocaleDateString()}`))))
-      : 'No purchases yet.';
-  } else [title, body] = INFO[key];
+        h('span', null, p.product), h('span', { style: { color: 'var(--ink-muted)' } }, `$${(p.amountMinor / 100).toFixed(2)} · ${fmtDate(p.purchasedAt, undefined)}`))))
+      : t('No purchases yet. Artworks added by our team after you email us are shown in your balance, not here.');
+  } else [title, body] = INFO()[key];
   return h('div', { class: 'sheet-backdrop', onClick: () => { S.infoSheet = null; renderOverlay(); } },
     h('div', { class: 'sheet', onClick: (e) => e.stopPropagation() },
       h('div', { class: 'sheet-grab' }),
       h('div', { style: { font: '600 20px var(--serif)', paddingBottom: '10px' } }, title),
       h('div', { style: { font: '400 13px/1.65 var(--sans)', color: 'var(--ink-muted)' } }, body),
-      h('button', { class: 'btn secondary', style: { marginTop: '18px' }, onClick: () => { S.infoSheet = null; renderOverlay(); } }, 'Close'),
+      key === 'delete' && h('a', { class: 'btn secondary', style: { marginTop: '14px', textDecoration: 'none' }, href: `mailto:${supportEmail()}?subject=${encodeURIComponent(t('MuseFrame — delete my account ({email})', { email: userEmail() || '' }))}` }, t('Email us to delete')),
+      h('button', { class: 'btn secondary', style: { marginTop: '18px' }, onClick: () => { S.infoSheet = null; renderOverlay(); } }, t('Close')),
     ),
   );
 }
@@ -956,18 +1307,21 @@ const SCREENS = {
   result: ResultScreen,
   projects: ProjectsScreen,
   profile: ProfileScreen,
+  auth: AuthScreen,
 };
 
 function render() {
+  document.documentElement.lang = getLang() === 'zh' ? 'zh-CN' : 'en';
+  document.title = getLang() === 'zh' ? 'MuseFrame — 策展式 AI 艺术照' : 'MuseFrame — Curated image making';
   app.replaceChildren(SCREENS[S.screen]?.() || DiscoverScreen());
   renderOverlay();
 }
 function renderOverlay() {
   const parts = [];
-  if (S.analyzing) parts.push(h('div', { style: { position: 'absolute', inset: 0, background: 'rgba(247,245,239,.92)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '14px', backdropFilter: 'blur(6px)', zIndex: 70 } },
+  if (S.analyzing) parts.push(h('div', { style: { position: isWeb() ? 'fixed' : 'absolute', inset: 0, background: 'rgba(247,245,239,.92)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '14px', backdropFilter: 'blur(6px)', zIndex: 70 } },
     h('div', { class: 'spinner' }),
-    h('div', { style: { font: '600 20px var(--serif)' } }, 'Reading the image'),
-    h('div', { style: { font: '400 12.5px var(--sans)', color: 'var(--ink-muted)' } }, 'Subject, light and composition — a moment.')));
+    h('div', { style: { font: '600 20px var(--serif)' } }, t('Reading the image')),
+    h('div', { style: { font: '400 12.5px var(--sans)', color: 'var(--ink-muted)' } }, t('Subject, light and composition — a moment.'))));
   if (S.detail) parts.push(StyleDetailSheet());
   if (S.infoSheet) parts.push(InfoSheet());
   if (S.paywall) parts.push(PaywallSheet());
@@ -975,79 +1329,45 @@ function renderOverlay() {
   overlayRoot.replaceChildren(...parts);
 }
 
+// ---------- deep links (?exhibition=slug, ?plan=…, ?auth=1) ----------
+function applyDeepLinks() {
+  const slug = params.get('exhibition');
+  if (slug && allShelves().some(s => s.slug === slug)) {
+    S.exhibition = slug;
+    if (S.screen === 'onboarding') localStorage.setItem('mf.onboarded', '1');
+    S.screen = 'exhibition';
+    track('exhibition_opened', { slug, source: 'link' });
+  }
+  if (params.get('plan')) {
+    if (S.screen === 'onboarding') S.screen = 'discover';
+    S.paywall = { context: 'link:' + params.get('plan') };
+  }
+  if (params.get('auth') === '1' && !signedIn()) {
+    if (S.screen === 'onboarding') S.screen = 'discover';
+    S.authReturn = S.screen; S.screen = 'auth';
+  }
+}
+
 // ---------- boot ----------
 async function bootApp() {
   S.bootError = false;
   render(); // paint loader immediately
   try {
-    await ensureSession(await deviceId());
-    await loadCore();
+    const session = await ensureSession(await deviceId());
+    if (session === 'guest' && signedIn()) {
+      // The stored token expired and a guest session replaced it — the local
+      // "signed in" flag would otherwise promise a balance that is not there.
+      localStorage.removeItem('mf.signedIn'); localStorage.removeItem('mf.userName'); localStorage.removeItem('mf.userEmail');
+    }
     S.authConfig = await getAuthConfig();
-    track('discover_viewed', {});
+    await loadCore();
+    applyDeepLinks();
+    track('discover_viewed', { layout: S.layout, lang: getLang() });
   } catch (e) {
     S.bootError = true;
   }
   S.booted = true;
   render();
 }
+initLang(params.get('lang'));
 bootApp();
-
-// ---------- sign-in ----------
-function afterSignIn(res) {
-  setToken(res.accessToken);
-  S.user = res.user;
-  localStorage.setItem('mf.userName', res.user.displayName || res.user.email || '');
-  localStorage.setItem('mf.signedIn', '1');
-}
-async function signIn(provider) {
-  try {
-    const res = await nativeSignIn(provider);
-    afterSignIn(res);
-    await refreshEnt();
-    await loadProfile();
-    toast(`欢迎，${res.user.displayName || '创作者'}`);
-    render(); renderOverlay();
-  } catch (e) {
-    toast(e.userMessage || '登录失败，请重试');
-  }
-}
-
-// Email verification-code login (inline in Profile).
-function EmailLoginBox() {
-  const st = S.emailLogin || (S.emailLogin = { stage: 'email', email: '', busy: false });
-  const input = (ph, val, oninput, extra) => h('input', {
-    type: extra?.type || 'text', inputmode: extra?.inputmode, placeholder: ph, value: val,
-    style: { width: '100%', padding: '11px 12px', border: '1px solid var(--line)', borderRadius: '10px', font: '15px var(--sans)', background: 'var(--surface)', marginBottom: '8px' },
-    onInput: (e) => oninput(e.target.value),
-  });
-  const wrap = (...kids) => h('div', { style: { paddingTop: '14px' } }, kids);
-  if (st.stage === 'email') {
-    return wrap(
-      input('输入邮箱登录', st.email, (v) => { st.email = v; }, { type: 'email', inputmode: 'email' }),
-      h('button', { class: 'btn', disabled: st.busy, onClick: async () => {
-        const email = st.email.trim();
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast('请输入有效的邮箱地址'); return; }
-        st.busy = true; render();
-        try { await emailRequestCode(email); st.stage = 'code'; st.code = ''; toast('验证码已发送到邮箱'); }
-        catch (e) { toast(e.code === 'PROVIDER_NOT_CONFIGURED' ? '邮箱登录暂未开通' : '发送失败，请稍后重试'); }
-        finally { st.busy = false; render(); }
-      } }, st.busy ? '发送中…' : '获取验证码'),
-    );
-  }
-  return wrap(
-    h('div', { style: { font: '400 12px var(--sans)', color: 'var(--ink-muted)', paddingBottom: '6px' } }, `验证码已发送至 ${st.email}`),
-    input('6 位验证码', st.code || '', (v) => { st.code = v; }, { inputmode: 'numeric' }),
-    h('button', { class: 'btn', disabled: st.busy, onClick: async () => {
-      st.busy = true; render();
-      try {
-        const res = await emailVerifyCode(st.email.trim(), (st.code || '').trim());
-        afterSignIn(res); S.emailLogin = null;
-        await refreshEnt(); await loadProfile();
-        toast('登录成功'); render(); renderOverlay();
-      } catch (e) {
-        toast(e.message || '验证码不正确'); st.busy = false; render();
-      }
-    } }, st.busy ? '验证中…' : '登录'),
-    h('button', { class: 'linkbtn', style: { width: '100%', textAlign: 'center', paddingTop: '10px' }, onClick: () => { S.emailLogin = { stage: 'email', email: st.email, busy: false }; render(); } }, '换个邮箱'),
-  );
-}

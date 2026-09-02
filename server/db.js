@@ -186,7 +186,7 @@ CREATE TABLE IF NOT EXISTS purchases (
 CREATE TABLE IF NOT EXISTS credit_buckets (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id),
-  source_type TEXT NOT NULL,        -- free_grant | purchase | promo
+  source_type TEXT NOT NULL,        -- free_grant | purchase | promo | manual
   source_id TEXT,
   granted_units INTEGER NOT NULL CHECK (granted_units > 0),
   expires_at TEXT,
@@ -241,6 +241,8 @@ function ensureColumn(table, col, ddl) {
 }
 ensureColumn('products', 'google_product_id', 'google_product_id TEXT');
 ensureColumn('products', 'apple_product_id', 'apple_product_id TEXT');
+// 中文站/中文用户看人民币价，英文看美元价：两套价格分别定，不做汇率换算（2026-09）。
+ensureColumn('products', 'price_cny_minor', 'price_cny_minor INTEGER');
 // auth_identities.email_normalized is written on Google/Apple sign-in but was
 // missing from the original CREATE — without this a real sign-in throws.
 ensureColumn('auth_identities', 'email_normalized', 'email_normalized TEXT');
@@ -275,6 +277,17 @@ db.exec(`CREATE TABLE IF NOT EXISTS free_grants (
   created_at TEXT NOT NULL
 )`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_free_grants_ip ON free_grants (ip_hash, created_at)');
+// 管理员手动加额度的审计记录（2026-09 收费模型：用完 → 邮件联系 → 后台充值）。
+// 真正的余额仍只在 credit_buckets / credit_ledger（source_type='manual'）；这里只多存备注。
+db.exec(`CREATE TABLE IF NOT EXISTS manual_grants (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  units INTEGER NOT NULL,
+  note TEXT,
+  expires_at TEXT,
+  created_at TEXT NOT NULL
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_manual_grants_user ON manual_grants (user_id, created_at)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_free_grants_at ON free_grants (created_at)');
 
 // Hot-path indexes. Every one of these covered a query that was a full table

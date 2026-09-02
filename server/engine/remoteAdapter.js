@@ -24,6 +24,17 @@ export const remoteConfig = {
   get baseUrl() { return (cfg('image_provider_base_url') || '').replace(/\/$/, ''); },
   get apiKey() { return cfg('image_provider_api_key') || ''; },
   get model() { return cfg('image_provider_model') || 'gpt-image-2'; },
+  /** Model for a quality tier: the high tier may point at a different model. */
+  modelFor(tier) {
+    if (tier === 'high') return (cfg('image_provider_model_high') || '').trim() || this.model;
+    return this.model;
+  },
+  /** images/edits `quality` for a tier; anything unexpected falls back to medium/high. */
+  qualityFor(tier) {
+    const allowed = ['low', 'medium', 'high', 'auto'];
+    const raw = String(cfg(tier === 'high' ? 'image_quality_high' : 'image_quality_standard') || '').trim().toLowerCase();
+    return allowed.includes(raw) ? raw : (tier === 'high' ? 'high' : 'medium');
+  },
   // Node's fetch (undici) enforces its own 300 s headersTimeout, and nothing
   // here can raise it without adding undici as a dependency. A configured 420 s
   // was therefore fiction: the socket died at 300 s while the provider kept
@@ -98,11 +109,16 @@ export async function createEdit({ sourceJpeg, sourceW, sourceH, spec, controls,
   const instruction = precompiled || buildInstruction(spec, controls, subjectType);
   if (!instruction) { const e = new Error('StyleSpec has no promptAssembly'); e.code = 'STYLE_UNAVAILABLE'; throw e; }
 
+  const tier = output?.qualityTier === 'high' ? 'high' : 'standard';
   const form = new FormData();
-  form.append('model', remoteConfig.model);
+  form.append('model', remoteConfig.modelFor(tier));
   form.append('image', new Blob([sourceJpeg], { type: 'image/jpeg' }), 'source.jpg');
   form.append('prompt', instruction);
   form.append('size', pickSize(output?.aspectRatio, sourceW, sourceH));
+  // Quality tier → provider `quality`. Was never sent, i.e. the provider's
+  // default (high) for everyone; now free/pack users get the standard tier and
+  // Creator gets the high tier, both admin-configurable.
+  form.append('quality', remoteConfig.qualityFor(tier));
 
   let res;
   try {

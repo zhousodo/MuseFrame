@@ -170,12 +170,16 @@ const server = http.createServer(async (req, res) => {
     p = path.normalize(p).replace(/^([.][.][/\\])+/, '');
     const file = path.join(WEB, p);
     if (file.startsWith(WEB) && existsSync(file) && statSync(file).isFile()) {
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+      const ext = path.extname(file);
+      // HTML/JS/CSS must revalidate every load — a cached app.css without the
+      // html.web rules is exactly how the desktop site came up in the phone frame.
+      const cache = ['.html', '.js', '.css'].includes(ext) ? 'no-cache' : 'public, max-age=86400';
+      res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': cache });
       res.end(readFileSync(file));
       return;
     }
     // SPA fallback
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
     res.end(readFileSync(path.join(WEB, 'index.html')));
   } catch (e) {
     const status = e instanceof ApiError ? e.status : 500;

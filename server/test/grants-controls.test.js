@@ -20,6 +20,9 @@ const { maybeGrantFree, coerceControls } = await import('../api.js');
 const { setCfg } = await import('../configStore.js');
 
 setCfg('free_units', 1);
+// 2026-09 默认改为「注册后才发免费额度」；这组测试专门验证游客防白嫖的去重逻辑，
+// 所以显式打开游客发放。默认值本身由下面的 'free_requires_auth' 用例覆盖。
+setCfg('free_requires_auth', false);
 setCfg('free_grants_per_ip_day', 100);
 setCfg('free_grants_per_day', 1000);
 
@@ -97,6 +100,23 @@ describe('maybeGrantFree — one free image per person (F05/F13)', () => {
     }
     assert.equal(granted, 2, 'the third and later attempts must be refused');
     setCfg('free_grants_per_ip_day', 100);
+  });
+
+  test('free_requires_auth keeps guests at zero and still pays out on sign-up', () => {
+    setCfg('free_requires_auth', true);
+    setCfg('free_units', 3);
+    const guest = mkUser(true);
+    assert.equal(maybeGrantFree(guest, true, 'device-AUTH', '10.0.0.9'), 'REQUIRES_AUTH');
+    assert.equal(availableUnits(guest), 0);
+    const member = mkUser(false);
+    assert.equal(maybeGrantFree(member, false, 'device-AUTH', '10.0.0.9'), 'GRANTED');
+    assert.equal(availableUnits(member), 3);
+    // The guest's device hash was recorded by the member's grant, so the same
+    // phone cannot come back as a guest (if the switch is flipped) and re-claim.
+    setCfg('free_requires_auth', false);
+    const again = mkUser(true);
+    assert.equal(maybeGrantFree(again, true, 'device-AUTH', '10.0.0.9'), 'ALREADY_CLAIMED');
+    setCfg('free_units', 1);
   });
 
   test('free_units = 0 stops issuance entirely', () => {

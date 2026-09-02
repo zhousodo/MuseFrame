@@ -18,9 +18,11 @@ CREATE TABLE IF NOT EXISTS app_config (
 // live (cfg() at call time / getters), so a DB override takes effect on the
 // next request. It's kept in the schema for settings that may need it later.
 const REGISTRY = {
-  free_units: { type: 'number', envVar: 'FREE_UNITS', default: 1, description: '新用户免费生成张数' },
-  allow_guest: { type: 'boolean', envVar: 'ALLOW_GUEST', default: true, description: '允许游客使用' },
-  free_requires_auth: { type: 'boolean', envVar: 'FREE_REQUIRES_AUTH', default: false, description: '免费额度需登录后发放' },
+  // 2026-09 收费模型：邮箱注册后送 3 张；用完提示联系客服邮箱，由管理员在后台手动加额度。
+  free_units: { type: 'number', envVar: 'FREE_UNITS', default: 3, description: '注册用户免费生成张数' },
+  allow_guest: { type: 'boolean', envVar: 'ALLOW_GUEST', default: true, description: '允许游客浏览（游客不发免费额度时仍可看画廊）' },
+  free_requires_auth: { type: 'boolean', envVar: 'FREE_REQUIRES_AUTH', default: true, description: '免费额度需登录（邮箱注册）后发放' },
+  support_email: { type: 'string', envVar: 'SUPPORT_EMAIL', default: 'donaldkuke@gmail.com', description: '客服 / 加购联系邮箱（额度用完时展示给用户）' },
   // 反白嫖：游客可无凭据换令牌，若不设上限就能循环建号无限领免费额度。
   // 两道闸都按滚动 24 小时统计；设为 0 = 完全停发免费额度。
   free_grants_per_ip_day: { type: 'number', envVar: 'FREE_GRANTS_PER_IP_DAY', default: 3, description: '每个 IP 每 24 小时最多发放几次免费额度（0=停发）' },
@@ -29,6 +31,11 @@ const REGISTRY = {
   image_provider_api_key: { type: 'string', envVar: 'IMAGE_PROVIDER_API_KEY', default: '', description: '图像模型 API 密钥', secret: true },
   image_provider_model: { type: 'string', envVar: 'IMAGE_PROVIDER_MODEL', default: 'gpt-image-2', description: '图像模型名称' },
   prompt_compiler_model: { type: 'string', envVar: 'PROMPT_COMPILER_MODEL', default: 'gpt-5.4-mini', description: '提示词编译模型' },
+  // 模型档位（2026-09）：standard 档给免费与点数包用户，high 档给 Creator（highResolution 权益）。
+  // 值是 OpenAI images/edits 的 quality 参数：low / medium / high / auto。成本差约 4 倍。
+  image_quality_standard: { type: 'string', envVar: 'IMAGE_QUALITY_STANDARD', default: 'medium', description: '标准档输出质量（low/medium/high/auto）' },
+  image_quality_high: { type: 'string', envVar: 'IMAGE_QUALITY_HIGH', default: 'high', description: '高清档输出质量（low/medium/high/auto）' },
+  image_provider_model_high: { type: 'string', envVar: 'IMAGE_PROVIDER_MODEL_HIGH', default: '', description: '高清档使用的模型（留空 = 与标准档相同）' },
   image_provider_timeout_ms: { type: 'number', envVar: 'IMAGE_PROVIDER_TIMEOUT_MS', default: 420000, description: '图像模型请求超时时间（毫秒）' },
   // 关闭时（默认）：远程生成失败即失败退款，绝不用本地像素引擎冒充模型结果。
   local_engine_fallback: { type: 'boolean', envVar: 'LOCAL_ENGINE_FALLBACK', default: false, description: '远程生成失败时回落本地像素引擎（默认关闭：回落产出的不是模型结果）' },
