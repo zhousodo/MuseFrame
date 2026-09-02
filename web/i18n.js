@@ -285,6 +285,7 @@ const ZH = {
   '{n} artworks are included with your account. Packs start at {price}; buy in our QQ group or by email.': '你的账号含 {n} 张免费作品。点数包 {price} 起，在 QQ 群或邮件购买。',
   'QQ group {n}': 'QQ 群 {n}',
   'Need help or more artworks? Join our QQ group {n}.': '需要帮助或更多额度？加我们的 QQ 群 {n}。',
+  'Register first — it takes one email code': '请先注册——只需一个邮箱验证码',
   // sheets
   'An original MuseFrame direction. Identity, pose and key objects are preserved; light, color and texture follow the direction. May change: background detail, fine texture.': 'MuseFrame 原创风格。保留人物身份、姿态和关键物体；光线、色彩和质感跟随风格走。可能变化的是背景细节与细微纹理。',
   'Premium direction — opened on request.': 'Premium 风格——目前需联系我们开通。',

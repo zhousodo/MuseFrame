@@ -7,7 +7,7 @@
 // top nav, centred column, wrapped grids, centred dialogs). Chinese / English
 // copy via i18n.js. Free tier = N artworks after email registration; when they
 // are used up the paywall asks the user to email support (manual top-up).
-import { ensureSession, setToken, clearToken, get, post, put, del, assetUrl, apiUrl, track } from './api.js';
+import { ensureSession, setToken, clearToken, get, post, put, del, assetUrl, apiUrl, track, token } from './api.js';
 import { deviceId, getAuthConfig, nativeSignIn, nativePurchase, isNative, platform, emailRequestCode, emailVerifyCode } from './native.js';
 import { t, getLang, setLang, initLang } from './i18n.js?v=20260902b';
 
@@ -148,9 +148,14 @@ function perImage(p) {
 }
 
 // ---------- data ----------
+// Guests may be switched off server-side (allow_guest=false → 403 on the guest
+// exchange). The gallery still has to open so people can browse and register,
+// so entitlements are only fetched when there is a session to fetch them for.
+const NO_SESSION_ENT = { plan: 'free', availableUnits: 0, freeCompletedImagesRemaining: 0, features: {} };
 async function loadCore() {
-  const [discover, ent, products] = await Promise.all([
-    get('/v1/discover'), get('/v1/entitlements/me'), get('/v1/products'),
+  const [discover, products, ent] = await Promise.all([
+    get('/v1/discover'), get('/v1/products'),
+    token ? get('/v1/entitlements/me').catch(() => NO_SESSION_ENT) : Promise.resolve(NO_SESSION_ENT),
   ]);
   S.discover = discover; S.ent = ent; S.products = products.products;
 }
@@ -160,7 +165,7 @@ function allShelves() {
 }
 function allStyles() { return allShelves().flatMap(s => s.styles); }
 function findStyle(pred) { return allStyles().find(pred); }
-async function refreshEnt() { S.ent = await get('/v1/entitlements/me'); }
+async function refreshEnt() { S.ent = token ? await get('/v1/entitlements/me') : NO_SESSION_ENT; }
 
 function unitsBadgeText() {
   if (!S.ent) return '…';
@@ -412,6 +417,7 @@ function ExhibitionScreen() {
 
 // ---------- import ----------
 function startImport(from) {
+  if (!token) { openAuth(from === 'exhibition' ? 'exhibition' : 'discover'); toast(t('Register first — it takes one email code'), 2400); return; }
   S.importFrom = from;
   go('import');
   track('photo_import_started', { source: from });
@@ -648,7 +654,7 @@ async function generate() {
   const d = S.draft;
   if (generationOffline()) { toast(t('Generating is paused right now — nothing used'), 2600); return; }
   if (!d.projectId || !d.assetId) { startImport(S.screen); return; }
-  if (!signedIn() && freeNeedsAuth() && (S.ent?.availableUnits || 0) <= 0) { openAuth('configure'); return; }
+  if (!token || (!signedIn() && freeNeedsAuth() && (S.ent?.availableUnits || 0) <= 0)) { openAuth('configure'); return; }
   try {
     track('generation_submitted', { styleId: d.style.styleId });
     const res = await post('/v1/generation-jobs', {
