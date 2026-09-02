@@ -26,6 +26,14 @@ function transport() {
         port,
         secure: port === 465, // 465 = implicit TLS; 587 = STARTTLS
         auth: { user: cfg('smtp_user'), pass: cfg('smtp_pass') },
+        // Without these, nodemailer inherits the OS TCP timeout: a black-holed
+        // SMTP host (provider outage, firewall change, wrong port) held
+        // /v1/auth/email/request open for two to ten minutes per call, with the
+        // user staring at a spinner and the request still occupying the process.
+        connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT_MS) || 10_000,
+        greetingTimeout: 10_000,
+        socketTimeout: 20_000,
+        dnsTimeout: 5_000,
       }),
     };
   }

@@ -25,7 +25,12 @@ function tokenEq(t) {
  * in production is otherwise a free-units faucet for anyone on the internet.
  */
 export function isAdminRequest(req, url) {
-  return tokenEq(req?.headers?.['x-admin-token'] || url?.searchParams?.get('admin_token'));
+  // Header only. `?admin_token=` used to be accepted as well, which put the
+  // long-lived operator credential into Caddy's access log, the browser's
+  // history and any Referer sent onward — for a token that grants the SQL
+  // console. Nothing in web/ ever sent it that way; <img src> URLs use the
+  // short-lived img_token below instead.
+  return tokenEq(req?.headers?.['x-admin-token']);
 }
 
 export function registerAdminRoutes(route, deps) {

@@ -24,7 +24,18 @@ export const remoteConfig = {
   get baseUrl() { return (cfg('image_provider_base_url') || '').replace(/\/$/, ''); },
   get apiKey() { return cfg('image_provider_api_key') || ''; },
   get model() { return cfg('image_provider_model') || 'gpt-image-2'; },
-  get timeoutMs() { return Number(cfg('image_provider_timeout_ms')) || 420000; },
+  // Node's fetch (undici) enforces its own 300 s headersTimeout, and nothing
+  // here can raise it without adding undici as a dependency. A configured 420 s
+  // was therefore fiction: the socket died at 300 s while the provider kept
+  // generating — and billing — an image nobody ever received, and the failure
+  // surfaced as an opaque PROVIDER_ERROR rather than a timeout. Clamp to what
+  // the runtime will honour so the admin panel, the "1–5 min" estimate shown to
+  // users and the code all agree. See AUDIT-2026-09-02.md for the owner
+  // decision if generations longer than ~5 minutes are ever needed.
+  get timeoutMs() {
+    const ceiling = Number(process.env.UNDICI_HEADERS_TIMEOUT_MS) || 290_000;
+    return Math.min(Number(cfg('image_provider_timeout_ms')) || 420_000, ceiling);
+  },
 };
 
 /**
@@ -103,7 +114,10 @@ export async function createEdit({ sourceJpeg, sourceW, sourceH, spec, controls,
     });
   } catch (err) {
     const e = new Error(`provider unreachable: ${err.name}`);
-    e.code = err.name === 'TimeoutError' ? 'PROVIDER_TIMEOUT' : 'PROVIDER_ERROR';
+    // undici reports its own header/body deadlines through err.cause, not as a
+    // TimeoutError — those were being misfiled as generic PROVIDER_ERROR.
+    const undiciTimeout = ['UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'].includes(err.cause?.code);
+    e.code = (err.name === 'TimeoutError' || undiciTimeout) ? 'PROVIDER_TIMEOUT' : 'PROVIDER_ERROR';
     throw e;
   }
 

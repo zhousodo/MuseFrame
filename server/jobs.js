@@ -1,9 +1,9 @@
 // Generation pipeline worker (spec §9.2). In-process queue over the DB (survives
 // restarts: queued/running jobs are re-enqueued on boot). Stages mirror §6.10:
 // preparing → building → making → checking → complete. Quality gate + one retry.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
-import { ASSET_DIR, q, q1, run, uuid, now } from './db.js';
+import { ASSET_DIR, q, q1, run, tx, uuid, now } from './db.js';
 import { commitUnits, releaseUnits } from './ledger.js';
 import { decodeJpeg, encodeJpeg, applyStyle, cropTo, resize } from './engine/styleEngine.js';
 import { remoteConfig, createEdit, generationStatus } from './engine/remoteAdapter.js';
@@ -12,21 +12,73 @@ import { cfg } from './configStore.js';
 
 const STAGE_DELAYS = { preparing: 700, building: 900, checking: 600 }; // paced so progress reads honestly
 
+// A job that crashes the process is re-queued on the next boot, which crashes
+// the process again: without a ceiling that is an infinite restart loop, and
+// against a remote provider every lap is a real, billed generation.
+const MAX_ATTEMPTS = Number(process.env.MAX_JOB_ATTEMPTS) || 3;
+
 let queue = [];
 let active = 0;
+let draining = false;
+const queuedAt = new Map(); // jobId -> ms, for the health probe
 
 export function enqueueJob(jobId) {
   queue.push(jobId);
+  queuedAt.set(jobId, Date.now());
   setImmediate(pump);
 }
 
+/** Queue snapshot for /v1/health — "is the worker actually moving". */
+export function queueDepth() {
+  let oldest = 0;
+  for (const id of queue) {
+    const at = queuedAt.get(id);
+    if (at) oldest = Math.max(oldest, Math.round((Date.now() - at) / 1000));
+  }
+  return { queued: queue.length, active, oldestQueuedAgeSec: oldest, draining };
+}
+
+/**
+ * Stop dispatching and resolve once the in-flight jobs have finished, so a
+ * container restart does not abandon a generation the user is already paying
+ * for. Called from the SIGTERM handler in index.js.
+ */
+export function drainWorker(timeoutMs = 20_000) {
+  draining = true;
+  const started = Date.now();
+  return new Promise((resolve) => {
+    const check = () => {
+      if (active === 0 || Date.now() - started > timeoutMs) return resolve({ active });
+      setTimeout(check, 200).unref?.();
+    };
+    check();
+  });
+}
+
 export function recoverJobs() {
-  const stuck = q(`SELECT id FROM generation_jobs WHERE status IN ('created','queued','running','quality_check')`);
+  // 'created' rows are jobs whose ledger reserve never landed. Re-queuing them
+  // produced a generation nobody paid for. (The API now writes the row and its
+  // reserve in one transaction, so such a row can only be an older leftover.)
+  for (const j of q(`SELECT * FROM generation_jobs WHERE status = 'created'`)) {
+    if (q1('SELECT id FROM credit_ledger WHERE job_id = ? AND entry_type = ?', j.id, 'reserve')) continue;
+    const t = now();
+    run(`UPDATE generation_jobs SET status='failed', stage='failed', error_code=?, finished_at=?, updated_at=? WHERE id=?`,
+      'INTERNAL_ERROR', t, t, j.id);
+    run(`UPDATE projects SET status='draft', updated_at=? WHERE id=?`, t, j.project_id);
+    console.warn(`[worker] job ${j.id} recovered with no reserve — failed, not run`);
+  }
+  const stuck = q(`SELECT * FROM generation_jobs WHERE status IN ('created','queued','running','quality_check')`);
   for (const j of stuck) {
+    if ((j.attempt_count || 0) >= MAX_ATTEMPTS) {
+      console.error(`[worker] job ${j.id} has ${j.attempt_count} attempts — failing instead of re-queuing (crash loop guard)`);
+      failJob(j, 'PROVIDER_ERROR');
+      continue;
+    }
     run('UPDATE generation_jobs SET status = ?, stage = ?, updated_at = ? WHERE id = ?', 'queued', 'preparing', now(), j.id);
     queue.push(j.id);
+    queuedAt.set(j.id, Date.now());
   }
-  if (stuck.length) setImmediate(pump);
+  if (queue.length) setImmediate(pump);
 }
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -35,16 +87,29 @@ function setStage(jobId, status, stage) {
   run('UPDATE generation_jobs SET status = ?, stage = ?, updated_at = ? WHERE id = ?', status, stage, now(), jobId);
 }
 
-function pump() {
+export function pump() {
+  if (draining) return;
   // Remote jobs are IO-bound waits on the provider — run several in parallel so
   // one slow generation doesn't serialize everyone behind it. Read live so an
   // admin change to worker_concurrency applies to the next dispatch, no restart.
-  const maxConcurrent = cfg('worker_concurrency');
+  // Clamped: the admin panel accepted 0, which froze the queue silently with
+  // every queued job's unit still reserved and no way back short of a restart.
+  const maxConcurrent = Math.max(1, Math.min(8, Math.floor(Number(cfg('worker_concurrency'))) || 1));
   while (active < maxConcurrent && queue.length) {
     const jobId = queue.shift();
+    queuedAt.delete(jobId);
     active++;
     processJob(jobId)
-      .catch(e => console.error(`[worker] job ${jobId} crashed:`, e.message))
+      .catch((e) => {
+        // Last line of defence. processJob has its own catch, but if even that
+        // throws the job would otherwise sit in 'running' forever with a unit
+        // reserved, and boot recovery would re-run it every restart.
+        console.error(`[worker] job ${jobId} crashed:`, e?.stack || e?.message || e);
+        try {
+          const job = q1('SELECT * FROM generation_jobs WHERE id = ?', jobId);
+          if (job && !['succeeded', 'failed', 'cancelled'].includes(job.status)) failJob(job, 'INTERNAL_ERROR');
+        } catch (e2) { console.error('[worker] could not fail job', jobId, e2.message); }
+      })
       .finally(() => { active--; pump(); });
   }
 }
@@ -61,10 +126,36 @@ function qualityGate(result, source) {
   return null;
 }
 
+/**
+ * Everything after the status check runs inside a catch that fails the job.
+ * Before, only the two adapter calls were guarded: a throw from readFileSync
+ * (deleted source), JSON.parse (bad spec), encodeJpeg (OOM) or the persist
+ * block left the row in 'running'/'quality_check' with its unit reserved, the
+ * user watching a progress screen that never moved, and boot recovery
+ * re-running the same crash forever.
+ */
 async function processJob(jobId) {
   const job = q1('SELECT * FROM generation_jobs WHERE id = ?', jobId);
   if (!job || ['succeeded', 'failed', 'cancelled'].includes(job.status)) return;
+  if ((job.attempt_count || 0) >= MAX_ATTEMPTS) {
+    console.error(`[worker] job ${jobId} refused — ${job.attempt_count} attempts already`);
+    return failJob(job, 'PROVIDER_ERROR');
+  }
+  // The reserve is the record that this generation was paid for. No reserve, no
+  // generation — otherwise a lost/rolled-back debit becomes a free image.
+  if (!q1('SELECT id FROM credit_ledger WHERE job_id = ? AND entry_type = ?', jobId, 'reserve')) {
+    console.error(`[worker] job ${jobId} has no reserve entry — refusing`);
+    return failJob(job, 'INTERNAL_ERROR');
+  }
+  try {
+    return await runJob(job, jobId);
+  } catch (e) {
+    console.error(`[worker] job ${jobId} failed unexpectedly:`, e?.stack || e?.message || e);
+    return failJob(job, 'INTERNAL_ERROR');
+  }
+}
 
+async function runJob(job, jobId) {
   // Hard gate. With no image provider configured the service must not produce
   // anything at all: the local pixel engine is a filter pass, not the model, and
   // letting it stand in made an unconfigured deployment look fully functional
@@ -170,31 +261,48 @@ async function processJob(jobId) {
 
   if (!result) return failJob(job, reason === 'PROVIDER_ERROR' ? 'PROVIDER_TIMEOUT' : (reason || 'QUALITY_GATE_FAILED'));
 
-  // Persist candidate asset + finalize billing atomically-enough for MVP.
+  // Persist candidate asset + finalize billing. The file lands first (it is the
+  // thing the DB rows point at); if any DB write then fails, the orphan file is
+  // removed and the outer catch fails the job and releases the reserve, rather
+  // than leaving a half-written project the user is charged for.
   const jpg = encodeJpeg(result, 90);
   const assetId = uuid();
   const storageKey = `${assetId}.jpg`;
-  writeFileSync(path.join(ASSET_DIR, storageKey), jpg);
+  const outPath = path.join(ASSET_DIR, storageKey);
+  writeFileSync(outPath, jpg);
   const t = now();
-  run(`INSERT INTO assets (id, user_id, project_id, kind, status, storage_key, content_type, byte_size, width, height, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-    assetId, job.user_id, job.project_id, 'candidate', 'ready', storageKey, 'image/jpeg', jpg.length, result.width, result.height, t, t);
   const candidateId = uuid();
-  run('INSERT INTO generation_candidates (id, job_id, candidate_index, asset_id, quality_passed, created_at) VALUES (?,?,?,?,1,?)',
-    candidateId, jobId, 0, assetId, t);
-  commitUnits(job.user_id, jobId);
-  // Rough cost telemetry: provider token usage (spec §13.6 wants per-job cost).
-  const costProxy = usage?.total_tokens || 0;
-  run('UPDATE generation_jobs SET status = ?, stage = ?, cost_minor = ?, error_code = NULL, finished_at = ?, updated_at = ? WHERE id = ?',
-    'succeeded', 'complete', costProxy, t, t, jobId);
+  try {
+    tx(() => {
+      run(`INSERT INTO assets (id, user_id, project_id, kind, status, storage_key, content_type, byte_size, width, height, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+        assetId, job.user_id, job.project_id, 'candidate', 'ready', storageKey, 'image/jpeg', jpg.length, result.width, result.height, t, t);
+      run('INSERT INTO generation_candidates (id, job_id, candidate_index, asset_id, quality_passed, created_at) VALUES (?,?,?,?,1,?)',
+        candidateId, jobId, 0, assetId, t);
+      commitUnits(job.user_id, jobId);
+      // Rough cost telemetry: provider token usage (spec §13.6 wants per-job cost).
+      run('UPDATE generation_jobs SET status = ?, stage = ?, cost_minor = ?, error_code = NULL, finished_at = ?, updated_at = ? WHERE id = ?',
+        'succeeded', 'complete', usage?.total_tokens || 0, t, t, jobId);
+      run('UPDATE projects SET selected_candidate_id = ?, status = ?, updated_at = ? WHERE id = ?',
+        candidateId, 'ready', t, job.project_id);
+    });
+  } catch (e) {
+    try { rmSync(outPath, { force: true }); } catch { /* best effort */ }
+    throw e;
+  }
   console.log(`[worker] job ${jobId} succeeded via ${provider} adapter`);
-  run('UPDATE projects SET selected_candidate_id = ?, status = ?, updated_at = ? WHERE id = ?',
-    candidateId, 'ready', t, job.project_id);
 }
 
 function failJob(job, code) {
-  releaseUnits(job.user_id, job.id);
-  run('UPDATE generation_jobs SET status = ?, stage = ?, error_code = ?, finished_at = ?, updated_at = ? WHERE id = ?',
-    'failed', 'failed', code, now(), now(), job.id);
-  run('UPDATE projects SET status = ?, updated_at = ? WHERE id = ?', 'draft', now(), job.project_id);
+  const t = now();
+  tx(() => {
+    releaseUnits(job.user_id, job.id);
+    run('UPDATE generation_jobs SET status = ?, stage = ?, error_code = ?, finished_at = ?, updated_at = ? WHERE id = ?',
+      'failed', 'failed', code, t, t, job.id);
+    // A failed retry must never hide an earlier successful work (spec §24): a
+    // project that already has a chosen candidate stays 'ready'.
+    const p = q1('SELECT selected_candidate_id FROM projects WHERE id = ?', job.project_id);
+    run('UPDATE projects SET status = ?, updated_at = ? WHERE id = ?',
+      p?.selected_candidate_id ? 'ready' : 'draft', t, job.project_id);
+  });
 }

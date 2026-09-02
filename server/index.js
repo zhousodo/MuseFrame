@@ -4,10 +4,11 @@ import http from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { db, q1, run, uuid, now } from './db.js';
+import { db, q1, run, uuid, now, pruneOldRows } from './db.js';
 import { seedCatalog, seedProducts } from './styles.js';
 import { routes, authenticate, ApiError } from './api.js';
-import { recoverJobs } from './jobs.js';
+import { recoverJobs, drainWorker } from './jobs.js';
+import { resolveClientIp, bodyLimitFor } from './net.js';
 
 const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const WEB = path.join(ROOT, 'web');
@@ -16,6 +17,11 @@ const PORT = process.env.PORT || 8787;
 seedCatalog({ db, uuid, now, q1, run });
 seedProducts({ q1, run, uuid });
 recoverJobs();
+// Retention: nothing else ever deleted a telemetry row or an expired session.
+try { console.log('[boot] pruned', JSON.stringify(pruneOldRows())); } catch (e) { console.error('[boot] prune failed:', e.message); }
+setInterval(() => {
+  try { pruneOldRows(); } catch (e) { console.error('[prune]', e.message); }
+}, 24 * 3600_000).unref?.();
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -23,29 +29,89 @@ const MIME = {
   '.svg': 'image/svg+xml', '.json': 'application/json', '.woff2': 'font/woff2',
 };
 
+/**
+ * Read a request body, refusing anything over `limit`.
+ *
+ * Two things went wrong before. The limit was a flat 26 MB for every route, so
+ * any unauthenticated POST could pin 26 MB of heap in a 512 MB container. And
+ * on refusal the socket was destroyed immediately — which meant the 413 was
+ * never delivered: the client saw a bare network error and the app retried the
+ * same oversized upload.
+ *
+ * So: stop BUFFERING at the limit (the memory is the thing that hurts), but
+ * keep reading and discarding for a bounded budget so the request finishes
+ * normally and the 413 can be written on a healthy connection. A caller that
+ * blows through the drain budget too is cut off — at that point it is a flood,
+ * not a client with a big photo.
+ */
 function readBody(req, limit) {
   return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
+    const drainBudget = Math.min(limit * 4, 8 * 1024 * 1024);
+    const tooLarge = () => new ApiError(413, 'ASSET_UNSUPPORTED', 'Payload too large.');
+    let chunks = [];
+    let size = 0, drained = 0, over = false, settled = false;
+    let timer = null;
+
+    const settle = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      chunks = null;
+      fn(arg);
+    };
+
+    const startDrain = () => {
+      over = true;
+      chunks = null; // release what we already buffered
+      // Never let a slow-loris flood hold the connection open indefinitely.
+      timer = setTimeout(() => { settle(reject, tooLarge()); req.destroy(); }, 5_000);
+      timer.unref?.();
+    };
+
+    // Cheapest rejection: the sender already told us how big it is. Still
+    // drained rather than cut, so the response is readable.
+    const declared = Number(req.headers['content-length']);
+    if (Number.isFinite(declared) && declared > limit) startDrain();
+
     req.on('data', (c) => {
+      if (settled) return;
+      if (over) {
+        drained += c.length;
+        if (drained > drainBudget) { settle(reject, tooLarge()); req.destroy(); }
+        return;
+      }
       size += c.length;
-      if (size > limit) { reject(new ApiError(413, 'ASSET_UNSUPPORTED', 'Payload too large.')); req.destroy(); return; }
+      if (size > limit) { startDrain(); return; }
       chunks.push(c);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
+    req.on('end', () => {
+      if (over) return settle(reject, tooLarge());
+      const buf = Buffer.concat(chunks || []);
+      settle(resolve, buf);
+    });
+    req.on('error', (e) => settle(reject, over ? tooLarge() : e));
+    req.on('aborted', () => settle(reject, over ? tooLarge() : new ApiError(400, 'VALIDATION', 'Request aborted.')));
   });
 }
 
 // Lightweight sliding-window rate limiter keyed by client IP + bucket. Blunts
 // automated abuse of account creation, generation and purchase endpoints.
 const rlHits = new Map();
+// Bounded: the key is derived from the client address, so an unbounded map was
+// itself a memory-growth lever. Oldest-inserted entries go first (Map preserves
+// insertion order), which is close enough to LRU for a sliding window.
+const RL_MAX_KEYS = Number(process.env.RATE_LIMIT_MAX_KEYS) || 50_000;
 setInterval(() => { const now = Date.now(); for (const [k, v] of rlHits) if (v.reset < now) rlHits.delete(k); }, 60_000).unref?.();
 function rateLimit(ip, bucket, limit, windowMs) {
   const key = `${bucket}:${ip}`;
   const now = Date.now();
   let e = rlHits.get(key);
-  if (!e || e.reset < now) { e = { count: 0, reset: now + windowMs }; rlHits.set(key, e); }
+  if (!e || e.reset < now) {
+    if (rlHits.size >= RL_MAX_KEYS) {
+      for (const k of rlHits.keys()) { rlHits.delete(k); if (rlHits.size < RL_MAX_KEYS * 0.9) break; }
+    }
+    e = { count: 0, reset: now + windowMs }; rlHits.set(key, e);
+  }
   e.count++;
   return e.count <= limit ? 0 : Math.ceil((e.reset - now) / 1000);
 }
@@ -56,12 +122,15 @@ const RL_RULES = [
   { re: /^\/v1\/generation-jobs$/, m: 'POST', limit: 40, windowMs: 600_000 },
   { re: /^\/v1\/purchases\/verify$/, limit: 30, windowMs: 600_000 },
   { re: /^\/v1\/assets\/upload-intents$/, limit: 60, windowMs: 600_000 },
+  // Telemetry: fire-and-forget on the client, so a generous ceiling still turns
+  // an ingest flood into 429s instead of unbounded rows in `events`.
+  { re: /^\/v1\/events$/, m: 'POST', limit: 120, windowMs: 600_000 },
 ];
 
 const server = http.createServer(async (req, res) => {
   const requestId = `req_${uuid().slice(0, 8)}`;
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const clientIp = (req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  const clientIp = resolveClientIp(req);
   // CORS: the packaged mobile app calls from a WebView origin.
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
@@ -79,7 +148,8 @@ const server = http.createServer(async (req, res) => {
         const m = url.pathname.match(r.pattern);
         if (!m) continue;
         const user = authenticate(req, url);
-        const raw = ['POST', 'PUT', 'PATCH'].includes(req.method) ? await readBody(req, 26 * 1024 * 1024) : null;
+        const raw = ['POST', 'PUT', 'PATCH'].includes(req.method)
+          ? await readBody(req, bodyLimitFor(req.method, url.pathname)) : null;
         let body = null;
         if (raw && (req.headers['content-type'] || '').includes('application/json')) {
           try { body = JSON.parse(raw.toString('utf8')); }
@@ -112,7 +182,15 @@ const server = http.createServer(async (req, res) => {
     const code = e instanceof ApiError ? e.code : 'INTERNAL_ERROR';
     if (status >= 500) console.error(`[${requestId}]`, e);
     if (!res.writableEnded) {
-      res.writeHead(status, { 'Content-Type': 'application/json' });
+      const headers = { 'Content-Type': 'application/json' };
+      // The rest of an oversized body is still in flight and we stopped reading
+      // it. Announce the close so the client does not try to reuse the
+      // connection, write the error, then drop the socket once it is out.
+      // The oversized request was drained rather than cut, so the connection is
+      // healthy and the client can read this. Close anyway: there is no point
+      // keeping a connection alive for a sender that just overran its limit.
+      if (status === 413) headers.Connection = 'close';
+      res.writeHead(status, headers);
       res.end(JSON.stringify({ error: { code, message: e.message, requestId, details: e.details } }));
     }
   }
@@ -123,5 +201,28 @@ const server = http.createServer(async (req, res) => {
 for (const [flag, what] of [['ALLOW_MOCK_PURCHASES', '演示购买'], ['ALLOW_TEST_LOGIN', '测试登录']]) {
   if (process.env[flag] === 'true') console.warn(`[boot] ⚠️ ${flag}=true（${what}）——仅限开发；生产请设为 false。当前需管理员令牌才可调用。`);
 }
+
+// Graceful shutdown. `docker compose up -d --build` sends SIGTERM and waits;
+// with no handler Node exits immediately, cutting in-flight HTTP responses, any
+// provider call the worker is waiting on (already billed by the provider, never
+// delivered), and leaving the WAL uncheckpointed.
+let shuttingDown = false;
+const GRACE_MS = Number(process.env.SHUTDOWN_GRACE_MS) || 25_000;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal} — draining`);
+  const hard = setTimeout(() => { console.error('[shutdown] grace expired — exiting'); process.exit(1); }, GRACE_MS);
+  hard.unref?.();
+  server.close();                       // stop accepting, keep serving in-flight
+  await drainWorker(GRACE_MS - 5_000);  // let running generations finish
+  try {
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    db.close();
+  } catch (e) { console.error('[shutdown] db close:', e.message); }
+  console.log('[shutdown] done');
+  process.exit(0);
+}
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { shutdown(sig); });
 
 server.listen(PORT, () => console.log(`MuseFrame running → http://localhost:${PORT}`));

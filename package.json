@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server/index.js",
     "seed": "node server/db.js --reset",
-    "test": "node --test server/test"
+    "test": "node --test \"server/test/*.test.js\""
   },
   "engines": {
     "node": ">=22.5"

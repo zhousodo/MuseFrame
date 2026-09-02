@@ -132,13 +132,23 @@ cd /opt/museframe && bash server/tools/deploy.sh
 
 ```bash
 # 备份数据（SQLite + 图片）
-sudo tar czf ~/museframe-data-$(date +%F).tgz -C /opt/museframe data
+# 注意：SQLite 开着 WAL，直接 tar 活动的 .db 可能拿到撕裂的副本，并丢掉最近
+# 还没 checkpoint 的提交。先做一致性快照，再打包快照。
+sudo docker compose exec -T api node -e "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('/app/data/museframe.db');d.exec(\"VACUUM INTO '/app/data/backup.db'\");d.close()"
+sudo tar czf ~/museframe-data-$(date +%F).tgz -C /opt/museframe data/backup.db data/assets
+sudo rm -f /opt/museframe/data/backup.db
 
 # 回滚到上一个镜像：重新 build 上一次的代码，或
 sudo docker compose up -d --build   # 用当前 /opt/museframe 源码重建
 ```
 
 数据不在镜像里（挂载卷），重建镜像不影响数据。
+
+`VACUUM INTO` 在同一连接里做一致性快照，不阻塞写入、不会撕裂。进程还会在启动时
+和每 24 小时清理一次过期遥测/会话并跑 `PRAGMA optimize`；`SIGTERM` 关机路径里有
+`wal_checkpoint(TRUNCATE)`，所以正常重启后 WAL 是干净的。
+建议在 `docker-compose.yml` 里加 `stop_grace_period: 30s`，与 `SHUTDOWN_GRACE_MS`
+（默认 25s）配套，让在途任务有时间收尾。
 
 ## 7. 安全基线（已落地）
 

@@ -7,17 +7,28 @@ import { db, q, q1, run, tx, uuid, now } from './db.js';
  * Free grants issued in the trailing 24h — overall, for one ip hash, and how
  * many distinct addresses. Lives here (not in api.js) so the admin routes can
  * read it without an api ⇄ admin import cycle.
+ *
+ * maybeGrantFree writes one row per dedupe key (device hash AND account id) so
+ * neither side of a guest→account merge can claim twice, but only the primary
+ * key's row carries units. Every count below filters on `units > 0` so those
+ * bookkeeping rows never inflate the 24h ceilings.
  */
 export function freeGrantWindow(ipHash) {
   const since = new Date(Date.now() - 86400_000).toISOString();
   return {
-    today: q1('SELECT COUNT(*) AS n FROM free_grants WHERE created_at >= ?', since).n,
-    forIp: ipHash ? q1('SELECT COUNT(*) AS n FROM free_grants WHERE ip_hash = ? AND created_at >= ?', ipHash, since).n : 0,
-    ips: q1('SELECT COUNT(DISTINCT ip_hash) AS n FROM free_grants WHERE created_at >= ?', since).n,
+    today: q1('SELECT COUNT(*) AS n FROM free_grants WHERE units > 0 AND created_at >= ?', since).n,
+    forIp: ipHash ? q1('SELECT COUNT(*) AS n FROM free_grants WHERE units > 0 AND ip_hash = ? AND created_at >= ?', ipHash, since).n : 0,
+    ips: q1('SELECT COUNT(DISTINCT ip_hash) AS n FROM free_grants WHERE units > 0 AND created_at >= ?', since).n,
   };
 }
 
-export function grantUnits(userId, units, sourceType, sourceId, expiresAt = null) {
+/**
+ * `referenceId` scopes the idempotency key independently of `sourceId`. A
+ * renewing subscription keeps one purchases row but must grant once per billing
+ * period, so it passes `${purchaseId}:${periodEnd}` here while source_id still
+ * points at the purchase.
+ */
+export function grantUnits(userId, units, sourceType, sourceId, expiresAt = null, referenceId = null) {
   return tx(() => {
     const bucketId = uuid();
     run('INSERT INTO credit_buckets (id, user_id, source_type, source_id, granted_units, expires_at, created_at) VALUES (?,?,?,?,?,?,?)',
@@ -25,7 +36,7 @@ export function grantUnits(userId, units, sourceType, sourceId, expiresAt = null
     run(`INSERT INTO credit_ledger (id, user_id, entry_type, units, balance_bucket_id, purchase_id, reference_key, created_at)
          VALUES (?,?,?,?,?,?,?,?)`,
       uuid(), userId, 'grant', units, bucketId, sourceType === 'purchase' ? sourceId : null,
-      `grant:${sourceType}:${sourceId ?? bucketId}`, now());
+      `grant:${sourceType}:${referenceId ?? sourceId ?? bucketId}`, now());
     return bucketId;
   });
 }
