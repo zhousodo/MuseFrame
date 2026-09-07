@@ -9,7 +9,7 @@ before(async () => {
   // 测试登录开关只在配合管理员令牌时生效——这里用它造一个「邮箱注册用户」。
   // 本地 .env 里可能还留着旧的 FREE_UNITS=1 / FREE_REQUIRES_AUTH=false（子进程会读它），
   // 这里显式指定新模型的值，并放宽 IP 上限——一个测试进程里要注册好几个账号。
-  srv = await startServer({ ALLOW_TEST_LOGIN: 'true', FREE_UNITS: '3', FREE_REQUIRES_AUTH: 'true', FREE_GRANTS_PER_IP_DAY: '50' });
+  srv = await startServer({ ALLOW_TEST_LOGIN: 'true', ALLOW_GUEST: 'true', FREE_UNITS: '3', FREE_REQUIRES_AUTH: 'true', FREE_GRANTS_PER_IP_DAY: '50' });
 });
 after(async () => { if (srv) await srv.stop(); });
 
@@ -40,9 +40,11 @@ describe('free-tier defaults (3 after sign-up, nothing for guests)', () => {
     assert.equal(cfg.support.qqGroup, '824558022');
   });
 
-  test('a guest session gets no free units', async () => {
+  test('a guest session cannot read account entitlements', async () => {
     const token = await guestToken(srv.base);
-    assert.equal(await units(token), 0);
+    const res = await fetch(srv.base + '/v1/entitlements/me', { headers: bearer(token) });
+    assert.equal(res.status, 401);
+    assert.equal((await res.json()).error.code, 'AUTH_REQUIRED');
   });
 
   test('an email-registered account gets exactly 3, once', async () => {

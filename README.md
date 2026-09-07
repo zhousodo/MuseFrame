@@ -41,7 +41,7 @@ earliest-expiring bucket first, unique reference keys; free first image; mock st
 (`/v1/purchases/verify`) with Mini Pack / Creator Monthly / Creator Annual; premium
 style gating; paywall shown after the free save, never before value.
 
-**API (§10)** — `/v1/auth/exchange` (guest-first), `/v1/discover`, `/v1/styles`,
+**API (§10)** — `/v1/auth/exchange` (registered-account sign-in; the legacy guest exchange is only for anonymous telemetry and sign-in handoff, never account data), `/v1/discover`, `/v1/styles`,
 upload intents → binary PUT → idempotent complete, `/v1/assets/:id/analysis`
 (heuristic subject/exposure/sharpness adapter + ranked recommendations), projects CRUD,
 `/v1/generation-jobs` (Idempotency-Key required), cancel, feedback, export,
@@ -162,5 +162,5 @@ invariants (never rotate/flip source fragments). Falls back to the static
 - Analysis is heuristic (no face detection); labeled `heuristic-0.1`.
 - Store purchases are mocked server-side with the real verify/grant shape.
 - Uploads are session-authenticated paths standing in for short-lived signed URLs.
-- Apple/Google sign-in uses a dev fake-provider adapter; guest-first works fully.
+- Apple/Google sign-in uses a dev fake-provider adapter; works, private images, credits, generation, and purchases require a registered account.
 - Per-job cost telemetry stores provider token usage as a proxy metric.

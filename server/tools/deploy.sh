@@ -70,13 +70,15 @@ jqv() { python3 -c "import sys,json;d=json.load(sys.stdin);print(eval('d'+sys.ar
 code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
 
 # 5.1 文档 §一 的原始复现路径：空 body 换令牌。两种可接受的结局——换不到令牌
-#     （游客整体关闭），或换到了但一张免费额度都拿不到。
+#     （游客整体关闭），或只拿到匿名标识；匿名标识必须被所有账户接口拒绝。
 EXBODY=$(curl -s -X POST "$BASE/v1/auth/exchange" -H 'Content-Type: application/json' -d '{}')
 EXCODE=$(code -X POST "$BASE/v1/auth/exchange" -H 'Content-Type: application/json' -d '{}')
 TOK=""
 if [ "$EXCODE" = "200" ]; then
   TOK=$(printf '%s' "$EXBODY" | jqv "['accessToken']")
-  check "空 body 换令牌拿到的免费额度" "0" "$(curl -fsS "$BASE/v1/entitlements/me" -H "Authorization: Bearer $TOK" | jqv "['availableUnits']")"
+  check "游客令牌读取额度" "401" "$(code "$BASE/v1/entitlements/me" -H "Authorization: Bearer $TOK")"
+  check "游客令牌读取作品" "401" "$(code "$BASE/v1/projects" -H "Authorization: Bearer $TOK")"
+  check "游客令牌读取图片" "401" "$(code "$BASE/v1/assets/does-not-exist/file" -H "Authorization: Bearer $TOK")"
 elif [ "$EXCODE" = "403" ]; then
   pass "空 body 换令牌被拒" "403 游客已整体关闭，比发 0 张更严"
 else

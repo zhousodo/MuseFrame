@@ -1,4 +1,4 @@
-// MuseFrame API client — guest-first session, JSON errors surfaced as {code,...}.
+// MuseFrame API client — account sessions, JSON errors surfaced as {code,...}.
 const KEY = 'mf.session';
 
 // Packaged app (Capacitor WebView) → absolute production API base;
@@ -18,22 +18,20 @@ export function clearToken() {
 }
 
 /**
- * Make sure there is a usable session. Returns 'kept' when the stored token
- * still works, 'guest' when a fresh guest session had to be minted (the caller
- * then knows any "signed in" flag it kept locally is stale), or 'offline' when
- * the existing token could not be checked because the network failed.
+ * Validate a stored account session. Public catalogue requests do not need a
+ * token, so a signed-out client must not silently mint an anonymous identity.
+ * Returns 'account' for a valid registered account, 'none' when no account
+ * session exists, or 'offline' when an existing token could not be checked.
  */
-export async function ensureSession(deviceId) {
+export async function ensureSession() {
   if (token) {
-    try { await get('/v1/entitlements/me'); return 'kept'; }
-    catch (e) { if (e.code !== 'AUTH_REQUIRED') return 'offline'; token = null; }
+    try { await get('/v1/entitlements/me'); return 'account'; }
+    catch (e) {
+      if (e.code !== 'AUTH_REQUIRED') return 'offline';
+      clearToken();
+    }
   }
-  const res = await fetch(apiUrl('/v1/auth/exchange'), {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider: 'guest', locale: navigator.language, deviceId }),
-  }).then(r => r.json());
-  if (res.accessToken) setToken(res.accessToken);
-  return 'guest';
+  return 'none';
 }
 
 async function request(method, path, body, extraHeaders = {}, raw = false) {

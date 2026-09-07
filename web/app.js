@@ -9,7 +9,7 @@
 // are used up the paywall asks the user to email support (manual top-up).
 import { ensureSession, setToken, clearToken, get, post, put, del, assetUrl, apiUrl, track, token } from './api.js';
 import { deviceId, getAuthConfig, nativeSignIn, nativePurchase, isNative, platform, emailRequestCode, emailVerifyCode } from './native.js';
-import { t, getLang, setLang, initLang } from './i18n.js?v=20260902b';
+import { t, getLang, setLang, initLang } from './i18n.js?v=20260907a';
 
 // ---------- tiny DOM helper ----------
 function h(tag, attrs, ...children) {
@@ -128,7 +128,6 @@ const userEmail = () => localStorage.getItem('mf.userEmail') || '';
 const freeUnits = () => S.authConfig?.freeUnits ?? 3;
 const supportEmail = () => S.authConfig?.support?.email || 'donaldkuke@gmail.com';
 const supportQQ = () => S.authConfig?.support?.qqGroup || '';
-const freeNeedsAuth = () => S.authConfig?.freeRequiresAuth !== false;
 const nativeBilling = () => isNative() && !!(S.authConfig?.billing?.google || S.authConfig?.billing?.apple) && S.products.length > 0;
 
 // Catalogue helpers: Chinese UI shows the CNY price, English the USD price.
@@ -148,9 +147,8 @@ function perImage(p) {
 }
 
 // ---------- data ----------
-// Guests may be switched off server-side (allow_guest=false → 403 on the guest
-// exchange). The gallery still has to open so people can browse and register,
-// so entitlements are only fetched when there is a session to fetch them for.
+// The public gallery opens without any identity. Account balances are fetched
+// only after the stored bearer has been validated as a registered account.
 const NO_SESSION_ENT = { plan: 'free', availableUnits: 0, freeCompletedImagesRemaining: 0, features: {} };
 async function loadCore() {
   const [discover, products, ent] = await Promise.all([
@@ -170,8 +168,8 @@ async function refreshEnt() { S.ent = token ? await get('/v1/entitlements/me') :
 function unitsBadgeText() {
   if (!S.ent) return '…';
   const u = S.ent.availableUnits;
+  if (!signedIn()) return t('Sign up · {n} free', { n: freeUnits() });
   if (S.ent.plan === 'free') {
-    if (u <= 0 && !signedIn() && freeNeedsAuth()) return t('Sign up · {n} free', { n: freeUnits() });
     return u > 0 ? t('{n} left', { n: u }) : t('No artworks left');
   }
   return t('{n} left', { n: u });
@@ -197,7 +195,7 @@ function tabbar(active) {
     tab('discover', icons.discover, t('Discover'), () => go('discover')),
     h('button', { class: 'tab', onClick: () => startImport(S.screen) },
       h('div', { class: 'create-dot' }, svg(icons.plus)), h('div', null, t('Create'))),
-    tab('projects', icons.projects, t('Projects'), () => { loadProjects(); go('projects'); }),
+    tab('projects', icons.projects, t('Projects'), openProjects),
     tab('profile', icons.profile, t('Profile'), () => { loadProfile(); go('profile'); }),
   );
 }
@@ -209,7 +207,7 @@ function webnav(active) {
     h('button', { class: 'brand', onClick: () => go('discover') }, 'MUSEFRAME'),
     h('nav', null,
       nav('discover', t('Discover'), () => go('discover')),
-      nav('projects', t('Projects'), () => { loadProjects(); go('projects'); }),
+      nav('projects', t('Projects'), openProjects),
       nav('profile', t('Profile'), () => { loadProfile(); go('profile'); }),
     ),
     h('div', { class: 'spacer' }),
@@ -331,7 +329,7 @@ function DiscoverScreen() {
     return shell(null, h('div', { style: { margin: 'auto', padding: '80px 0' } }, h('div', { class: 'spinner' })));
   }
   const hero = d.heroExhibition;
-  const guestNudge = !signedIn() && freeNeedsAuth() && S.ent?.plan === 'free' && (S.ent?.availableUnits || 0) === 0;
+  const guestNudge = !signedIn();
   return shell('discover',
     h('div', { class: 'scroll', style: { paddingBottom: '110px' } },
       h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'max(22px, env(safe-area-inset-top)) 20px 2px' } },
@@ -417,7 +415,7 @@ function ExhibitionScreen() {
 
 // ---------- import ----------
 function startImport(from) {
-  if (!token) { openAuth(from === 'exhibition' ? 'exhibition' : 'discover'); toast(t('Register first — it takes one email code'), 2400); return; }
+  if (!signedIn()) { openAuth(from === 'exhibition' ? 'exhibition' : 'discover'); toast(t('Register first — it takes one email code'), 2400); return; }
   S.importFrom = from;
   go('import');
   track('photo_import_started', { source: from });
@@ -598,7 +596,7 @@ function ConfigureScreen() {
       }, labels ? labels[i] : t('opt.' + v)))),
   );
   const premiumNote = card.premium && S.ent?.plan === 'free';
-  const needsAccount = !signedIn() && freeNeedsAuth() && (S.ent?.availableUnits || 0) <= 0;
+  const needsAccount = !signedIn();
   return shell(null,
     topbar(t('Preview settings'), () => go('styles')),
     h('div', { class: 'scroll narrow', style: { padding: '18px 20px 120px' } },
@@ -654,7 +652,7 @@ async function generate() {
   const d = S.draft;
   if (generationOffline()) { toast(t('Generating is paused right now — nothing used'), 2600); return; }
   if (!d.projectId || !d.assetId) { startImport(S.screen); return; }
-  if (!token || (!signedIn() && freeNeedsAuth() && (S.ent?.availableUnits || 0) <= 0)) { openAuth('configure'); return; }
+  if (!signedIn()) { openAuth('configure'); return; }
   try {
     track('generation_submitted', { styleId: d.style.styleId });
     const res = await post('/v1/generation-jobs', {
@@ -852,7 +850,13 @@ async function shareResult() {
 }
 
 // ---------- projects ----------
+function openProjects() {
+  if (!signedIn()) { openAuth('projects'); return; }
+  loadProjects();
+  go('projects');
+}
 async function loadProjects() {
+  if (!signedIn()) { S.projects = []; return; }
   try { S.projects = (await get('/v1/projects')).projects; render(); } catch { }
 }
 const STATUS_COLOR = { draft: ['#6E6B66', '#EFEDE6'], generating: ['#A36513', '#F6EBD9'], ready: ['#1C49D8', '#E8EDFF'], saved: ['#217A54', '#E3F0E9'] };
@@ -914,6 +918,7 @@ async function openProject(p) {
 
 // ---------- profile ----------
 async function loadProfile() {
+  if (!signedIn()) { S.ent = NO_SESSION_ENT; S.purchases = []; return; }
   try {
     const [ent, purchases] = await Promise.all([get('/v1/entitlements/me'), get('/v1/purchases')]);
     S.ent = ent; S.purchases = purchases.purchases; render();
@@ -945,7 +950,7 @@ function ProfileScreen() {
           h('div', { style: { minWidth: 0 } },
             h('div', { style: { font: '600 16px var(--sans)', overflow: 'hidden', textOverflow: 'ellipsis' } }, name),
             h('div', { style: { font: '400 12px var(--sans)', color: 'var(--ink-muted)' } },
-              signedIn() ? t('Signed in — works and credits sync across devices') : t('Works are kept on this device only')))),
+              signedIn() ? t('Signed in — works and credits sync across devices') : t('Sign in to see your works and credits')))),
         !signedIn() && h('div', { style: { paddingTop: '14px' } },
           h('button', { class: 'btn', style: { height: '46px', fontSize: '14.5px' }, onClick: () => openAuth('profile') },
             t('Sign in / Register — {n} free artworks', { n: freeUnits() }))),
@@ -988,7 +993,11 @@ function AuthScreen() {
   const emailOn = !!cfg.email?.enabled;
   const showGoogle = !!cfg.google?.enabled;
   const showApple = !!cfg.apple?.enabled && platform() === 'ios';
-  const back = () => go(S.authReturn && S.authReturn !== 'auth' ? S.authReturn : 'discover');
+  const back = () => {
+    const dest = S.authReturn && S.authReturn !== 'auth' ? S.authReturn : 'discover';
+    if (dest === 'projects') openProjects();
+    else { if (dest === 'profile') loadProfile(); go(dest); }
+  };
   return shell(null,
     topbar(t('Sign in / Register'), back),
     h('div', { class: 'scroll narrow', style: { padding: '18px 20px 40px' } },
@@ -1039,12 +1048,16 @@ async function signIn(provider, done) {
   }
 }
 async function signOut() {
+  // Revoke the server-side session while its bearer is still available. The
+  // previous order cleared localStorage first and left a valid token alive for
+  // up to 90 days.
+  try { if (token) await del('/v1/auth/session'); } catch { /* local sign-out still proceeds */ }
   clearToken();
   localStorage.removeItem('mf.signedIn');
   localStorage.removeItem('mf.userName');
   localStorage.removeItem('mf.userEmail');
-  S.user = null; S.ent = null; S.projects = []; S.purchases = [];
-  try { await ensureSession(await deviceId()); await loadCore(); } catch { /* shown on next render */ }
+  S.user = null; S.ent = NO_SESSION_ENT; S.projects = []; S.purchases = [];
+  try { await loadCore(); } catch { /* shown on next render */ }
   toast(t('Signed out'));
   go('discover');
 }
@@ -1161,7 +1174,7 @@ function PaywallSheet() {
   const n = freeUnits();
 
   let title, body;
-  if (guest && freeNeedsAuth()) {
+  if (guest) {
     title = t('Register to get {n} free artworks', { n });
     body = t('Sign up with your email — no password, no card. {n} complete artworks are on us. If you already have an account, the same steps sign you in.', { n });
   } else if (premium) {
@@ -1185,7 +1198,7 @@ function PaywallSheet() {
         h('div', { style: { flex: 1, font: '600 19px/1.25 var(--serif)' } }, title),
         h('button', { class: 'iconbtn', style: { width: '30px', height: '30px', background: 'var(--canvas)', color: 'var(--ink-muted)', fontSize: '13px' }, onClick: close, 'aria-label': t('Close') }, '✕')),
       h('div', { style: { font: '400 13px/1.55 var(--sans)', color: 'var(--ink-muted)', paddingBottom: '16px' } }, body),
-      guest && freeNeedsAuth()
+      guest
         ? [
           h('button', { class: 'btn', onClick: () => openAuth(S.screen) }, t('Register with email')),
           h('div', { style: { textAlign: 'center', font: '400 11.5px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '12px' } },
@@ -1384,10 +1397,14 @@ async function bootApp() {
   S.bootError = false;
   render(); // paint loader immediately
   try {
-    const session = await ensureSession(await deviceId());
-    if (session === 'guest' && signedIn()) {
-      // The stored token expired and a guest session replaced it — the local
-      // "signed in" flag would otherwise promise a balance that is not there.
+    const session = await ensureSession();
+    if (session === 'account') {
+      // A validated server session is authoritative; repair an older client's
+      // missing UI marker instead of trusting a second, independent flag.
+      localStorage.setItem('mf.signedIn', '1');
+    } else if (session === 'none') {
+      // Expired, guest, or absent tokens are signed out. Clearing every account
+      // marker prevents stale UI from advertising somebody else's balance.
       localStorage.removeItem('mf.signedIn'); localStorage.removeItem('mf.userName'); localStorage.removeItem('mf.userEmail');
     }
     S.authConfig = await getAuthConfig();

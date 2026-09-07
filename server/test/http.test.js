@@ -5,21 +5,26 @@
 // something), F23 (typed request fields), F06 (control allow-list).
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startServer, guestToken } from './helpers.js';
+import { startServer, guestToken, memberToken } from './helpers.js';
 
-let srv, token;
+let srv, token, guest;
 before(async () => {
-  srv = await startServer();
-  token = await guestToken(srv.base);
+  srv = await startServer({ ALLOW_TEST_LOGIN: 'true', ALLOW_GUEST: 'true' });
+  token = await memberToken(srv.base);
+  guest = await guestToken(srv.base);
 });
 after(async () => { if (srv) await srv.stop(); });
 
 const post = (p, body, headers = {}) => fetch(srv.base + p, {
   method: 'POST',
-  headers: { 'Content-Type': 'application/json', ...headers },
+  // The 413 path deliberately closes its socket after delivering the error.
+  // Keeping this stress-test client off undici's shared keep-alive pool avoids
+  // a race where the next assertion reuses that just-closed connection.
+  headers: { 'Content-Type': 'application/json', Connection: 'close', ...headers },
   body: typeof body === 'string' ? body : JSON.stringify(body),
 });
 const auth = (h = {}) => ({ Authorization: `Bearer ${token}`, ...h });
+const guestAuth = (h = {}) => ({ Authorization: `Bearer ${guest}`, ...h });
 
 describe('oversized bodies get a real 413, not a dropped socket (F25/F27)', () => {
   const big = (n) => JSON.stringify({ events: [{ name: 'x', props: { a: 'A'.repeat(n) } }] });
@@ -40,7 +45,7 @@ describe('oversized bodies get a real 413, not a dropped socket (F25/F27)', () =
     // The content-length shortcut must not be the only guard.
     const res = await fetch(srv.base + '/v1/events', {
       method: 'POST',
-      headers: auth({ 'Content-Type': 'application/json' }),
+      headers: auth({ 'Content-Type': 'application/json', Connection: 'close' }),
       duplex: 'half',
       body: new ReadableStream({
         start(c) {
@@ -62,7 +67,11 @@ describe('oversized bodies get a real 413, not a dropped socket (F25/F27)', () =
   });
 
   test('the server is still healthy after being fed oversized bodies', async () => {
-    for (let i = 0; i < 5; i++) await post('/v1/events', big(200_000), auth());
+    for (let i = 0; i < 5; i++) {
+      const rejected = await post('/v1/events', big(200_000), auth());
+      assert.equal(rejected.status, 413);
+      await rejected.arrayBuffer();
+    }
     const res = await fetch(srv.base + '/v1/health');
     assert.equal(res.status, 200);
     assert.equal((await res.json()).ok, true);
@@ -118,10 +127,36 @@ describe('admin token is header-only (F09)', () => {
   });
 
   test('the dev hatches stay shut without the admin token', async () => {
-    // ALLOW_TEST_LOGIN is false in this server, but even the query-string form
-    // must not be a way in.
+    // The test-login flag is on for this process, but a query-string token must
+    // still never satisfy its separate operator-token gate.
     const res = await post(`/v1/auth/exchange?admin_token=test-admin-token`, { provider: 'dev', email: 'a@b.co' });
     assert.equal(res.status, 403);
+  });
+});
+
+describe('guest sessions cannot read or mutate account data', () => {
+  const blocked = async (res) => {
+    assert.equal(res.status, 401);
+    assert.equal((await res.json()).error.code, 'AUTH_REQUIRED');
+  };
+
+  test('blocks balances, projects, purchases and image-token minting', async () => {
+    await blocked(await fetch(srv.base + '/v1/entitlements/me', { headers: guestAuth() }));
+    await blocked(await fetch(srv.base + '/v1/projects', { headers: guestAuth() }));
+    await blocked(await fetch(srv.base + '/v1/purchases', { headers: guestAuth() }));
+    await blocked(await fetch(srv.base + '/v1/assets/img-token', { headers: guestAuth() }));
+  });
+
+  test('blocks project creation, generation and session-token image reads', async () => {
+    await blocked(await post('/v1/projects', {}, guestAuth()));
+    await blocked(await post('/v1/generation-jobs', {}, guestAuth({ 'Idempotency-Key': 'guest-must-not-generate' })));
+    await blocked(await fetch(`${srv.base}/v1/assets/does-not-exist/file?token=${encodeURIComponent(guest)}`));
+  });
+
+  test('a registered account can still read its private surfaces', async () => {
+    assert.equal((await fetch(srv.base + '/v1/entitlements/me', { headers: auth() })).status, 200);
+    assert.equal((await fetch(srv.base + '/v1/projects', { headers: auth() })).status, 200);
+    assert.equal((await fetch(srv.base + '/v1/purchases', { headers: auth() })).status, 200);
   });
 });
 
@@ -232,5 +267,13 @@ describe('the public error contract is unchanged', () => {
     const res = await fetch(srv.base + '/v1/auth/config');
     const b = await res.json();
     assert.equal(b.billing.mock, false);
+  });
+
+  test('sign-out revokes the bearer on the server', async () => {
+    const disposable = await memberToken(srv.base, 'signout@example.com');
+    const headers = { Authorization: `Bearer ${disposable}` };
+    assert.equal((await fetch(srv.base + '/v1/entitlements/me', { headers })).status, 200);
+    assert.equal((await fetch(srv.base + '/v1/auth/session', { method: 'DELETE', headers })).status, 200);
+    assert.equal((await fetch(srv.base + '/v1/entitlements/me', { headers })).status, 401);
   });
 });

@@ -167,6 +167,18 @@ function requireUser(ctx) {
   return ctx.user;
 }
 
+// A guest token only identifies an anonymous browser/device. It is useful for
+// abuse telemetry and for attaching an in-flight session during sign-in, but
+// it must never unlock account data. In particular, old guest rows can still
+// contain projects or ledger entries from early builds; treating those rows as
+// authenticated accounts made an apparently signed-out browser able to read
+// images and balances.
+function requireAccount(ctx) {
+  const user = requireUser(ctx);
+  if (user.is_guest) throw new ApiError(401, 'AUTH_REQUIRED', 'Sign in to continue.');
+  return user;
+}
+
 // ---- style catalog helpers -------------------------------------------------
 
 function publishedStyleRows() {
@@ -589,7 +601,7 @@ route('GET', '/v1/styles/([\\w-]+)', (ctx) => {
 
 // Upload flow: intent → binary PUT → complete (spec §10.4).
 route('POST', '/v1/assets/upload-intents', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   const { projectId, contentType, byteSize } = ctx.body || {};
   if (!['image/jpeg'].includes(contentType)) throw new ApiError(422, 'ASSET_UNSUPPORTED', 'Upload a JPEG (the app converts for you).');
   if (byteSize > MAX_UPLOAD) throw new ApiError(422, 'ASSET_UNSUPPORTED', 'Images up to 20 MB are supported.');
@@ -601,7 +613,7 @@ route('POST', '/v1/assets/upload-intents', (ctx) => {
 });
 
 route('PUT', '/v1/assets/([\\w-]+)/upload', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   // Only the pending source asset this upload intent was issued for. Without
   // the kind/status predicate the route also matched assets that were already
   // 'ready' (re-writing the bytes under a recorded width/height and analysis)
@@ -626,7 +638,7 @@ route('PUT', '/v1/assets/([\\w-]+)/upload', (ctx) => {
 });
 
 route('POST', '/v1/assets/([\\w-]+)/complete', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   const asset = q1('SELECT * FROM assets WHERE id = ? AND user_id = ?', ctx.params[0], user.id);
   if (!asset) throw new ApiError(404, 'ASSET_NOT_READY', 'Unknown asset.');
   const file = path.join(ASSET_DIR, asset.storage_key);
@@ -656,7 +668,7 @@ route('POST', '/v1/assets/([\\w-]+)/complete', (ctx) => {
 });
 
 route('GET', '/v1/assets/([\\w-]+)/analysis', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   const a = q1(`SELECT pa.* FROM photo_analyses pa JOIN assets s ON s.id = pa.asset_id
                 WHERE pa.asset_id = ? AND s.user_id = ?`, ctx.params[0], user.id);
   if (!a) throw new ApiError(404, 'ASSET_NOT_READY', 'No analysis for this asset.');
@@ -673,7 +685,7 @@ route('GET', '/v1/assets/([\\w-]+)/analysis', (ctx) => {
 // Short-lived, account-scoped token for <img src> URLs, so the session bearer
 // token stops riding in query strings that Caddy and Cloudflare log verbatim.
 route('GET', '/v1/assets/img-token', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   return { token: assetImgToken(user.id, Math.floor(Date.now() / 3600_000)), ttlSeconds: 3600 };
 });
 
@@ -682,13 +694,16 @@ route('GET', '/v1/assets/([\\w-]+)/file', (ctx) => {
   const it = ctx.url.searchParams.get('img_token');
   let asset;
   if (it) {
-    asset = q1('SELECT * FROM assets WHERE id = ? AND deleted_at IS NULL', ctx.params[0]);
+    asset = q1(`SELECT a.* FROM assets a JOIN users u ON u.id = a.user_id
+                WHERE a.id = ? AND a.deleted_at IS NULL AND u.deleted_at IS NULL AND u.is_guest = 0`, ctx.params[0]);
     const v = assetImgTokenUser(it);
     // The token is bound to the owning account, so it only ever unlocks that
-    // account's own images and only for the current/previous hour.
+    // registered account's own images and only for the current/previous hour.
+    // Filtering the owner here also revokes still-unexpired image tokens that
+    // were minted for legacy guest assets before the account-only boundary.
     if (!asset || !v || !v.verify(asset.user_id)) throw new ApiError(404, 'ASSET_NOT_READY', 'Unknown asset.');
   } else {
-    const user = requireUser(ctx);
+    const user = requireAccount(ctx);
     asset = q1('SELECT * FROM assets WHERE id = ? AND user_id = ? AND deleted_at IS NULL', ctx.params[0], user.id);
   }
   if (!asset) throw new ApiError(404, 'ASSET_NOT_READY', 'Unknown asset.');
@@ -700,7 +715,7 @@ route('GET', '/v1/assets/([\\w-]+)/file', (ctx) => {
 });
 
 route('POST', '/v1/projects', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   const id = uuid(), t = now();
   run('INSERT INTO projects (id, user_id, title, source_asset_id, created_at, updated_at) VALUES (?,?,?,?,?,?)',
     id, user.id, ctx.body?.title || null, ctx.body?.sourceAssetId || null, t, t);
@@ -709,7 +724,7 @@ route('POST', '/v1/projects', (ctx) => {
 });
 
 route('GET', '/v1/projects', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   const rows = q(`SELECT * FROM projects WHERE user_id = ? AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100`, user.id);
   return {
     projects: rows.map(p => {
@@ -729,7 +744,7 @@ route('GET', '/v1/projects', (ctx) => {
 });
 
 route('GET', '/v1/projects/([\\w-]+)', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   const p = q1('SELECT * FROM projects WHERE id = ? AND user_id = ? AND deleted_at IS NULL', ctx.params[0], user.id);
   if (!p) throw new ApiError(404, 'NOT_FOUND', 'Project not found.');
   const jobs = q('SELECT * FROM generation_jobs WHERE project_id = ? ORDER BY created_at DESC', p.id);
@@ -741,7 +756,7 @@ route('GET', '/v1/projects/([\\w-]+)', (ctx) => {
 });
 
 route('PATCH', '/v1/projects/([\\w-]+)', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   const p = q1('SELECT * FROM projects WHERE id = ? AND user_id = ? AND deleted_at IS NULL', ctx.params[0], user.id);
   if (!p) throw new ApiError(404, 'NOT_FOUND', 'Project not found.');
   if (ctx.body?.title !== undefined) run('UPDATE projects SET title = ?, updated_at = ? WHERE id = ?', ctx.body.title, now(), p.id);
@@ -749,14 +764,14 @@ route('PATCH', '/v1/projects/([\\w-]+)', (ctx) => {
 });
 
 route('DELETE', '/v1/projects/([\\w-]+)', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   run('UPDATE projects SET deleted_at = ?, updated_at = ? WHERE id = ? AND user_id = ?', now(), now(), ctx.params[0], user.id);
   return { ok: true };
 });
 
 // Generation jobs (spec §10.7). Idempotency-Key required; billing via ledger.
 route('POST', '/v1/generation-jobs', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   const idemKey = ctx.req.headers['idempotency-key'];
   if (!idemKey) throw new ApiError(400, 'IDEMPOTENCY_KEY_REQUIRED', 'Idempotency-Key header is required.');
   const reqHash = createHash('sha256').update(JSON.stringify(ctx.body || {})).digest('hex');
@@ -853,7 +868,7 @@ route('POST', '/v1/generation-jobs', (ctx) => {
 });
 
 route('GET', '/v1/generation-jobs/([\\w-]+)', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   const j = q1('SELECT * FROM generation_jobs WHERE id = ? AND user_id = ?', ctx.params[0], user.id);
   if (!j) throw new ApiError(404, 'NOT_FOUND', 'Job not found.');
   const cand = q1('SELECT * FROM generation_candidates WHERE job_id = ? ORDER BY candidate_index LIMIT 1', j.id);
@@ -874,7 +889,7 @@ route('GET', '/v1/generation-jobs/([\\w-]+)', (ctx) => {
 });
 
 route('POST', '/v1/generation-jobs/([\\w-]+)/cancel', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   const j = q1('SELECT * FROM generation_jobs WHERE id = ? AND user_id = ?', ctx.params[0], user.id);
   if (!j) throw new ApiError(404, 'NOT_FOUND', 'Job not found.');
   if (['queued', 'created'].includes(j.status)) {
@@ -896,7 +911,7 @@ route('POST', '/v1/generation-jobs/([\\w-]+)/cancel', (ctx) => {
 });
 
 route('POST', '/v1/candidates/([\\w-]+)/feedback', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   const { rating, reasonCodes = [], comment } = ctx.body || {};
   if (!['positive', 'negative'].includes(rating)) throw new ApiError(422, 'VALIDATION', 'rating must be positive|negative');
   // Ownership, resolved the same way /export does it. Without this, any free
@@ -921,7 +936,7 @@ route('POST', '/v1/candidates/([\\w-]+)/feedback', (ctx) => {
 });
 
 route('POST', '/v1/candidates/([\\w-]+)/export', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   const cand = q1(`SELECT c.*, j.user_id FROM generation_candidates c JOIN generation_jobs j ON j.id = c.job_id WHERE c.id = ?`, ctx.params[0]);
   if (!cand || cand.user_id !== user.id) throw new ApiError(404, 'NOT_FOUND', 'Candidate not found.');
   run(`INSERT INTO events (id, user_id, name, props, occurred_at) VALUES (?,?,?,?,?)`,
@@ -931,7 +946,7 @@ route('POST', '/v1/candidates/([\\w-]+)/export', (ctx) => {
   return { downloadUrl: `/v1/assets/${cand.asset_id}/file`, format: 'jpeg', qualityTier: 'standard' };
 });
 
-route('GET', '/v1/entitlements/me', (ctx) => entitlements(requireUser(ctx).id));
+route('GET', '/v1/entitlements/me', (ctx) => entitlements(requireAccount(ctx).id));
 
 const ZH_PRODUCT_NAMES = Object.fromEntries(PRODUCTS.map(p => [p.internalKey, p.displayNameZh || p.displayName]));
 route('GET', '/v1/products', () => ({
@@ -999,7 +1014,7 @@ function markPurchase(platform, externalTxId, status) {
 // platform's own signed record confirms the purchase — the client's claim of
 // "I bought Creator" is never sufficient. Server is the source of truth.
 route('POST', '/v1/purchases/verify', async (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   const { productKey, purchaseToken, transactionId } = ctx.body || {};
   const platform = ctx.body?.platform || 'web';
   const product = q1('SELECT * FROM products WHERE internal_key = ? AND active = 1', productKey);
@@ -1123,7 +1138,7 @@ route('POST', '/v1/purchases/verify', async (ctx) => {
 });
 
 route('GET', '/v1/purchases', (ctx) => {
-  const user = requireUser(ctx);
+  const user = requireAccount(ctx);
   return {
     purchases: q(`SELECT pu.*, p.display_name FROM purchases pu JOIN products p ON p.id = pu.product_id
                   WHERE pu.user_id = ? ORDER BY pu.purchased_at DESC`, user.id)

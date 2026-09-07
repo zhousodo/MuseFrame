@@ -20,11 +20,11 @@ CREATE TABLE IF NOT EXISTS app_config (
 const REGISTRY = {
   // 2026-09 收费模型：邮箱注册后送 3 张；用完提示联系客服邮箱，由管理员在后台手动加额度。
   free_units: { type: 'number', envVar: 'FREE_UNITS', default: 3, description: '注册用户免费生成张数' },
-  allow_guest: { type: 'boolean', envVar: 'ALLOW_GUEST', default: true, description: '允许游客浏览（游客不发免费额度时仍可看画廊）' },
+  allow_guest: { type: 'boolean', envVar: 'ALLOW_GUEST', default: false, description: '兼容旧客户端的游客令牌（默认关闭；不能访问作品、图片、额度或生成）' },
   free_requires_auth: { type: 'boolean', envVar: 'FREE_REQUIRES_AUTH', default: true, description: '免费额度需登录（邮箱注册）后发放' },
   support_email: { type: 'string', envVar: 'SUPPORT_EMAIL', default: 'donaldkuke@gmail.com', description: '客服 / 加购联系邮箱（额度用完时展示给用户）' },
   support_qq_group: { type: 'string', envVar: 'SUPPORT_QQ_GROUP', default: '824558022', description: '客服 QQ 群号（购买额度的主要入口，留空则不展示）' },
-  // 反白嫖：游客可无凭据换令牌，若不设上限就能循环建号无限领免费额度。
+  // 反白嫖：若运维为兼容旧客户端重新开启游客令牌，仍必须限制匿名发放。
   // 两道闸都按滚动 24 小时统计；设为 0 = 完全停发免费额度。
   free_grants_per_ip_day: { type: 'number', envVar: 'FREE_GRANTS_PER_IP_DAY', default: 3, description: '每个 IP 每 24 小时最多发放几次免费额度（0=停发）' },
   free_grants_per_day: { type: 'number', envVar: 'FREE_GRANTS_PER_DAY', default: 50, description: '全站每 24 小时免费额度发放次数上限（0=停发）' },

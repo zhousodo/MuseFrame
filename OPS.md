@@ -95,23 +95,23 @@ cd /opt/museframe && bash server/tools/deploy.sh
 - 换邮件服务商：后台改 `smtp_host/port/user/pass/from` → 发送测试邮件确认 → 完成。
 - 流程：`POST /v1/auth/email/request {email}` 发码 → `POST /v1/auth/email/verify
   {email,code}` 登录。验证码 6 位、10 分钟有效、5 次错误锁定、单次使用；发码限流
-  5 次/10 分钟。游客登录会自动合并（作品 + 已购点数迁移到邮箱账号）。
+  5 次/10 分钟。兼容旧客户端的游客身份只能写匿名遥测并用于登录衔接，不能读取作品、图片或额度；登录时仍会自动合并历史游客数据。
 
 ## 5. 登录方式与配额（后台可调）
 
 | 登录方式 | 状态 | 依赖 |
 |---|---|---|
-| 游客 | 开（`ALLOW_GUEST`） | 无，按设备指纹发 1 次免费额度 |
+| 游客令牌（旧客户端兼容） | 默认关（`ALLOW_GUEST=false`） | 仅匿名遥测/登录衔接；不能访问作品、图片、额度或生成 |
 | 邮箱验证码 | 开 | SMTP + Brevo IP 授权 |
 | Google | 待配 | 后台填 `google_client_ids` |
 | Apple | 待配 | 后台填 `apple_bundle_ids` |
 
-免费额度：`free_units`（默认 1）；`free_requires_auth=true` 可要求登录后才发放。
+免费额度：`free_units`（默认 3）；正式账户登录后才可查看和使用。
 
 ### 5.1 免费额度的四道闸（防白嫖）
 
-游客令牌零成本可换（`POST /v1/auth/exchange` 空 body 即可拿 token），所以只靠账号维度
-限制等于没限制。现在每次发放要同时过四关，任一不过就**不发**（账号照建，仍可登录/购买）：
+游客令牌默认关闭。若为兼容旧客户端临时开启，匿名身份仍被私人 API 门禁拒绝；下面的
+发放限制仅作为旧配置的纵深防护。每次发放要同时过四关，任一不过就**不发**：
 
 1. **游客必须带设备指纹**。没有 `deviceId` 一律不发——原先「没指纹就退回按 user_id 去重」
    恰恰是匿名调用者的情形，等于对着白嫖脚本敞开。
@@ -124,7 +124,7 @@ cd /opt/museframe && bash server/tools/deploy.sh
 轮换令牌会重置计数）。后台 **概览 / 配置** 顶部第二条横幅实时显示用量与是否触顶。
 把任一上限设为 `0` 或 `free_units=0` 即**完全停发**免费额度。
 
-上限值都可在后台热改、即时生效。要更严就把 `free_requires_auth` 打开或 `allow_guest` 关掉。
+上限值都可在后台热改、即时生效。生产应保持 `free_requires_auth=true`、`allow_guest=false`。
 
 商品数量/价格/上下架：后台 **配置 → 商品管理**。风格紧急下线：**配置 → 风格管理**。
 
@@ -156,7 +156,7 @@ sudo docker compose up -d --build   # 用当前 /opt/museframe 源码重建
 - 后台令牌 header 传递、图片短令牌、DB 浏览器对密钥/会话掩码、查询台禁访问凭据表。
 - 容器 `mem_limit: 512m`，日志滚动 10m×3，不会拖垮同机 LensCript。
 - 未配置图像密钥时整站拒绝生成（见 §3.1），本地像素引擎不会顶替付费模型。
-- 免费额度四道闸（见 §5.1），游客循环白嫖已封死；成本有硬天花板。
+- 私人数据接口要求正式账户，游客令牌默认关闭；免费额度四道闸仍作纵深防护（见 §5.1）。
 - **开发开关双重门禁**：`ALLOW_MOCK_PURCHASES`（演示购买＝凭空发额度）与
   `ALLOW_TEST_LOGIN`（任意邮箱冒充登录，可绕过 `free_requires_auth`）现在除了
   env 开关，还**必须带管理员令牌**才生效；`/v1/auth/config` 也不再对公众声明

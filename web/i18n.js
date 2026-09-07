@@ -185,6 +185,7 @@ const ZH = {
   'Guest': '游客',
   'Signed in — works and credits sync across devices': '已登录——作品与额度跨设备同步',
   'Works are kept on this device only': '作品目前只保存在本设备',
+  'Sign in to see your works and credits': '登录后才能查看你的作品和额度',
   'Sign in / Register — {n} free artworks': '登录 / 注册——送 {n} 张免费作品',
   '{n} artworks are included with your account. Need more? Email us and we top you up by hand.': '你的账号含 {n} 张免费作品。需要更多？给我们发邮件，我们会人工为你加额度。',
   'Register with your email to receive {n} free artworks.': '用邮箱注册即可领取 {n} 张免费作品。',

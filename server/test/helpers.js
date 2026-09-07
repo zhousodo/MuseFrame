@@ -80,3 +80,15 @@ export async function guestToken(base, deviceId = 'dev-' + Math.random().toStrin
   if (!body.accessToken) throw new Error('no session: ' + JSON.stringify(body));
   return body.accessToken;
 }
+
+/** Mint a registered test account. The server must opt into ALLOW_TEST_LOGIN. */
+export async function memberToken(base, email = `member-${Math.random().toString(36).slice(2)}@example.com`) {
+  const res = await fetch(`${base}/v1/auth/exchange`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Token': 'test-admin-token' },
+    body: JSON.stringify({ provider: 'dev', email, deviceId: 'dev-' + email }),
+  });
+  const body = await res.json();
+  if (!body.accessToken) throw new Error('no member session: ' + JSON.stringify(body));
+  return body.accessToken;
+}
