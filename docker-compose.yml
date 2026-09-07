@@ -8,6 +8,9 @@ services:
     build: .
     image: museframe-api:latest
     container_name: museframe-api
+    # Match the deploy account that owns ./data. With every capability dropped,
+    # container root cannot override a host file owned by uid 1000.
+    user: "${MUSEFRAME_UID:-1000}:${MUSEFRAME_GID:-1000}"
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
