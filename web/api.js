@@ -7,13 +7,22 @@ export const API_BASE = window.Capacitor ? (window.MF_CONFIG?.apiBase || '') : '
 export const apiUrl = (p) => (p?.startsWith('/') ? API_BASE + p : p);
 
 export let token = localStorage.getItem(KEY) || null;
+let imageToken = null;
+let imageTokenExpiresAt = 0;
+let imageTokenRequest = null;
 
 export function setToken(t) {
   token = t;
+  imageToken = null;
+  imageTokenExpiresAt = 0;
+  imageTokenRequest = null;
   localStorage.setItem(KEY, t);
 }
 export function clearToken() {
   token = null;
+  imageToken = null;
+  imageTokenExpiresAt = 0;
+  imageTokenRequest = null;
   localStorage.removeItem(KEY);
 }
 
@@ -54,7 +63,28 @@ export const put = (p, body) => request('PUT', p, body, {}, true);
 export const patch = (p, body) => request('PATCH', p, body);
 export const del = (p) => request('DELETE', p);
 
-export const assetUrl = (assetId) => apiUrl(`/v1/assets/${assetId}/file?token=${encodeURIComponent(token)}`);
+/**
+ * Fetch/cache an account-scoped one-hour image credential. Long-lived session
+ * bearers must never appear in URLs (proxy logs, history and referrers retain
+ * them); normal API calls continue to carry the bearer in a header.
+ */
+export async function ensureAssetToken() {
+  if (!token) return null;
+  if (imageToken && Date.now() < imageTokenExpiresAt - 60_000) return imageToken;
+  if (!imageTokenRequest) {
+    imageTokenRequest = get('/v1/assets/img-token').then((r) => {
+      imageToken = r.token;
+      const ttl = Math.min(Math.max(Number(r.ttlSeconds) || 3600, 60), 3600);
+      imageTokenExpiresAt = Date.now() + ttl * 1000;
+      return imageToken;
+    }).finally(() => { imageTokenRequest = null; });
+  }
+  return imageTokenRequest;
+}
+
+export const assetUrl = (assetId) => imageToken
+  ? apiUrl(`/v1/assets/${assetId}/file?img_token=${encodeURIComponent(imageToken)}`)
+  : null;
 
 export function track(name, props = {}) {
   post('/v1/events', { events: [{ name, props }] }).catch(() => {});

@@ -11,6 +11,14 @@ services:
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    tmpfs:
+      - /tmp:size=32m,mode=1777
     env_file:
       - .env
     ports:
@@ -19,7 +27,7 @@ services:
       # SQLite DB + uploaded/generated images persist across rebuilds.
       - ./data:/app/data
       # Style-card sample covers written by tools live under web/covers.
-      - ./web/covers:/app/web/covers
+      - ./web/covers:/app/web/covers:ro
       # Play service-account JSON, when configured, mounts read-only.
       - ./secrets:/app/secrets:ro
     mem_limit: 512m

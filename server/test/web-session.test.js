@@ -50,3 +50,18 @@ test('a registered account token remains active after validation', async () => {
   assert.equal(localStorage.getItem('mf.session'), 'member-token');
   assert.deepEqual(requests, [{ url: '/v1/entitlements/me', method: 'GET' }]);
 });
+
+test('private image URLs use a cached short token, never the session bearer', async () => {
+  const { mod, requests } = await loadClient({ 'mf.session': 'member-token' }, async (url) => {
+    if (String(url) === '/v1/assets/img-token') return new Response(
+      JSON.stringify({ token: 'short-image-token', ttlSeconds: 3600 }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+    throw new Error('unexpected request: ' + url);
+  });
+  await Promise.all([mod.ensureAssetToken(), mod.ensureAssetToken()]);
+  const url = mod.assetUrl('asset-1');
+  assert.equal(url, '/v1/assets/asset-1/file?img_token=short-image-token');
+  assert.doesNotMatch(url, /member-token|\?token=/);
+  assert.deepEqual(requests, [{ url: '/v1/assets/img-token', method: 'GET' }]);
+});

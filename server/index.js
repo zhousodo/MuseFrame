@@ -133,15 +133,30 @@ const RL_RULES = [
 
 const server = http.createServer(async (req, res) => {
   const requestId = `req_${uuid().slice(0, 8)}`;
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  const clientIp = resolveClientIp(req);
   // CORS: the packaged mobile app calls from a WebView origin.
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Idempotency-Key');
+  // Baseline browser protections belong at the app boundary too. This keeps a
+  // direct/internal deployment safe when the reverse proxy is absent or stale.
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' https://museframe.lenscript.cn; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
   if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
   try {
+    // We only route on pathname/search; never use the untrusted Host header as
+    // URL input. `Host: [` previously threw ERR_INVALID_URL outside this catch
+    // and terminated the entire process from one unauthenticated TCP request.
+    if (req.headers.host) {
+      try { new URL(`http://${req.headers.host}`); }
+      catch { throw new ApiError(400, 'VALIDATION', 'Invalid Host header.'); }
+    }
+    const url = new URL(req.url || '/', 'http://localhost');
+    const clientIp = resolveClientIp(req);
     if (url.pathname.startsWith('/v1/')) {
+      res.setHeader('Cache-Control', 'no-store');
       for (const rule of RL_RULES) {
         if ((rule.m && rule.m !== req.method) || !rule.re.test(url.pathname)) continue;
         const retry = rateLimit(clientIp, rule.re.source, rule.limit, rule.windowMs);
@@ -190,14 +205,12 @@ const server = http.createServer(async (req, res) => {
     const code = e instanceof ApiError ? e.code : 'INTERNAL_ERROR';
     if (status >= 500) console.error(`[${requestId}]`, e);
     if (!res.writableEnded) {
-      const headers = { 'Content-Type': 'application/json' };
-      // The rest of an oversized body is still in flight and we stopped reading
-      // it. Announce the close so the client does not try to reuse the
-      // connection, write the error, then drop the socket once it is out.
-      // The oversized request was drained rather than cut, so the connection is
-      // healthy and the client can read this. Close anyway: there is no point
-      // keeping a connection alive for a sender that just overran its limit.
-      if (status === 413) headers.Connection = 'close';
+      const headers = { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' };
+      // Oversized bodies within the bounded drain budget were consumed fully,
+      // so the connection is healthy and safe to reuse. Forcing `close` here
+      // caused real clients to race a stale pooled socket after every readable
+      // 413 response. Floods beyond the budget are already destroyed in
+      // readBody(), where connection reuse is impossible.
       res.writeHead(status, headers);
       res.end(JSON.stringify({ error: { code, message: e.message, requestId, details: e.details } }));
     }

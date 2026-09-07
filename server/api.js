@@ -302,6 +302,12 @@ export function optionalString(v, field, max = 512) {
   if (v.length > max) throw new ApiError(422, 'VALIDATION', `${field} is too long.`);
   return v;
 }
+/** Reject a missing/blank required string after applying the same type bound. */
+export function requiredString(v, field, max = 512) {
+  const s = optionalString(v, field, max);
+  if (!s || !s.trim()) throw new ApiError(422, 'VALIDATION', `${field} is required.`);
+  return s;
+}
 /** Reject a present-but-not-a-plain-object optional field. */
 export function optionalObject(v, field) {
   if (v === undefined || v === null) return {};
@@ -444,9 +450,9 @@ function resolveIdentity({ provider, subject, email, name, ctxUser, locale, devi
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 route('POST', '/v1/auth/email/request', async (ctx) => {
+  const email = (optionalString(ctx.body?.email, 'email', 254) || '').trim().toLowerCase();
+  if (!email || !EMAIL_RE.test(email)) throw new ApiError(422, 'VALIDATION', '请输入有效的邮箱地址。');
   if (!cfg('email_login_enabled')) throw new ApiError(501, 'PROVIDER_NOT_CONFIGURED', '邮箱登录未开启。');
-  const email = String(ctx.body?.email || '').trim().toLowerCase();
-  if (!EMAIL_RE.test(email)) throw new ApiError(422, 'VALIDATION', '请输入有效的邮箱地址。');
 
   // Per-address issuance cap. The per-IP rate rule is not enough on its own:
   // it is keyed on a header the caller influences, and re-requesting a code
@@ -494,10 +500,13 @@ route('POST', '/v1/auth/email/request', async (ctx) => {
 });
 
 route('POST', '/v1/auth/email/verify', (ctx) => {
+  const email = (optionalString(ctx.body?.email, 'email', 254) || '').trim().toLowerCase();
+  const code = (optionalString(ctx.body?.code, 'code', 6) || '').trim();
+  const deviceId = optionalString(ctx.body?.deviceId, 'deviceId', 200);
+  const locale = optionalString(ctx.body?.locale, 'locale', 40);
+  if (!email || !EMAIL_RE.test(email)) throw new ApiError(422, 'VALIDATION', '请输入有效的邮箱地址。');
+  if (!/^\d{6}$/.test(code)) throw new ApiError(422, 'CODE_INVALID', '验证码不正确。');
   if (!cfg('email_login_enabled')) throw new ApiError(501, 'PROVIDER_NOT_CONFIGURED', '邮箱登录未开启。');
-  const email = String(ctx.body?.email || '').trim().toLowerCase();
-  const code = String(ctx.body?.code || '').trim();
-  const deviceId = ctx.body?.deviceId;
   const rec = q1('SELECT * FROM email_codes WHERE email = ?', email);
   if (!rec) throw new ApiError(422, 'CODE_INVALID', '请先获取验证码。');
   if (new Date(rec.expires_at) < new Date()) throw new ApiError(422, 'CODE_EXPIRED', '验证码已过期，请重新获取。');
@@ -512,7 +521,7 @@ route('POST', '/v1/auth/email/verify', (ctx) => {
   run('DELETE FROM email_codes WHERE email = ?', email); // single-use
   const userId = resolveIdentity({
     provider: 'email', subject: 'email:' + email, email, name: email.split('@')[0],
-    ctxUser: ctx.user, locale: ctx.body?.locale, deviceId, clientIp: ctx.clientIp,
+    ctxUser: ctx.user, locale, deviceId, clientIp: ctx.clientIp,
   });
   const token = createSession(userId, deviceId);
   const user = q1('SELECT id, is_guest, display_name FROM users WHERE id = ?', userId);
@@ -603,12 +612,19 @@ route('GET', '/v1/styles/([\\w-]+)', (ctx) => {
 route('POST', '/v1/assets/upload-intents', (ctx) => {
   const user = requireAccount(ctx);
   const { projectId, contentType, byteSize } = ctx.body || {};
+  const safeProjectId = optionalString(projectId, 'projectId', 100);
   if (!['image/jpeg'].includes(contentType)) throw new ApiError(422, 'ASSET_UNSUPPORTED', 'Upload a JPEG (the app converts for you).');
+  if (byteSize !== undefined && byteSize !== null && (!Number.isInteger(byteSize) || byteSize <= 0)) {
+    throw new ApiError(422, 'VALIDATION', 'byteSize must be a positive integer.');
+  }
   if (byteSize > MAX_UPLOAD) throw new ApiError(422, 'ASSET_UNSUPPORTED', 'Images up to 20 MB are supported.');
+  if (safeProjectId && !q1('SELECT id FROM projects WHERE id = ? AND user_id = ? AND deleted_at IS NULL', safeProjectId, user.id)) {
+    throw new ApiError(404, 'NOT_FOUND', 'Project not found.');
+  }
   const assetId = uuid(), t = now();
   run(`INSERT INTO assets (id, user_id, project_id, kind, status, storage_key, content_type, byte_size, created_at, updated_at)
        VALUES (?,?,?,?,?,?,?,?,?,?)`,
-    assetId, user.id, projectId || null, 'source', 'pending', `${assetId}.jpg`, contentType, byteSize || null, t, t);
+    assetId, user.id, safeProjectId || null, 'source', 'pending', `${assetId}.jpg`, contentType, byteSize || null, t, t);
   return { assetId, uploadUrl: `/v1/assets/${assetId}/upload`, expiresAt: new Date(Date.now() + 15 * 60000).toISOString() };
 });
 
@@ -716,11 +732,16 @@ route('GET', '/v1/assets/([\\w-]+)/file', (ctx) => {
 
 route('POST', '/v1/projects', (ctx) => {
   const user = requireAccount(ctx);
+  const title = optionalString(ctx.body?.title, 'title', 200) || null;
+  const sourceAssetId = optionalString(ctx.body?.sourceAssetId, 'sourceAssetId', 100) || null;
+  if (sourceAssetId && !q1(`SELECT id FROM assets WHERE id = ? AND user_id = ? AND status = 'ready' AND deleted_at IS NULL`, sourceAssetId, user.id)) {
+    throw new ApiError(409, 'ASSET_NOT_READY', 'Source photo is not ready.');
+  }
   const id = uuid(), t = now();
   run('INSERT INTO projects (id, user_id, title, source_asset_id, created_at, updated_at) VALUES (?,?,?,?,?,?)',
-    id, user.id, ctx.body?.title || null, ctx.body?.sourceAssetId || null, t, t);
-  if (ctx.body?.sourceAssetId) run('UPDATE assets SET project_id = ? WHERE id = ? AND user_id = ?', id, ctx.body.sourceAssetId, user.id);
-  return { id, title: ctx.body?.title || null, status: 'draft', createdAt: t };
+    id, user.id, title, sourceAssetId, t, t);
+  if (sourceAssetId) run('UPDATE assets SET project_id = ? WHERE id = ? AND user_id = ?', id, sourceAssetId, user.id);
+  return { id, title, status: 'draft', createdAt: t };
 });
 
 route('GET', '/v1/projects', (ctx) => {
@@ -759,7 +780,10 @@ route('PATCH', '/v1/projects/([\\w-]+)', (ctx) => {
   const user = requireAccount(ctx);
   const p = q1('SELECT * FROM projects WHERE id = ? AND user_id = ? AND deleted_at IS NULL', ctx.params[0], user.id);
   if (!p) throw new ApiError(404, 'NOT_FOUND', 'Project not found.');
-  if (ctx.body?.title !== undefined) run('UPDATE projects SET title = ?, updated_at = ? WHERE id = ?', ctx.body.title, now(), p.id);
+  if (ctx.body?.title !== undefined) {
+    const title = ctx.body.title === null ? null : optionalString(ctx.body.title, 'title', 200);
+    run('UPDATE projects SET title = ?, updated_at = ? WHERE id = ?', title, now(), p.id);
+  }
   return { ok: true };
 });
 
@@ -774,6 +798,9 @@ route('POST', '/v1/generation-jobs', (ctx) => {
   const user = requireAccount(ctx);
   const idemKey = ctx.req.headers['idempotency-key'];
   if (!idemKey) throw new ApiError(400, 'IDEMPOTENCY_KEY_REQUIRED', 'Idempotency-Key header is required.');
+  if (typeof idemKey !== 'string' || idemKey.length > 128 || !/^[A-Za-z0-9._:-]+$/.test(idemKey)) {
+    throw new ApiError(422, 'VALIDATION', 'Idempotency-Key is invalid.');
+  }
   const reqHash = createHash('sha256').update(JSON.stringify(ctx.body || {})).digest('hex');
   const prior = q1('SELECT * FROM idempotency_records WHERE user_id = ? AND idempotency_key = ?', user.id, idemKey);
   if (prior) {
@@ -788,7 +815,10 @@ route('POST', '/v1/generation-jobs', (ctx) => {
     throw new ApiError(503, 'GENERATION_UNAVAILABLE', 'Image generation is unavailable right now.');
   }
 
-  const { projectId, sourceAssetId, styleVersionId, parentJobId } = ctx.body || {};
+  const projectId = requiredString(ctx.body?.projectId, 'projectId', 100);
+  const sourceAssetId = requiredString(ctx.body?.sourceAssetId, 'sourceAssetId', 100);
+  const styleVersionId = requiredString(ctx.body?.styleVersionId, 'styleVersionId', 100);
+  const parentJobId = optionalString(ctx.body?.parentJobId, 'parentJobId', 100);
   // `controls: null` defeated the `= {}` default (null is a supplied value) and
   // reached `controls.strength` as a TypeError → 500 after the paywall checks.
   const controls = optionalObject(ctx.body?.controls, 'controls');
@@ -983,11 +1013,15 @@ export const PLAY_ORDER_RE = /^[A-Za-z0-9._-]{1,128}$/;
  * the token-keyed placeholder is dropped instead — leaving both would let the
  * same payment be counted twice.
  */
-export function adoptCanonicalTxId(platform, purchaseToken, orderId) {
+export function adoptCanonicalTxId(platform, purchaseToken, orderId, userId = null, productId = null) {
   if (!orderId || orderId === purchaseToken) return purchaseToken;
   return tx(() => {
-    const canonical = q1('SELECT id FROM purchases WHERE platform = ? AND external_transaction_id = ?', platform, orderId);
-    const pending = q1('SELECT id, status FROM purchases WHERE platform = ? AND external_transaction_id = ?', platform, purchaseToken);
+    const canonical = q1('SELECT * FROM purchases WHERE platform = ? AND external_transaction_id = ?', platform, orderId);
+    const pending = q1('SELECT * FROM purchases WHERE platform = ? AND external_transaction_id = ?', platform, purchaseToken);
+    if (userId && productId) {
+      assertPurchaseClaim(canonical, userId, productId);
+      assertPurchaseClaim(pending, userId, productId);
+    }
     if (canonical && pending && pending.id !== canonical.id) {
       if (pending.status === 'pending') run('DELETE FROM purchases WHERE id = ?', pending.id);
     } else if (!canonical && pending) {
@@ -997,8 +1031,18 @@ export function adoptCanonicalTxId(platform, purchaseToken, orderId) {
   });
 }
 
+/** A store transaction permanently belongs to its first account and product. */
+export function assertPurchaseClaim(purchase, userId, productId) {
+  if (purchase && (purchase.user_id !== userId || purchase.product_id !== productId)) {
+    throw new ApiError(409, 'PURCHASE_ALREADY_CLAIMED', 'This purchase is already linked to another account or product.');
+  }
+}
+
 /** Write the "we are about to ask the store about this" row. Idempotent. */
 function recordPendingPurchase(userId, product, platform, externalTxId) {
+  const existing = q1('SELECT * FROM purchases WHERE platform = ? AND external_transaction_id = ?', platform, externalTxId);
+  assertPurchaseClaim(existing, userId, product.id);
+  if (existing) return existing;
   const t = now();
   run(`INSERT OR IGNORE INTO purchases (id, user_id, product_id, platform, external_transaction_id, status, amount_minor, currency, purchased_at, expires_at, created_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
@@ -1015,8 +1059,11 @@ function markPurchase(platform, externalTxId, status) {
 // "I bought Creator" is never sufficient. Server is the source of truth.
 route('POST', '/v1/purchases/verify', async (ctx) => {
   const user = requireAccount(ctx);
-  const { productKey, purchaseToken, transactionId } = ctx.body || {};
-  const platform = ctx.body?.platform || 'web';
+  const productKey = requiredString(ctx.body?.productKey, 'productKey', 100);
+  const purchaseToken = optionalString(ctx.body?.purchaseToken, 'purchaseToken', 4096);
+  const transactionId = optionalString(ctx.body?.transactionId, 'transactionId', 128);
+  const platform = optionalString(ctx.body?.platform, 'platform', 20) || 'web';
+  if (!['google', 'apple', 'web'].includes(platform)) throw new ApiError(422, 'VALIDATION', 'Unsupported platform for verification.');
   const product = q1('SELECT * FROM products WHERE internal_key = ? AND active = 1', productKey);
   if (!product) throw new ApiError(404, 'NOT_FOUND', 'Unknown product.');
 
@@ -1069,7 +1116,7 @@ route('POST', '/v1/purchases/verify', async (ctx) => {
     // never vary it), and it rolls forward on each subscription renewal, which
     // is exactly the per-period key the ledger wants.
     if (r.orderId && PLAY_ORDER_RE.test(r.orderId)) {
-      externalTxId = adoptCanonicalTxId(platform, purchaseToken, r.orderId);
+      externalTxId = adoptCanonicalTxId(platform, purchaseToken, r.orderId, user.id, product.id);
     }
     if (r.acknowledgementState === 0) {
       // Play auto-refunds an unacknowledged purchase after 3 days.
@@ -1099,6 +1146,7 @@ route('POST', '/v1/purchases/verify', async (ctx) => {
   const t = now();
   const expires = expiresAt || (product.period ? new Date(Date.now() + (product.period === 'month' ? 30 : 365) * 86400000).toISOString() : null);
   const existing = q1('SELECT * FROM purchases WHERE platform = ? AND external_transaction_id = ?', platform, externalTxId);
+  assertPurchaseClaim(existing, user.id, product.id);
 
   // Idempotent on the external transaction — replays never double-grant. But an
   // auto-renewing Play subscription re-presents the SAME purchaseToken every

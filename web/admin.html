@@ -193,13 +193,16 @@
 <div id="toast"></div>
 <script>
 const $ = (id) => document.getElementById(id);
-let TOK = localStorage.getItem('mf.admin') || '';
+// Admin credentials are intentionally tab-scoped. Persistent localStorage made
+// a stolen/lost browser profile equivalent to a long-lived operator session.
+let TOK = sessionStorage.getItem('mf.admin') || '';
+localStorage.removeItem('mf.admin'); // clear the legacy persistent copy
 const TABS = ['overview','users','stats','db','config'];
 const tabState = { overview:false, users:false, stats:false, db:false, config:false };
 let statsDays = 30;
 const dbState = { tables:[], selected:null, offset:0, limit:50, total:0 };
 
-function saveTok(){ TOK = $('tok').value.trim(); localStorage.setItem('mf.admin', TOK); boot(); }
+function saveTok(){ TOK = $('tok').value.trim(); sessionStorage.setItem('mf.admin', TOK); boot(); }
 
 async function api(path, opts){
   opts = opts || {};
@@ -217,7 +220,7 @@ async function api(path, opts){
     throw new Error('网络错误：' + netErr.message);
   }
   if (r.status === 401) {
-    localStorage.removeItem('mf.admin');
+    sessionStorage.removeItem('mf.admin');
     TOK = '';
     $('app').style.display = 'none';
     $('login').style.display = 'block';

@@ -7,7 +7,7 @@
 // top nav, centred column, wrapped grids, centred dialogs). Chinese / English
 // copy via i18n.js. Free tier = N artworks after email registration; when they
 // are used up the paywall asks the user to email support (manual top-up).
-import { ensureSession, setToken, clearToken, get, post, put, del, assetUrl, apiUrl, track, token } from './api.js';
+import { ensureSession, ensureAssetToken, setToken, clearToken, get, post, put, del, assetUrl, apiUrl, track, token } from './api.js';
 import { deviceId, getAuthConfig, nativeSignIn, nativePurchase, isNative, platform, emailRequestCode, emailVerifyCode } from './native.js';
 import { t, getLang, setLang, initLang } from './i18n.js?v=20260907a';
 
@@ -154,6 +154,7 @@ async function loadCore() {
   const [discover, products, ent] = await Promise.all([
     get('/v1/discover'), get('/v1/products'),
     token ? get('/v1/entitlements/me').catch(() => NO_SESSION_ENT) : Promise.resolve(NO_SESSION_ENT),
+    token ? ensureAssetToken().catch(() => null) : Promise.resolve(null),
   ]);
   S.discover = discover; S.ent = ent; S.products = products.products;
 }
@@ -163,7 +164,11 @@ function allShelves() {
 }
 function allStyles() { return allShelves().flatMap(s => s.styles); }
 function findStyle(pred) { return allStyles().find(pred); }
-async function refreshEnt() { S.ent = token ? await get('/v1/entitlements/me') : NO_SESSION_ENT; }
+async function refreshEnt() {
+  if (!token) { S.ent = NO_SESSION_ENT; return; }
+  const [ent] = await Promise.all([get('/v1/entitlements/me'), ensureAssetToken()]);
+  S.ent = ent;
+}
 
 function unitsBadgeText() {
   if (!S.ent) return '…';
@@ -857,7 +862,11 @@ function openProjects() {
 }
 async function loadProjects() {
   if (!signedIn()) { S.projects = []; return; }
-  try { S.projects = (await get('/v1/projects')).projects; render(); } catch { }
+  try {
+    const [projects] = await Promise.all([get('/v1/projects'), ensureAssetToken()]);
+    S.projects = projects.projects;
+    render();
+  } catch { }
 }
 const STATUS_COLOR = { draft: ['#6E6B66', '#EFEDE6'], generating: ['#A36513', '#F6EBD9'], ready: ['#1C49D8', '#E8EDFF'], saved: ['#217A54', '#E3F0E9'] };
 function ProjectsScreen() {
@@ -902,7 +911,7 @@ async function openProject(p) {
     const active = detail.jobs.find(j => ['queued', 'running', 'quality_check', 'created'].includes(j.status));
     const done = detail.jobs.find(j => j.status === 'succeeded');
     const jobId = active?.id || done?.id || p.jobId;
-    const job = await get(`/v1/generation-jobs/${jobId}`);
+    const [job] = await Promise.all([get(`/v1/generation-jobs/${jobId}`), ensureAssetToken()]);
     S.job = job;
     S.draft.projectId = p.id;
     S.draft.assetId = p.sourceAssetId;

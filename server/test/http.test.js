@@ -5,26 +5,49 @@
 // something), F23 (typed request fields), F06 (control allow-list).
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import net from 'node:net';
 import { startServer, guestToken, memberToken } from './helpers.js';
 
-let srv, token, guest;
+let srv, token, token2, guest;
 before(async () => {
-  srv = await startServer({ ALLOW_TEST_LOGIN: 'true', ALLOW_GUEST: 'true' });
+  srv = await startServer({ ALLOW_TEST_LOGIN: 'true', ALLOW_GUEST: 'true', ALLOW_MOCK_PURCHASES: 'true' });
   token = await memberToken(srv.base);
+  token2 = await memberToken(srv.base, 'second-member@example.com');
   guest = await guestToken(srv.base);
 });
 after(async () => { if (srv) await srv.stop(); });
 
 const post = (p, body, headers = {}) => fetch(srv.base + p, {
   method: 'POST',
-  // The 413 path deliberately closes its socket after delivering the error.
-  // Keeping this stress-test client off undici's shared keep-alive pool avoids
-  // a race where the next assertion reuses that just-closed connection.
-  headers: { 'Content-Type': 'application/json', Connection: 'close', ...headers },
+  // The server drains bounded 413 bodies, so undici can safely manage normal
+  // keep-alive reuse instead of asking both ends to close at once.
+  headers: { 'Content-Type': 'application/json', ...headers },
   body: typeof body === 'string' ? body : JSON.stringify(body),
 });
 const auth = (h = {}) => ({ Authorization: `Bearer ${token}`, ...h });
 const guestAuth = (h = {}) => ({ Authorization: `Bearer ${guest}`, ...h });
+
+function rawHttp(payload) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: '127.0.0.1', port: srv.port });
+    let response = '';
+    socket.setEncoding('utf8');
+    socket.setTimeout(3000, () => socket.destroy(new Error('raw HTTP timeout')));
+    socket.on('connect', () => socket.end(payload));
+    socket.on('data', (chunk) => { response += chunk; });
+    socket.on('end', () => resolve(response));
+    socket.on('error', reject);
+  });
+}
+
+describe('malformed request metadata cannot terminate the server', () => {
+  test('an invalid Host receives 400 and the process remains healthy', async () => {
+    const response = await rawHttp('GET /v1/health HTTP/1.1\r\nHost: [\r\nConnection: close\r\n\r\n');
+    assert.match(response, /^HTTP\/1\.1 400 /);
+    assert.equal(srv.child.exitCode, null);
+    assert.equal((await fetch(srv.base + '/v1/health')).status, 200);
+  });
+});
 
 describe('oversized bodies get a real 413, not a dropped socket (F25/F27)', () => {
   const big = (n) => JSON.stringify({ events: [{ name: 'x', props: { a: 'A'.repeat(n) } }] });
@@ -38,7 +61,7 @@ describe('oversized bodies get a real 413, not a dropped socket (F25/F27)', () =
     assert.equal(body.error.code, 'ASSET_UNSUPPORTED');
     assert.match(body.error.message, /too large/i);
     assert.ok(body.error.requestId, 'the error still carries a requestId');
-    assert.equal(res.headers.get('connection'), 'close');
+    assert.notEqual(res.headers.get('connection'), 'close');
   });
 
   test('the same is true with no content-length (chunked)', async () => {
@@ -220,6 +243,21 @@ describe('request fields are typed (F23)', () => {
     assert.equal(res.status, 422);
   });
 
+  test('email verification validates deviceId before touching a code record', async () => {
+    const res = await post('/v1/auth/email/verify', { email: 'typed@example.com', code: '123456', deviceId: {} });
+    assert.equal(res.status, 422);
+    assert.equal((await res.json()).error.code, 'VALIDATION');
+  });
+
+  test('project, upload and generation identifiers reject JSON objects', async () => {
+    let res = await post('/v1/projects', { title: {} }, auth());
+    assert.equal(res.status, 422);
+    res = await post('/v1/assets/upload-intents', { contentType: 'image/jpeg', byteSize: {} }, auth());
+    assert.equal(res.status, 422);
+    res = await post('/v1/generation-jobs', { projectId: {}, sourceAssetId: 'x', styleVersionId: 'x' }, auth({ 'Idempotency-Key': 'typed-ids' }));
+    assert.equal(res.status, 422);
+  });
+
   test('a valid guest exchange still works', async () => {
     const res = await post('/v1/auth/exchange', { provider: 'guest', deviceId: 'dev-typed', locale: 'en-GB' });
     assert.equal(res.status, 200);
@@ -263,6 +301,15 @@ describe('the public error contract is unchanged', () => {
     assert.equal(res.headers.get('access-control-allow-origin'), '*');
   });
 
+  test('browser and API security headers are emitted by the app itself', async () => {
+    const res = await fetch(srv.base + '/v1/health');
+    assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(res.headers.get('x-frame-options'), 'DENY');
+    assert.equal(res.headers.get('referrer-policy'), 'no-referrer');
+    assert.match(res.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+    assert.equal(res.headers.get('cache-control'), 'no-store');
+  });
+
   test('auth/config no longer advertises billing.mock to the public', async () => {
     const res = await fetch(srv.base + '/v1/auth/config');
     const b = await res.json();
@@ -275,5 +322,24 @@ describe('the public error contract is unchanged', () => {
     assert.equal((await fetch(srv.base + '/v1/entitlements/me', { headers })).status, 200);
     assert.equal((await fetch(srv.base + '/v1/auth/session', { method: 'DELETE', headers })).status, 200);
     assert.equal((await fetch(srv.base + '/v1/entitlements/me', { headers })).status, 401);
+  });
+});
+
+describe('purchase receipts are permanently account-bound', () => {
+  test('a second account cannot replay the same verified transaction', async () => {
+    const transactionId = `claim-${Date.now()}`;
+    const operator = { 'X-Admin-Token': 'test-admin-token' };
+    const first = await post('/v1/purchases/verify', { productKey: 'pack_10', platform: 'web', transactionId }, auth(operator));
+    assert.equal(first.status, 200);
+
+    const before = await fetch(srv.base + '/v1/entitlements/me', { headers: { Authorization: `Bearer ${token2}` } }).then(r => r.json());
+    const replay = await post('/v1/purchases/verify', { productKey: 'pack_10', platform: 'web', transactionId }, {
+      Authorization: `Bearer ${token2}`,
+      ...operator,
+    });
+    assert.equal(replay.status, 409);
+    assert.equal((await replay.json()).error.code, 'PURCHASE_ALREADY_CLAIMED');
+    const afterReplay = await fetch(srv.base + '/v1/entitlements/me', { headers: { Authorization: `Bearer ${token2}` } }).then(r => r.json());
+    assert.equal(afterReplay.availableUnits, before.availableUnits);
   });
 });
