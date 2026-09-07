@@ -4,6 +4,8 @@ android/app/build/
 android/build/
 android/.gradle/
 .env
+.env.bak-*
+.env.pre-*
 server.log
 *.log
 .skills/
