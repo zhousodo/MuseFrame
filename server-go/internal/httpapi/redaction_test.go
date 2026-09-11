@@ -149,12 +149,14 @@ func TestAdminConfigSecretWriteRejected(t *testing.T) {
 	}
 }
 
-// 路由总数：公开 30 + 管理 20 = 50（另加一条不在公开契约里的 /v1/ready）。
+// 路由总数：公开 30 + 管理 25 = 55（另加一条不在公开契约里的 /v1/ready）。
+// 管理路由 2026-09-12 从 20 加到 25：PATCH styles-admin/{id}、
+// POST users/{id}/status、GET user-facts、GET audit、GET feedback-reasons。
 func TestRouteCount(t *testing.T) {
 	e := newTestEnv(t)
 	pub, adm := e.app.RouteCount()
-	if adm != 20 {
-		t.Fatalf("管理路由应为 20 条，实际 %d", adm)
+	if adm != 25 {
+		t.Fatalf("管理路由应为 25 条，实际 %d", adm)
 	}
 	if pub != 31 {
 		t.Fatalf("公开路由应为 30 条契约路由 + 1 条内部 /v1/ready = 31，实际 %d", pub)
@@ -216,9 +218,12 @@ func TestAdminConfigExposesDeployLevelReadOnly(t *testing.T) {
 	for _, s := range out.Settings {
 		byKey[s.Key] = s
 	}
+	// 🔴 session_ttl / event_retention / idempotency_retention / max_job_attempts
+	//    这四行 2026-09-12 已从部署级只读**升格成注册表热键**，所以它们不再出现在
+	//    这份清单里 —— 同一个键同时有一个可改行和一个只读行，是最容易让运营
+	//    改错地方的布局（见 deployOnlySettings 的注释）。
 	want := []string{
-		"deploy_image_provider", "deploy_session_ttl_days", "deploy_event_retention_days",
-		"deploy_idempotency_retention_days", "deploy_max_job_attempts",
+		"deploy_image_provider",
 		"deploy_shutdown_grace_seconds",
 		"deploy_db_pool_max_conns", "deploy_trusted_proxy", "deploy_trust_cf_connecting_ip",
 		"deploy_play_acknowledge", "deploy_allow_test_login",

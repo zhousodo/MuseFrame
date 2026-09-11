@@ -67,8 +67,11 @@ func TestPickSizeAndQuality(t *testing.T) {
 		{"original", 1000, 2000, "1024x1536"},
 		{"original", 1000, 1000, "1024x1024"},
 	}
+	// 默认配置下 PickSize 必须逐字复现 2026-09-12 之前那三个写死的字符串 ——
+	// 把尺寸做成可配项不能顺手改掉默认输出（那等于给所有人换了一次分辨率与单价）。
+	def := New(cfgstore.NewForTest(nil), "remote", "k")
 	for _, c := range cases {
-		if got := PickSize(c.ratio, c.w, c.h); got != c.want {
+		if got := def.PickSize(c.ratio, c.w, c.h); got != c.want {
 			t.Errorf("PickSize(%s,%d,%d)=%s，期望 %s", c.ratio, c.w, c.h, got, c.want)
 		}
 	}

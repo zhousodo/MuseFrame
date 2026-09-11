@@ -238,16 +238,34 @@ func (a *Adapter) ModelFor(tier string) string {
 }
 
 // QualityFor 返回某档位的 images/edits quality 参数。
+// 白名单校验与脏值回落统一由 cfgstore.EnumString 负责（原来这里有一份独立的
+// switch 白名单，和注册表里的白名单是两个真相源，改一处会漏另一处）。
 func (a *Adapter) QualityFor(tier string) string {
 	key, fallback := "image_quality_standard", "medium"
 	if tier == "high" {
 		key, fallback = "image_quality_high", "high"
 	}
-	switch raw := strings.ToLower(strings.TrimSpace(a.cfg.String(key))); raw {
-	case "low", "medium", "high", "auto":
-		return raw
+	if v := a.cfg.EnumString(key); v != "" {
+		return v
 	}
 	return fallback
+}
+
+// BreakerStreak / BreakerCooldown 是熔断阈值与冷却，后台可热改。
+// cfg 缺席（单测里的裸 Adapter）时回落到包级默认常量。
+func (a *Adapter) BreakerStreak() int {
+	if a.cfg == nil {
+		return SupplyBreakerStreak
+	}
+	return a.cfg.BreakerStreak()
+}
+
+// BreakerCooldown 见 BreakerStreak。
+func (a *Adapter) BreakerCooldown() time.Duration {
+	if a.cfg == nil {
+		return SupplyBreakerCooldown
+	}
+	return a.cfg.BreakerCooldown()
 }
 
 // Enabled 判断远程模式是否可用（密钥与地址缺一不可）。
@@ -280,20 +298,49 @@ func (a *Adapter) Status() Status {
 	return Status{Available: true, Provider: a.providerName, Mode: "remote", Missing: []string{}}
 }
 
-// PickSize 按请求比例 / 源图朝向选供应商尺寸网格。
-func PickSize(aspectRatio string, srcW, srcH int) string {
+// Orientation 按请求比例 / 源图朝向判出三种朝向之一：square / landscape / portrait。
+//
+// 🔴 这一层是**纯函数**，刻意和「每种朝向发什么 size 给上游」分开：
+// 朝向判据是产品语义（4:5 就是竖图），而 size 字符串是上游 API 的契约，
+// 后者 2026-09-12 起是后台可热改的运营项（image_size_*）。
+// 混在一个函数里的时候，想给横图降一档分辨率就得改代码 + 发版。
+func Orientation(aspectRatio string, srcW, srcH int) string {
 	switch aspectRatio {
 	case "1:1":
-		return "1024x1024"
+		return "square"
 	case "16:9":
-		return "1536x1024"
+		return "landscape"
 	case "4:5":
-		return "1024x1536"
+		return "portrait"
 	}
 	if float64(srcW) > float64(srcH)*1.15 {
-		return "1536x1024"
+		return "landscape"
 	}
 	if float64(srcH) > float64(srcW)*1.15 {
+		return "portrait"
+	}
+	return "square"
+}
+
+// PickSize 返回这次请求要发给上游的 size 参数。
+// 三种朝向各读一个注册表热键（白名单校验 + 脏值回落见 cfgstore.EnumString）。
+func (a *Adapter) PickSize(aspectRatio string, srcW, srcH int) string {
+	o := Orientation(aspectRatio, srcW, srcH)
+	if a.cfg == nil {
+		return defaultSizeFor(o)
+	}
+	if s := a.cfg.ImageSizeFor(o); s != "" {
+		return s
+	}
+	return defaultSizeFor(o)
+}
+
+// defaultSizeFor 是 cfg 缺席（单测里的裸 Adapter）时的兜底，与注册表默认值一致。
+func defaultSizeFor(orientation string) string {
+	switch orientation {
+	case "landscape":
+		return "1536x1024"
+	case "portrait":
 		return "1024x1536"
 	}
 	return "1024x1024"

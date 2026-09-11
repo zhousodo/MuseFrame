@@ -71,6 +71,23 @@ type StyleCard struct {
 
 const estimatedTimeLabel = "20–45 s"
 
+// coverURLFor 回答「这个风格的封面文件存在吗」，存在则返回它的相对 URL。
+//
+// 🔴 封面**不是数据库列**，而是 web/covers/<internal_key>.jpg 这个文件。
+// 这条判据原来只长在 styleCard 里，于是后台完全没法回答「这个风格有没有封面」——
+// 而「新风格上线了但卡片是个灰色渐变」正是靠这个文件是否存在决定的。
+// 抽成方法之后目录与后台用的是同一条判据，不会出现「后台说有、App 里没有」。
+func (a *App) coverURLFor(internalKey string) string {
+	if a.cfg.WebDir == "" {
+		return ""
+	}
+	f := filepath.Join(a.cfg.WebDir, "covers", internalKey+".jpg")
+	if fi, err := os.Stat(f); err == nil && fi.Mode().IsRegular() {
+		return "/covers/" + internalKey + ".jpg"
+	}
+	return ""
+}
+
 func (a *App) styleCard(r store.StyleRow, plan string) (StyleCard, error) {
 	spec, err := parseSpec(r.Spec)
 	if err != nil {
@@ -84,12 +101,8 @@ func (a *App) styleCard(r store.StyleRow, plan string) (StyleCard, error) {
 		tags = []string{}
 	}
 	var coverURL *string
-	if a.cfg.WebDir != "" {
-		f := filepath.Join(a.cfg.WebDir, "covers", r.InternalKey+".jpg")
-		if fi, err := os.Stat(f); err == nil && fi.Mode().IsRegular() {
-			u := "/covers/" + r.InternalKey + ".jpg"
-			coverURL = &u
-		}
+	if u := a.coverURLFor(r.InternalKey); u != "" {
+		coverURL = &u
 	}
 	return StyleCard{
 		StyleID: r.StyleID, StyleVersionID: r.VersionID, Name: r.PublicName,

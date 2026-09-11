@@ -37,8 +37,14 @@ func (a *App) grantPurchaseUnits(ctx context.Context, q store.Queryer, userID st
 	}
 	unitExpiry := expires
 	if p.ProductType == "pack" {
-		t := a.now().Add(90 * 24 * time.Hour)
-		unitExpiry = &t
+		// 🔴 此前这里是写死的 `90 * 24 * time.Hour`，而 App 的加购卡片文案写的是
+		//    「never expire」（web/app.js 的 '{n} artworks · {each} each · never expire'）。
+		//    两边对不上：用户买了 100 张，90 天后发现少了一批，而界面从没提过有效期。
+		//    现在读注册表热键 pack_credit_expiry_days（0 = 永不过期），运营可以二选一：
+		//    设 0 让后端对齐文案，或者保留 90 天并改 App 文案。
+		//    nil（永不过期）和 now（发出来就是死的）是两件完全不同的事，
+		//    所以 0 必须走 CreditExpiry 里那条返回 nil 的分支。
+		unitExpiry = a.rt.CreditExpiry("pack_credit_expiry_days", a.now())
 	}
 	_, err := ledger.Grant(ctx, q, a.newID, userID, p.GrantedUnits, "purchase", &purchaseID, unitExpiry, referenceID, a.now())
 	return err

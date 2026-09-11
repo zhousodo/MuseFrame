@@ -82,7 +82,7 @@ func (a *Adapter) CreateEdit(ctx context.Context, req EditRequest) (*EditResult,
 	}
 
 	model := a.ModelFor(tier)
-	size := PickSize(req.AspectRatio, req.SourceW, req.SourceH)
+	size := a.PickSize(req.AspectRatio, req.SourceW, req.SourceH)
 	started := a.now()
 
 	var buf bytes.Buffer

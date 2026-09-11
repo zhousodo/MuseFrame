@@ -84,18 +84,22 @@ type AdminUserRow struct {
 	ID          string  `json:"id"`
 	DisplayName *string `json:"displayName"`
 	IsGuest     bool    `json:"isGuest"`
-	CreatedAt   string  `json:"createdAt"`
-	Email       *string `json:"email"`
-	Providers   *string `json:"providers"`
-	Units       int     `json:"units"`
-	Jobs        int     `json:"jobs"`
+	// Status 是 users.status。active 之外的一律被 authenticate() 当成未登录
+	// （2026-09-12 起），所以后台必须看得见它 —— 「这个用户是不是被封了」
+	// 此前唯一的查法是去数据库浏览器里翻 users 表。
+	Status    string  `json:"status"`
+	CreatedAt string  `json:"createdAt"`
+	Email     *string `json:"email"`
+	Providers *string `json:"providers"`
+	Units     int     `json:"units"`
+	Jobs      int     `json:"jobs"`
 }
 
 // ListAdminUsers 用户列表。
 // 🔴 LIKE 必须带 ESCAPE 转义：漏掉就是 SQL 通配注入（一个 % 能把全表拉出来）。
 func ListAdminUsers(ctx context.Context, q Queryer, limit int, search string) ([]AdminUserRow, error) {
 	base := `
-		SELECT u.id, substr(u.id,1,8), u.display_name, u.is_guest, u.created_at,
+		SELECT u.id, substr(u.id,1,8), u.display_name, u.is_guest, u.status, u.created_at,
 		       (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=u.id AND ai.email_normalized IS NOT NULL LIMIT 1),
 		       (SELECT string_agg(DISTINCT ai.provider, ',') FROM auth_identities ai WHERE ai.user_id=u.id),
 		       (SELECT COALESCE(SUM(l.units),0) FROM credit_ledger l WHERE l.user_id=u.id),
@@ -126,7 +130,8 @@ func ListAdminUsers(ctx context.Context, q Queryer, limit int, search string) ([
 	for rows.Next() {
 		var r AdminUserRow
 		var t time.Time
-		if err := rows.Scan(&r.UserID, &r.ID, &r.DisplayName, &r.IsGuest, &t, &r.Email, &r.Providers, &r.Units, &r.Jobs); err != nil {
+		if err := rows.Scan(&r.UserID, &r.ID, &r.DisplayName, &r.IsGuest, &r.Status, &t,
+			&r.Email, &r.Providers, &r.Units, &r.Jobs); err != nil {
 			return nil, err
 		}
 		r.CreatedAt = ISO(t)

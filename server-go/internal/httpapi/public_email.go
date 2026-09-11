@@ -209,7 +209,7 @@ func (a *App) hEmailVerify(c *Ctx) (any, error) {
 		return nil, err
 	}
 	token := randomToken()
-	if err := store.CreateSession(ctx, a.st.Q(), token, userID, deviceID, now, a.cfg.SessionTTLDays); err != nil {
+	if err := store.CreateSession(ctx, a.st.Q(), token, userID, deviceID, now, a.rt.SessionTTLDays()); err != nil {
 		return nil, err
 	}
 	u, err := store.GetUserAny(ctx, a.st.Q(), userID)

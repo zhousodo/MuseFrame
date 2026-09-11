@@ -99,16 +99,31 @@ func TestSecretFromEnvOnly(t *testing.T) {
 // 2026-09-12（第二批）：27 → 30，新增 email_code_max_attempts、
 // email_code_max_issues_per_window（原先是 public_email.go 里两个裸 5）、
 // max_user_storage_bytes（原先只活在 env、改一次要重启容器）。
+// 2026-09-12（第三批，产品特有可运营项）：30 → 41，新增 11 项 ——
+//
+//	image_size_square / image_size_landscape / image_size_portrait
+//	  （原先是 PickSize() 里三个写死的字符串，直接决定分辨率与上游单价）
+//	max_job_attempts / provider_breaker_streak / provider_breaker_cooldown_seconds
+//	  （前者原先是 env，后两者原先是 health.go 里两个常量）
+//	pack_credit_expiry_days / free_credit_expiry_days
+//	  （前者原先是 public_purchases.go 里写死的 90 天，且与 App 文案矛盾）
+//	event_retention_days / idempotency_retention_days / session_ttl_days
+//	  （原先是 env + 部署级只读行）
+//
 // 密钥项仍必须恰为 2 个 —— 这条一旦变大就说明有人往注册表里加了新密钥，
 // 而注册表是后台可写面，新密钥必须先确认 Secret:true。
 func TestRegistryHasExpectedKeys(t *testing.T) {
-	const wantKeys = 30
+	const wantKeys = 41
 	if len(Registry) != wantKeys {
 		t.Fatalf("注册表应有 %d 个键，实际 %d（Node 版那 26 个必须一个不少）", wantKeys, len(Registry))
 	}
 	for _, k := range []string{"free_units", "support_email", "support_qq_group",
 		"smtp_host", "smtp_from", "email_login_enabled", "email_code_ttl_seconds",
-		"email_code_max_attempts", "email_code_max_issues_per_window", "max_user_storage_bytes"} {
+		"email_code_max_attempts", "email_code_max_issues_per_window", "max_user_storage_bytes",
+		"image_size_square", "image_size_landscape", "image_size_portrait",
+		"max_job_attempts", "provider_breaker_streak", "provider_breaker_cooldown_seconds",
+		"pack_credit_expiry_days", "free_credit_expiry_days",
+		"event_retention_days", "idempotency_retention_days", "session_ttl_days"} {
 		if _, ok := byKey[k]; !ok {
 			t.Errorf("注册表缺键 %s", k)
 		}

@@ -20,10 +20,12 @@ func (a *App) adminConfigResult(c *Ctx) (AdminConfigResult, error) {
 		cfgstore.Setting{
 			Key: "allow_mock_purchases", Value: a.cfg.AllowMockPurchases, Source: "env", Type: "boolean",
 			Description: "演示购买开关（生产环境必须为 false）", RequiresRestart: true, ReadOnly: true,
+			Group: cfgstore.GroupAuth,
 		},
 		cfgstore.Setting{
 			Key: "play_billing_configured", Value: a.cfg.GoogleServiceAccountJSON != "", Source: "env", Type: "boolean",
 			Description: "Google Play 收据校验服务账号是否已配置", RequiresRestart: true, ReadOnly: true,
+			Group: cfgstore.GroupAuth,
 		},
 	)
 	settings = append(settings, a.deployOnlySettings()...)
@@ -57,7 +59,7 @@ func (a *App) deployOnlySettings() []cfgstore.Setting {
 	ro := func(key string, value any, desc string) cfgstore.Setting {
 		return cfgstore.Setting{
 			Key: key, Value: value, Source: "env", Description: desc,
-			RequiresRestart: true, ReadOnly: true,
+			RequiresRestart: true, ReadOnly: true, Group: cfgstore.GroupDeploy,
 		}
 	}
 	// 🔴 刻意不叫 str/num：本包已有一个包级 str()（见 hAdminConfigPut），
@@ -81,17 +83,10 @@ func (a *App) deployOnlySettings() []cfgstore.Setting {
 	out := []cfgstore.Setting{
 		roText("deploy_image_provider", a.cfg.ImageProvider,
 			"【部署级】图像引擎：remote = 调上游模型，local = 本地像素引擎（IMAGE_PROVIDER）"),
-		roNum("deploy_session_ttl_days", a.cfg.SessionTTLDays,
-			"【部署级】登录会话有效期天数（SESSION_TTL_DAYS）"),
-		roNum("deploy_event_retention_days", a.cfg.EventRetentionDays,
-			"【部署级】events 表保留天数，超期由后台任务删除（EVENT_RETENTION_DAYS）"),
-		roNum("deploy_idempotency_retention_days", a.cfg.IdempotencyDays,
-			"【部署级】幂等记录保留天数（IDEMPOTENCY_RETENTION_DAYS）"),
-		roNum("deploy_max_job_attempts", a.cfg.MaxJobAttempts,
-			"【部署级】单个生成任务最多重试几次（MAX_JOB_ATTEMPTS）"),
-		// 注：max_user_storage_bytes 2026-09-12 已从部署级只读行**升级成注册表热键**
-		// （见 cfgstore.Registry），所以这里不再重复列它 —— 同一个键同时出现一个可改行
-		// 和一个只读行，是最容易让运营改错地方的布局。
+		// 注：session_ttl_days / event_retention_days / idempotency_retention_days /
+		// max_job_attempts / max_user_storage_bytes 这五行 2026-09-12 已从部署级只读
+		// **升级成注册表热键**（见 cfgstore.Registry），所以这里不再列它们 ——
+		// 同一个键同时出现一个可改行和一个只读行，是最容易让运营改错地方的布局。
 		roNum("deploy_shutdown_grace_seconds", a.cfg.ShutdownGraceS,
 			"【部署级】收到 SIGTERM 后的排空窗口（秒，SHUTDOWN_GRACE_SECONDS）"),
 		roNum("deploy_db_pool_max_conns", int(a.cfg.PoolMaxConns),
@@ -122,6 +117,7 @@ func (a *App) deployOnlySettings() []cfgstore.Setting {
 		out = append(out, cfgstore.Setting{
 			Key: "leftover_secret_rows_in_db", Value: strings.Join(rows, ","),
 			Source: "db", Type: string(cfgstore.KindString), ReadOnly: true, RequiresRestart: false,
+			Group: cfgstore.GroupDeploy,
 			Description: "🔴 app_config 表里还有这些密钥键的遗留明文行（已不生效，但仍随备份落盘）。" +
 				"请直接在库里 DELETE 掉它们。正常情况下这一项应当不出现。",
 		})
@@ -150,17 +146,27 @@ func (a *App) hAdminConfigPut(c *Ctx) (any, error) {
 	if !present {
 		value = nil
 	}
+	// 旧值要在写之前取：审计里「从 3 改成 8」比「改成了 8」有用得多，
+	// 而写完之后就再也拿不到旧值了。
+	before := a.rt.SettingValue(key)
 	if err := a.rt.Set(c.R.Context(), key, value); err != nil {
 		if errors.Is(err, cfgstore.ErrSecretNotWritable) {
 			return nil, apierr.New(422, apierr.CodeValidation, err.Error())
 		}
 		return nil, apierr.New(422, apierr.CodeValidation, err.Error())
 	}
+	// 🔴 审计里只可能出现非密钥键：secret 键在上面那一步已经被
+	//    ErrSecretNotWritable 挡成 422 并 return 了，走到这里的 key 一定不是密钥。
+	//    （如果哪天放开了 secret 写入，这条审计会变成一个明文密钥的落盘点。）
+	logged := a.audit(c, "config.set", map[string]any{
+		"key": key, "from": before, "to": a.rt.SettingValue(key), "cleared": value == nil,
+	})
 	res, err := a.adminConfigResult(c)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"ok": true, "settings": res.Settings, "generation": res.Generation,
+	return map[string]any{"ok": true, "auditLogged": logged,
+		"settings": res.Settings, "generation": res.Generation,
 		"abuse": res.Abuse, "runtime": res.Runtime}, nil
 }
 
@@ -201,86 +207,120 @@ func (a *App) hAdminProducts(c *Ctx) (any, error) {
 	return map[string]any{"products": out}, nil
 }
 
-// hAdminPatchProduct 改价 / 上下架。
-// 🔴 priceMinor / priceCnyMinor 必须是**非负整数**（minor 单位）。
+// MaxPriceMinor 是价格上限（minor 单位）。
+//
+// 🔴 必须有上限。原来只校验 >= 0，于是「29.99 美元」手滑打成 299900000 会被
+// 原样收下并立刻出现在 /v1/products 里。Google Play 那一侧的真实价格是商店配的，
+// 所以这个数字不会真的收到钱 —— 它只会让 App 的价目表显示一个荒谬的金额，
+// 而最容易被误当成「后端坏了」。上限取 1000 万 minor（10 万美元 / 10 万元）。
+const MaxPriceMinor int64 = 10_000_000
+
+// MaxGrantedUnits 是单个商品发放张数上限。同理：手滑多打几个 0 等于白送。
+const MaxGrantedUnits int64 = 100_000
+
+// hAdminPatchProduct 改商品：名称 / 张数 / 美元价 / 人民币价 / 商店 SKU / 上下架。
+//
+// 🔴 priceMinor / priceCnyMinor 是**非负整数的 minor 单位**（美分 / 人民币分），
+// 且 currency 列只描述 price_minor —— price_cny_minor 的币种是隐含的 CNY，
+// 没有对应列。任何「按 currency 换算」的写法都会把人民币价当成美元算。
 func (a *App) hAdminPatchProduct(c *Ctx) (any, error) {
 	if err := a.requireAdmin(c); err != nil {
 		return nil, err
 	}
 	ctx := c.R.Context()
 	key := c.Params[0]
-	if _, err := store.GetProductByKey(ctx, a.st.Q(), key); err != nil {
+	before, err := store.GetProductByKey(ctx, a.st.Q(), key)
+	if err != nil {
 		if store.IsNoRows(err) {
 			return nil, notFound("Unknown product.")
 		}
 		return nil, err
 	}
-	var grantedUnits *int
-	if raw, ok := c.Body["grantedUnits"]; ok && raw != nil {
-		n, _, err := optionalInt(c.Body, "grantedUnits")
-		if err != nil || n == nil || *n < 0 {
-			return nil, apierr.New(422, apierr.CodeValidation, "grantedUnits must be an integer >= 0.")
-		}
+
+	var u store.ProductUpdate
+	if u.DisplayName, err = adminNonEmptyText(c.Body, "displayName", 80); err != nil {
+		return nil, err
+	}
+	if n, err := adminRangedInt(c.Body, "grantedUnits", 0, MaxGrantedUnits); err != nil {
+		return nil, err
+	} else if n != nil {
 		v := int(*n)
-		grantedUnits = &v
+		u.GrantedUnits = &v
 	}
-	var priceMinor *int64
-	if raw, ok := c.Body["priceMinor"]; ok && raw != nil {
-		n, _, err := optionalInt(c.Body, "priceMinor")
-		if err != nil || n == nil || *n < 0 {
-			return nil, apierr.New(422, apierr.CodeValidation, "priceMinor must be an integer >= 0.")
-		}
-		priceMinor = n
+	if u.PriceMinor, err = adminRangedInt(c.Body, "priceMinor", 0, MaxPriceMinor); err != nil {
+		return nil, err
 	}
-	setCny := false
-	var priceCny *int64
+	// 🔴 priceCnyMinor 的 null 是**有意义**的值（= 不卖人民币），所以它必须走
+	//    (set, value) 二元组而不能只看指针。后果不对称得厉害：清成 null 会让这个
+	//    商品对**所有中文用户彻底消失**（App 的 offeredProducts() 过滤掉
+	//    priceCnyMinor == null 的行），而不是「显示美元价」。
 	if raw, ok := c.Body["priceCnyMinor"]; ok {
-		setCny = true
+		u.SetCny = true
 		if raw != nil {
-			n, _, err := optionalInt(c.Body, "priceCnyMinor")
-			if err != nil || n == nil || *n < 0 {
-				return nil, apierr.New(422, apierr.CodeValidation, "priceCnyMinor must be an integer >= 0 or null.")
+			n, err := adminRangedInt(c.Body, "priceCnyMinor", 0, MaxPriceMinor)
+			if err != nil {
+				return nil, err
 			}
-			priceCny = n
+			u.PriceCnyMinor = n
 		}
 	}
-	active, err := optionalBool(c.Body, "active")
-	if err != nil {
+	// 商店 SKU 映射：Play / App Store 后台配好的商品 id，App 拿它去发起内购。
+	// 空串与 null 都按「清空」处理（见 adminNullableText 的注释）。
+	if u.SetGoogleSKU, u.GoogleSKU, err = adminNullableText(c.Body, "googleProductId", 120); err != nil {
+		return nil, err
+	}
+	if u.SetAppleSKU, u.AppleSKU, err = adminNullableText(c.Body, "appleProductId", 120); err != nil {
+		return nil, err
+	}
+	if u.Active, err = optionalBool(c.Body, "active"); err != nil {
 		return nil, apierr.New(422, apierr.CodeValidation, "active must be a boolean.")
 	}
-	if err := store.UpdateProductFields(ctx, a.st.Q(), key, grantedUnits, priceMinor, setCny, priceCny, active); err != nil {
+	if err := store.UpdateProductFields(ctx, a.st, key, u); err != nil {
 		return nil, err
 	}
-	return map[string]any{"ok": true}, nil
+	logged := a.audit(c, "product.update", productAuditProps(key, before, u))
+	return map[string]any{"ok": true, "auditLogged": logged}, nil
 }
 
-// AdminStyleItem 是 GET /v1/admin/styles-admin 的一行（含未发布风格）。
-type AdminStyleItem struct {
-	ID          string `json:"id"`
-	InternalKey string `json:"internalKey"`
-	Name        string `json:"name"`
-	Theme       string `json:"theme"`
-	Status      string `json:"status"`
-	Premium     bool   `json:"premium"`
-	Jobs        int    `json:"jobs"`
+// productAuditProps 记下这次改了哪些字段、从什么改成什么。
+// 🔴 价格类动作必须同时记旧值：「谁把 pack_100 从 29.99 改成 2.99」是运营事故
+// 复盘的第一个问题，而只记新值的审计回答不了它。
+func productAuditProps(key string, before *store.Product, u store.ProductUpdate) map[string]any {
+	p := map[string]any{"productKey": key}
+	if u.DisplayName != nil {
+		p["displayName"] = *u.DisplayName
+		p["displayNameBefore"] = before.DisplayName
+	}
+	if u.GrantedUnits != nil {
+		p["grantedUnits"] = *u.GrantedUnits
+		p["grantedUnitsBefore"] = before.GrantedUnits
+	}
+	if u.PriceMinor != nil {
+		p["priceMinor"] = *u.PriceMinor
+		p["priceMinorBefore"] = before.PriceMinor
+	}
+	if u.SetCny {
+		p["priceCnyMinor"] = u.PriceCnyMinor
+		p["priceCnyMinorBefore"] = before.PriceCnyMinor
+	}
+	if u.SetGoogleSKU {
+		p["googleProductId"] = u.GoogleSKU
+	}
+	if u.SetAppleSKU {
+		p["appleProductId"] = u.AppleSKU
+	}
+	if u.Active != nil {
+		p["active"] = *u.Active
+		p["activeBefore"] = before.Active
+	}
+	return p
 }
 
-func (a *App) hAdminStyles(c *Ctx) (any, error) {
-	if err := a.requireAdmin(c); err != nil {
-		return nil, err
-	}
-	rows, err := store.ListAdminStyles(c.R.Context(), a.st.Q())
-	if err != nil {
-		return nil, err
-	}
-	out := make([]AdminStyleItem, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, AdminStyleItem(r))
-	}
-	return map[string]any{"styles": out}, nil
-}
-
-// hAdminStyleStatus 是紧急下架 / 重新上架。
+// hAdminStyleStatus 是紧急下架 / 重新上架的**单一动作**入口。
+//
+// 它和 PATCH /v1/admin/styles-admin/{id} 的 status 字段写的是同一列，刻意保留：
+// 紧急下架要的是一个按一下就完事的按钮，而不是「在一张有 7 个输入框的表单里
+// 把 status 改掉再点保存」——后者在着急的时候会顺手把别的字段一起带上。
 // 目录查询已经过滤 status='published'，所以 disabled 会立刻在所有地方隐藏该风格。
 func (a *App) hAdminStyleStatus(c *Ctx) (any, error) {
 	if err := a.requireAdmin(c); err != nil {
@@ -297,5 +337,6 @@ func (a *App) hAdminStyleStatus(c *Ctx) (any, error) {
 	if !ok {
 		return nil, notFound("Unknown style.")
 	}
-	return map[string]any{"ok": true}, nil
+	logged := a.audit(c, "style.status", map[string]any{"styleId": c.Params[0], "status": status})
+	return map[string]any{"ok": true, "auditLogged": logged}, nil
 }

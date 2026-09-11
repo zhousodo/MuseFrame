@@ -83,6 +83,24 @@
   .mailres.ok { border-color:rgba(33,122,84,.35); background:rgba(33,122,84,.07); }
   .mailres.bad { border-color:rgba(180,35,24,.35); background:rgba(180,35,24,.06); }
 
+  /* 每个视图 / 小节顶上那一句说明。2026-09-12 第三轮：面板上多数「改了没反应」
+     的投诉不是 bug，而是没人说过这一项到底影响什么、在哪生效、留空意味着什么。 */
+  .viewnote { margin:-6px 0 12px; font-size:12px; line-height:1.65; max-width:900px; }
+  .viewnote code { background:#EFEDE6; border-radius:4px; padding:1px 5px; font-size:11.5px; }
+  .cfggroup { margin:22px 0 10px; }
+  .cfggroup h3 { font:600 13px/1.4 Georgia,serif; margin:0 0 2px; font-size:15px; }
+  .cfggroup p { margin:0 0 10px; color:var(--muted); font-size:12px; line-height:1.6; max-width:900px; }
+  .opsform { background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
+  .opsform .head { display:flex; gap:12px; align-items:flex-start; }
+  .opsform .cover { width:54px; height:68px; border-radius:6px; border:1px solid var(--line); object-fit:cover; background:#EFEDE6; flex-shrink:0; cursor:zoom-in; }
+  .opsform .nocover { width:54px; height:68px; border-radius:6px; border:1px dashed var(--line); flex-shrink:0; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:10px; text-align:center; line-height:1.3; }
+  .opsgrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; margin-top:10px; }
+  .opsgrid label { display:block; }
+  .opsgrid label span { display:block; color:var(--muted); font-size:11px; margin-bottom:2px; }
+  .opsgrid input, .opsgrid select { padding:7px 9px; font-size:13px; }
+  .opsactions { display:flex; gap:8px; align-items:center; margin-top:10px; flex-wrap:wrap; }
+  .opsnote { color:var(--bad); font-size:11.5px; margin-top:6px; line-height:1.55; }
+
   .legend { display:flex; gap:14px; font-size:11px; color:var(--muted); margin-bottom:2px; }
   .legend i { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; vertical-align:middle; }
 
@@ -119,12 +137,15 @@
       <button class="tabbtn" data-tab="overview">概览</button>
       <button class="tabbtn" data-tab="users">用户</button>
       <button class="tabbtn" data-tab="stats">统计</button>
+      <button class="tabbtn" data-tab="ops">运营</button>
       <button class="tabbtn" data-tab="db">数据库</button>
       <button class="tabbtn" data-tab="config">配置</button>
     </div>
   </div>
 
   <section id="tab-overview" class="tabpane" style="display:none">
+    <p class="muted viewnote" style="margin-top:14px">今天这台服务在干什么：生成链路通不通、反白嫖闸有没有被顶到、累计用户与收入、最近的任务/购买/反馈。
+      顶上那条横幅是「现在到底能不能产出一张图」——判据是最近真实上游调用的结果，不是「配置齐不齐」。</p>
     <div id="genbarOverview"></div>
     <div id="guardbarOverview"></div>
     <div class="cards" id="cards">加载中…</div>
@@ -152,10 +173,42 @@
       <h2 style="margin:0">用户列表</h2>
       <input id="userSearch" placeholder="按邮箱 / 显示名 / ID 搜索，回车" style="max-width:320px;padding:8px 10px;font-size:13px" onkeydown="if(event.key==='Enter')loadUsers()">
     </div>
+    <p class="muted viewnote">禁用账号＝该账号的所有令牌立刻按「未登录」处理（任何接口回 401）；会话行没删，启用后原令牌立刻恢复。作品与额度台账一律不动，所以这是个可逆动作。禁用必须填原因，原因进「运营 · 操作审计」。</p>
+    <div id="userFacts" class="rtgrid" style="margin-bottom:10px"></div>
     <div class="wrap" style="margin-top:10px"><table id="usersTable"></table></div>
   </section>
 
+  <section id="tab-ops" class="tabpane" style="display:none">
+    <h2 style="margin-top:20px">风格管理</h2>
+    <p class="muted viewnote">这里改的是用户在 App 首页看到的那张卡片：名称、副标题、主题、是否付费专属、在展架里的位次。
+      行序就是用户看到的顺序（排序键 = 展览 editorial_rank + 位次）。
+      <b>「App 可见」那一列比「状态」更重要</b>：状态是 published 但没有已发布版本、或者没挂在任何展览上，App 里一样看不到它。
+      封面是 <code>web/covers/&lt;internal_key&gt;.jpg</code> 这个文件，不是数据库列，所以只能预览不能在这里上传。
+      风格名只有一列（<code>public_name</code>），没有多语言列 —— 要给中文用户看中文就把它直接改成中文。</p>
+    <div id="opsStyles">加载中…</div>
+
+    <h2>商品与价格</h2>
+    <p class="muted viewnote">改价与上下架立刻反映到 <code>/v1/products</code>，不需要发版。
+      <b>🔴 人民币价留空 = 这个商品对所有中文用户整条消失</b>（App 会过滤掉没有人民币价的商品），不是「退回显示美元价」。
+      商店 SKU 是 Google Play / App Store 后台配的商品 id，App 拿它发起内购；填错的表现是「点了购买没反应」。
+      价格单位是 minor：<code>599</code> = $5.99 / ¥5.99。每次生成恒定扣 1 张，没有按风格定价。</p>
+    <div id="opsProducts">加载中…</div>
+    <div id="opsProductFacts" class="rtgrid" style="margin-top:10px"></div>
+
+    <h2>反馈原因码</h2>
+    <p class="muted viewnote">这是<b>观测</b>而不是配置：原因码是 App 里写死的四个差评芯片，服务端不做枚举校验，App 也不读服务端下发的字典 ——
+      做成「后台可配」等于做一个改了不会有任何效果的开关。要增删原因码得发 App 版本。
+      下面是用户实际点过的码及次数；出现在「未知码」里的通常来自老版本客户端。</p>
+    <div id="opsReasons">加载中…</div>
+
+    <h2>操作审计</h2>
+    <p class="muted viewnote">后台每一次写操作（改配置、改商品、改风格、禁用/启用用户）都留一行。
+      审计记录住在 <code>events</code> 表里，所以<b>会被保留期清理一起删掉</b> —— 保留天数见下方提示，改它在「配置 · 数据保留与会话」。</p>
+    <div id="opsAudit">加载中…</div>
+  </section>
+
   <section id="tab-stats" class="tabpane" style="display:none">
+    <p class="muted viewnote" style="margin-top:14px">按天的趋势。收入按购买记录的 <code>amount_minor</code> 汇总（美分）；风格排行按该风格累计生成次数，用它决定下架谁、把谁挪到展架前面（位次在「运营 · 风格管理」里改）。</p>
     <div class="bar">
       <h2 style="margin:20px 0 10px">每日生成（成功 / 失败）</h2>
       <div class="rangebtns" id="rangebtns">
@@ -174,6 +227,8 @@
   </section>
 
   <section id="tab-db" class="tabpane" style="display:none">
+    <p class="muted viewnote" style="margin-top:14px">只读地翻库。左侧选表分页浏览，下面的查询台只接受 SELECT / WITH。
+      密钥列已脱敏；时间一律是 UTC ISO-8601 带 Z。这里<b>改不了</b>任何数据 —— 要改去对应的功能页，那样才有审计。</p>
     <div class="muted" style="font-size:11px">表格较宽，可左右滚动查看全部列 →</div>
     <div class="dblayout">
       <div class="dbsidebar" id="dbTableList">加载中…</div>
@@ -193,11 +248,11 @@
     <p class="muted" style="margin-top:-6px;font-size:12px">只读遥测：配置改完有没有生效、邮件通不通、库和队列堵没堵、今天的盘子。全部来自本次请求的实时值，不含任何密钥。</p>
     <div id="runtimePanel" class="rtgrid">加载中…</div>
     <h2>系统配置</h2>
+    <p class="muted viewnote">按用途分了小节，每节顶上一句说明它影响什么。
+      <span class="badge badge-cobalt">db 覆盖</span> 的项来自数据库（后台改的），<span class="badge badge-gray">env</span> 来自 project.env，<span class="badge badge-light">默认</span> 是代码里的默认值；
+      带 <span class="badge badge-warn">⚠需重启</span> 的改了不会立刻生效，带<span class="badge badge-gray">只读</span>的只能改 project.env 后重启容器。
+      数值项写了合法区间，越界会被拒绝保存而不是悄悄夹一下。密钥只显示掩码，后台改不了。</p>
     <div id="configForm">加载中…</div>
-    <h2>商品管理</h2>
-    <div class="wrap" id="productsTable">加载中…</div>
-    <h2>风格管理</h2>
-    <div class="wrap" id="stylesTable">加载中…</div>
     <h2>邮件测试</h2>
     <div class="cfgrow">
       <div class="cfgmeta"><b>发送测试邮件</b><div class="muted">修改 SMTP 相关配置后，用于验证邮件发送是否正常。</div></div>
@@ -219,8 +274,8 @@ const $ = (id) => document.getElementById(id);
 // a stolen/lost browser profile equivalent to a long-lived operator session.
 let TOK = sessionStorage.getItem('mf.admin') || '';
 localStorage.removeItem('mf.admin'); // clear the legacy persistent copy
-const TABS = ['overview','users','stats','db','config'];
-const tabState = { overview:false, users:false, stats:false, db:false, config:false };
+const TABS = ['overview','users','stats','ops','db','config'];
+const tabState = { overview:false, users:false, stats:false, ops:false, db:false, config:false };
 let statsDays = 30;
 const dbState = { tables:[], selected:null, offset:0, limit:50, total:0 };
 
@@ -349,22 +404,83 @@ async function loadUsers(){
   try {
     const search = ($('userSearch').value || '').trim();
     const users = (await api('/v1/admin/users' + (search ? '?q=' + encodeURIComponent(search) : ''))).users || [];
-    $('usersTable').innerHTML = '<tr><th>邮箱</th><th>显示名</th><th>登录方式</th><th>身份</th><th>余额</th><th>生成数</th><th>ID</th><th>注册时间</th><th></th></tr>' +
-      (users.length ? users.map(u=>`<tr>
+    $('usersTable').innerHTML = '<tr><th>邮箱</th><th>显示名</th><th>登录方式</th><th>身份</th><th>状态</th><th>余额</th><th>生成数</th><th>ID</th><th>注册时间</th><th></th></tr>' +
+      (users.length ? users.map(u=>{
+        /* 🔴 status 不是装饰：active 之外的值会让该账号的所有令牌被当成未登录。
+           此前这一列根本不在出参里，「这个人是不是被封了」只能去数据库浏览器翻 users 表。 */
+        const suspended = u.status && u.status !== 'active';
+        const statusCell = suspended
+          ? `<span class="badge badge-warn">${escapeHtml(u.status)}</span>`
+          : '<span class="badge badge-light">active</span>';
+        return `<tr>
         <td>${u.email ? escapeHtml(u.email) : '<span class="muted">—</span>'}</td>
         <td>${escapeHtml(u.displayName||'')}</td>
         <td>${u.providers ? escapeHtml(u.providers) : '<span class="muted">—</span>'}</td>
         <td>${u.isGuest ? '<span class="badge badge-gray">游客</span>' : '<span class="badge badge-cobalt">已登录</span>'}</td>
+        <td>${statusCell}</td>
         <td>${u.units ?? 0}</td>
         <td>${u.jobs ?? 0}</td>
         <td class="muted" title="${escapeHtml(u.userId||'')}">${escapeHtml(u.id)}</td>
         <td class="muted">${ago(u.createdAt)}</td>
-        <td><button class="small ghost" data-grant-user="${escapeHtml(u.userId||'')}" data-grant-label="${escapeHtml(u.email || u.id)}" onclick="pickGrantUser(this)">加额度</button></td>
-      </tr>`).join('') : '<tr><td colspan=9 class=muted>暂无用户</td></tr>');
+        <td style="white-space:nowrap">
+          <button class="small ghost" data-grant-user="${escapeHtml(u.userId||'')}" data-grant-label="${escapeHtml(u.email || u.id)}" onclick="pickGrantUser(this)">加额度</button>
+          <button class="small ghost" data-user-status="${escapeHtml(u.userId||'')}" data-cur="${escapeHtml(u.status||'active')}" data-label="${escapeHtml(u.email || u.id)}">${suspended ? '启用' : '禁用'}</button>
+        </td>
+      </tr>`;}).join('') : '<tr><td colspan=10 class=muted>暂无用户</td></tr>');
+    $('usersTable').querySelectorAll('[data-user-status]').forEach(b => b.addEventListener('click', () => setUserStatus(b)));
   } catch(e) {
     if (e.status === 401) return;
     $('usersTable').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
   }
+  loadUserFacts();
+}
+
+/* 🔴 禁用必须带原因，而且原因是**后端强制**的（不填回 422）。
+   没有原因的封禁在三个月后等于「不知道为什么这个人进不来」，而客服手里
+   只有一句「我登不上」。原因进操作审计，客服能自己查。 */
+async function setUserStatus(btn){
+  const uid = btn.dataset.userStatus;
+  const cur = btn.dataset.cur;
+  const label = btn.dataset.label;
+  const toSuspend = cur === 'active';
+  let reason = '';
+  if (toSuspend) {
+    reason = prompt('禁用 ' + label + '\n\n禁用后该账号的所有令牌立刻按未登录处理（接口回 401）；会话没删，启用后原令牌立刻恢复。作品与额度不动。\n\n请填写原因（会进操作审计，必填）：', '');
+    if (reason === null) return;
+    if (!reason.trim()) { toast('必须填写原因', true); return; }
+  } else {
+    reason = prompt('启用 ' + label + '\n\n原因（可选，进操作审计）：', '误判，已核实') || '';
+  }
+  btn.disabled = true;
+  try {
+    const r = await api('/v1/admin/users/' + encodeURIComponent(uid) + '/status',
+      { method:'POST', body:{ status: toSuspend ? 'suspended' : 'active', reason: reason.trim() } });
+    toast(toSuspend ? '已禁用' : '已启用');
+    if (r.auditLogged === false) toast('动作已生效，但审计没写上（见容器日志）', true);
+    loadUsers();
+  } catch(e) {
+    if (e.status !== 401) toast('操作失败：' + e.message, true);
+  } finally { btn.disabled = false; }
+}
+
+async function loadUserFacts(){
+  try {
+    const f = await api('/v1/admin/user-facts');
+    const counts = f.statusCounts || {};
+    const keys = Object.keys(counts).sort();
+    const other = keys.filter(k => k !== 'active');
+    $('userFacts').innerHTML = [
+      `<div class="rtcard"><h3>账号状态分布</h3>
+        <span class="big">${counts.active ?? 0} 个 active</span>
+        <div class="kv">${other.length
+          ? other.map(k => escapeHtml(k) + '：' + counts[k]).join('　')
+          : '没有任何非 active 账号。'}
+          <br>只有 <code>active</code> 能通过鉴权；<code>merged</code> 是游客合并留下的行（已软删，不在此列）。</div></div>`,
+      `<div class="rtcard"><h3>会话有效期</h3><span class="big">${f.sessionTtlDays} 天</span>
+        <div class="kv">在「配置 · 数据保留与会话」里可热改；只影响此后签发/续期的会话。</div></div>`,
+      `<div class="rtcard"><h3>禁用拦住了什么</h3><span class="big" style="font-size:13px;font-weight:400;line-height:1.6">${escapeHtml(f.suspendedBlocks)}</span></div>`,
+    ].join('');
+  } catch(e) { if (e.status !== 401) $('userFacts').innerHTML = errHtml(e.message); }
 }
 function pickGrantUser(btn){
   $('grantWho').value = btn.dataset.grantUser;
@@ -800,6 +916,14 @@ function configRowHtml(s){
        「保存 → 422 → 猜区间」来找合法值，而 422 的文案是唯一的线索来源。 */
     const rng = (s.min != null ? ` min="${Number(s.min)}"` : '') + (s.max != null ? ` max="${Number(s.max)}"` : '');
     control = `<input id="${inputId}" type="number"${rng} value="${s.value ?? ''}" ${s.readOnly?'disabled':''}>`;
+  } else if (Array.isArray(s.enum) && s.enum.length) {
+    /* 🔴 有白名单的字符串渲染成下拉，不是自由文本框。
+       自由文本框 + 后端白名单 = 运营只能「保存 → 422 → 再猜」；而 image_size_*
+       这几项写错一个值的表现是**所有生成都失败**，那一行看起来却完全正常。 */
+    const cur = s.value != null ? String(s.value) : '';
+    control = `<select id="${inputId}" ${s.readOnly?'disabled':''}>` +
+      s.enum.map(v => `<option value="${escapeHtml(v)}"${v===cur?' selected':''}>${escapeHtml(v)}</option>`).join('') +
+      `</select>`;
   } else {
     control = `<input id="${inputId}" type="text" value="${escapeHtml(s.value!=null?String(s.value):'')}" ${s.readOnly?'disabled':''}>`;
   }
@@ -812,7 +936,9 @@ function configRowHtml(s){
   const restoreBtn = (s.rawSet && !s.readOnly && !s.secret) ? `<button class="small ghost" data-restore="${escapeHtml(s.key)}">恢复默认</button>` : '';
   /* 合法区间写在说明下面一行（后端给 min/max 的项才有）。 */
   const rangeHint = (s.min != null && s.max != null)
-    ? `<div class="cfgrange">合法区间 ${Number(s.min)} … ${Number(s.max)}（越界会被拒绝保存）</div>` : '';
+    ? `<div class="cfgrange">合法区间 ${Number(s.min)} … ${Number(s.max)}（越界会被拒绝保存）</div>`
+    : (Array.isArray(s.enum) && s.enum.length
+       ? `<div class="cfgrange">只能取 ${s.enum.map(escapeHtml).join(' / ')}（其它值会被拒绝保存）</div>` : '');
   /* 🔴 warning = 「配置源里写的值」和「真正生效的值」不一样（越界被夹，或根本不是数字）。
      不标出来的话，面板会展示一个看似正常的数而实际生效的是另一个 ——
      这种静默偏差正是本轮要消灭的东西，所以它必须出现在那一行上，而不是日志里。 */
@@ -822,10 +948,48 @@ function configRowHtml(s){
     <div class="cfgctrl">${control}${saveBtn}${restoreBtn}</div>
   </div>`;
 }
+/* 🔴 分组与每组的说明来自**后端**（Setting.group），不是前端的一张映射表：
+   前端那份表会和注册表悄悄脱节 —— 新加的键不在表里就掉进「其它」（好一点的情况）
+   或者根本不渲染（更糟，面板上看起来就是全部了）。
+   这里只负责「组 → 小节标题 + 一句说明」的文案，以及**渲染顺序**；
+   遇到后端给了一个这里没登记的组，照样渲染（标题回落成组名），绝不丢项。 */
+const CFG_GROUPS = [
+  ['generation', '图像生成与上游', '这一节直接决定用户拿到的图，以及我们付给上游的钱。模型 / 尺寸 / 质量改完对<b>下一个任务</b>立刻生效，不需要重启。尺寸与质量一起决定上游单价；重试次数是「每一次都要再付一遍」的闸；熔断是上游挂掉时的止损（熔断期内任务直接快速失败，不打上游也不付提示词编译的钱，冷却一过自动放一个任务探路）。并发改完下一轮调度即生效。'],
+  ['credits', '额度与发放', '免费额度、反白嫖上限、额度有效期。<b>有效期 0 = 永不过期</b>；改有效期只影响此后新发放的额度，已发出去的不动。游客开关与「免费额度需登录」当前 App 不读，但服务端照样按它放行/拒绝。'],
+  ['auth', '登录与支付', '决定 App 登录页上出现哪几个按钮：Google / Apple 的 id 列表非空才显示对应按钮，邮箱登录还额外要求 SMTP 已配置。支付通道是否可用由服务账号是否配置决定（只读）。'],
+  ['retention', '数据保留与会话', '每日清理任务与会话有效期。会话有效期只影响此后签发/续期的会话。<b>🔴 后台操作审计住在 events 表里</b>，所以 events 保留天数压得太短会把审计一起删掉。'],
+  ['email', '邮件通道与验证码', 'SMTP 连接参数与验证码策略。验证码有效期同时也是重发窗口；被刷码攻击时把「每窗口签发次数」压到 1 是最快的止血动作。改完用下面的「邮件测试」验证，别等真实用户来报。'],
+  ['storage', '存储与上传', '每个账号的原图存储上限。数据盘快满时压这一项立刻生效（超限的上传回 413），不需要重启。'],
+  ['support', '客服与联系方式', '额度用完时 App 会把这里的邮箱与 QQ 群展示给用户 —— 当前这是主要的加购入口，留空等于这条路断掉。'],
+  ['deploy', '部署级（只读）', '这些值在进程启动时就固化了（连接池、盐、目录、逃生口），后台只能看不能改：要改就改 project.env 再重启容器。密钥一律只显示「已配置 / 未配置」，值一个字节都不出现在响应里。'],
+];
+
 function renderConfig(settings){
-  $('configForm').innerHTML = settings.length ? settings.map(configRowHtml).join('') : '<p class="muted">无配置项</p>';
-  $('configForm').querySelectorAll('[data-save]').forEach(btn => btn.addEventListener('click', () => saveConfigItem(btn)));
-  $('configForm').querySelectorAll('[data-restore]').forEach(btn => btn.addEventListener('click', () => restoreConfigItem(btn.dataset.restore)));
+  const el = $('configForm');
+  if (!settings.length) { el.innerHTML = '<p class="muted">无配置项</p>'; return; }
+  const byGroup = new Map();
+  for (const s of settings) {
+    const g = s.group || 'other';
+    if (!byGroup.has(g)) byGroup.set(g, []);
+    byGroup.get(g).push(s);
+  }
+  const out = [];
+  const done = new Set();
+  for (const [key, title, note] of CFG_GROUPS) {
+    const rows = byGroup.get(key);
+    if (!rows || !rows.length) continue;
+    done.add(key);
+    out.push(`<div class="cfggroup"><h3>${escapeHtml(title)}</h3><p>${note}</p></div>` + rows.map(configRowHtml).join(''));
+  }
+  /* 后端加了新组而这里还没登记文案时，原样渲染出来 —— 宁可少一句说明，
+     也绝不让一个配置项在面板上消失。 */
+  for (const [g, rows] of byGroup) {
+    if (done.has(g)) continue;
+    out.push(`<div class="cfggroup"><h3>${escapeHtml(g)}</h3><p class="bad">这个分组还没有说明文案（后端新加的组），先原样列出来。</p></div>` + rows.map(configRowHtml).join(''));
+  }
+  el.innerHTML = out.join('');
+  el.querySelectorAll('[data-save]').forEach(btn => btn.addEventListener('click', () => saveConfigItem(btn)));
+  el.querySelectorAll('[data-restore]').forEach(btn => btn.addEventListener('click', () => restoreConfigItem(btn.dataset.restore)));
 }
 async function saveConfigItem(btn){
   const key = btn.dataset.save;
@@ -862,84 +1026,295 @@ async function restoreConfigItem(key){
   }
 }
 
-function renderProducts(products){
-  $('productsTable').innerHTML = products.length ? `<table>
-    <tr><th>名称</th><th>internal_key</th><th>类型</th><th>张数</th><th>美元价(美分)</th><th>人民币价(分)</th><th>状态</th><th></th></tr>
-    ${products.map(p => `<tr>
-      <td>${escapeHtml(p.displayName||'')}</td>
-      <td class="muted">${escapeHtml(p.internalKey)}</td>
-      <td class="muted">${escapeHtml(p.productType||'')}</td>
-      <td><input type="number" class="pgu" value="${p.grantedUnits}" style="width:80px"></td>
-      <td><input type="number" class="ppm" value="${p.priceMinor}" style="width:90px"></td>
-      <td><input type="number" class="pcny" value="${p.priceCnyMinor ?? ''}" placeholder="空=不卖人民币" style="width:110px"></td>
-      <td>${p.active ? '<span class="badge badge-cobalt">上架</span>' : '<span class="badge badge-gray">下架</span>'}</td>
-      <td style="white-space:nowrap"><button class="small" data-save-product="${escapeHtml(p.internalKey)}">保存</button>
-          <button class="small ghost" data-toggle-product="${escapeHtml(p.internalKey)}" data-active="${p.active?'1':'0'}">${p.active?'下架':'上架'}</button></td>
-    </tr>`).join('')}
-  </table>` : '<p class="muted">暂无商品</p>';
-  $('productsTable').querySelectorAll('[data-save-product]').forEach(btn => btn.addEventListener('click', () => saveProduct(btn)));
-  $('productsTable').querySelectorAll('[data-toggle-product]').forEach(btn => btn.addEventListener('click', () => toggleProduct(btn)));
+/* ---------- 运营：风格 ---------- */
+/* 🔴 整张表做成「一行一张可编辑卡片」而不是一个大表格：风格有 6 个可编辑字段
+   加一张封面预览，塞进表格单元格之后每一列都窄到看不清，而改错名字这件事
+   在 App 首页是立刻可见的。 */
+function renderOpsStyles(styles){
+  if (!styles.length) { $('opsStyles').innerHTML = '<p class="muted">暂无风格</p>'; return; }
+  $('opsStyles').innerHTML = styles.map((s, i) => {
+    const cover = s.coverUrl
+      ? `<img class="cover" src="${escapeHtml(s.coverUrl)}" loading="lazy" onclick="view(this.src)" alt="">`
+      : `<div class="nocover">无封面<br>文件</div>`;
+    const vis = s.visibleInApp
+      ? '<span class="badge badge-cobalt">App 可见</span>'
+      : '<span class="badge badge-warn">App 看不到</span>';
+    const why = s.visibleInApp ? '' : `<div class="opsnote">🔴 ${escapeHtml(s.hiddenReason || '')}</div>`;
+    const exh = s.exhibitionTitle
+      ? `${escapeHtml(s.exhibitionTitle)}（展架序 ${s.editorialRank ?? '—'}）`
+      : '<span class="bad">未挂展览</span>';
+    return `<div class="opsform" data-style="${escapeHtml(s.id)}">
+      <div class="head">${cover}
+        <div style="flex:1;min-width:0">
+          <b style="font-family:Georgia,serif;font-size:15px">${escapeHtml(s.name || '')}</b> ${vis}
+          ${s.premium ? '<span class="badge badge-gray">付费专属</span>' : ''}
+          <div class="muted" style="font-size:11.5px;margin-top:3px">
+            <code>${escapeHtml(s.internalKey)}</code> · 展览 ${exh} · 已发布版本 ${s.publishedVersions} · 累计生成 ${s.jobs ?? 0} 次
+          </div>
+          ${why}
+        </div>
+      </div>
+      <div class="opsgrid">
+        <label><span>名称（用户可见，可直接填中文）</span><input class="sf-name" maxlength="80" value="${escapeHtml(s.name || '')}"></label>
+        <label><span>副标题（可留空）</span><input class="sf-caption" maxlength="140" value="${escapeHtml(s.shortCaption || '')}"></label>
+        <label><span>主题 theme</span><input class="sf-theme" maxlength="40" value="${escapeHtml(s.theme || '')}"></label>
+        <label><span>位次（小的排前面）</span><input class="sf-pos" type="number" min="0" max="9999" value="${s.position ?? ''}" ${s.position == null ? 'disabled title="没挂展览，位次无处可写"' : ''}></label>
+        <label><span>付费专属</span><select class="sf-premium"><option value="false"${s.premium?'':' selected'}>否</option><option value="true"${s.premium?' selected':''}>是</option></select></label>
+        <label><span>状态</span><select class="sf-status"><option value="published"${s.status==='published'?' selected':''}>published（上架）</option><option value="disabled"${s.status==='disabled'?' selected':''}>disabled（下架）</option></select></label>
+        <label style="grid-column:1/-1"><span>适配标签（逗号分隔，最多 8 个，App 的「Best with —」那一行）</span><input class="sf-tags" value="${escapeHtml((s.tags || []).join(', '))}"></label>
+      </div>
+      <div class="opsactions">
+        <button class="small" data-save-style="${escapeHtml(s.id)}">保存</button>
+        <button class="small ghost" data-quick-style="${escapeHtml(s.id)}" data-status="${escapeHtml(s.status || '')}">${s.status==='published'?'紧急下架':'重新上架'}</button>
+        <span class="muted" style="font-size:11.5px">#${i+1} · 保存后 /v1/styles 立刻反映</span>
+      </div>
+    </div>`;
+  }).join('');
+  $('opsStyles').querySelectorAll('[data-save-style]').forEach(b => b.addEventListener('click', () => saveStyle(b)));
+  $('opsStyles').querySelectorAll('[data-quick-style]').forEach(b => b.addEventListener('click', () => toggleStyleStatus(b)));
 }
-async function saveProduct(btn){
-  const key = btn.dataset.saveProduct;
-  const row = btn.closest('tr');
-  const grantedUnits = Number(row.querySelector('.pgu').value);
-  const priceMinor = Number(row.querySelector('.ppm').value);
-  const cnyRaw = row.querySelector('.pcny').value.trim();
-  const priceCnyMinor = cnyRaw === '' ? null : Number(cnyRaw);
-  const active = row.querySelector('[data-toggle-product]').dataset.active === '1';
+
+async function saveStyle(btn){
+  const card = btn.closest('.opsform');
+  const id = btn.dataset.saveStyle;
+  const posEl = card.querySelector('.sf-pos');
+  const body = {
+    name: card.querySelector('.sf-name').value,
+    shortCaption: card.querySelector('.sf-caption').value,
+    theme: card.querySelector('.sf-theme').value,
+    premium: card.querySelector('.sf-premium').value === 'true',
+    status: card.querySelector('.sf-status').value,
+    /* 标签按逗号切，空项丢掉；后端还会再去重 + trim 一遍。 */
+    tags: card.querySelector('.sf-tags').value.split(',').map(s => s.trim()).filter(Boolean),
+  };
+  /* 位次只有在这个风格真的挂了展览时才送：没挂展览的话那一格是 disabled 的，
+     送一个空值过去会变成 422，而运营看不出是哪一格的错。 */
+  if (!posEl.disabled && posEl.value !== '') body.position = Number(posEl.value);
+  btn.disabled = true;
   try {
-    await api('/v1/admin/products-admin/' + encodeURIComponent(key), { method:'PATCH', body:{ grantedUnits, priceMinor, priceCnyMinor, active } });
-    const r = await api('/v1/admin/products-admin');
-    renderProducts(r.products || []);
-    toast('已保存');
+    const r = await api('/v1/admin/styles-admin/' + encodeURIComponent(id), { method:'PATCH', body });
+    if (r.auditLogged === false) toast('已保存，但审计没写上（见容器日志）', true);
+    else toast('已保存');
+    loadOpsStyles();
   } catch(e) {
     if (e.status !== 401) toast('保存失败：' + e.message, true);
-  }
+  } finally { btn.disabled = false; }
 }
-async function toggleProduct(btn){
-  const key = btn.dataset.toggleProduct;
-  const row = btn.closest('tr');
-  const grantedUnits = Number(row.querySelector('.pgu').value);
-  const priceMinor = Number(row.querySelector('.ppm').value);
-  const active = !(btn.dataset.active === '1');
+
+async function toggleStyleStatus(btn){
+  const id = btn.dataset.quickStyle;
+  const cur = btn.dataset.status;
+  const next = cur === 'published' ? 'disabled' : 'published';
+  if (next === 'disabled' && !confirm('确认紧急下架该风格？下架后 /v1/styles 立刻不再返回它，持有缓存的客户端也无法再用它生成。')) return;
   try {
-    await api('/v1/admin/products-admin/' + encodeURIComponent(key), { method:'PATCH', body:{ grantedUnits, priceMinor, active } });
-    const r = await api('/v1/admin/products-admin');
-    renderProducts(r.products || []);
-    toast(active ? '已上架' : '已下架');
+    await api('/v1/admin/styles-admin/' + encodeURIComponent(id) + '/status', { method:'POST', body:{ status: next } });
+    toast(next === 'published' ? '已上架' : '已下架');
+    loadOpsStyles();
   } catch(e) {
     if (e.status !== 401) toast('操作失败：' + e.message, true);
   }
 }
 
-function renderStylesAdmin(styles){
-  $('stylesTable').innerHTML = styles.length ? `<table>
-    <tr><th>名称</th><th>主题</th><th>生成数</th><th>Premium</th><th>状态</th><th></th></tr>
-    ${styles.map(s => `<tr>
-      <td>${escapeHtml(s.name||'')}</td>
-      <td class="muted">${escapeHtml(s.theme||'')}</td>
-      <td>${s.jobs ?? 0}</td>
-      <td>${s.premium ? '是' : '否'}</td>
-      <td class="${s.status==='published'?'ok':'muted'}">${escapeHtml(s.status||'')}</td>
-      <td><button class="small ghost" data-style-toggle="${s.id}" data-status="${escapeHtml(s.status||'')}">${s.status==='published'?'下线':'上线'}</button></td>
-    </tr>`).join('')}
-  </table>` : '<p class="muted">暂无风格</p>';
-  $('stylesTable').querySelectorAll('[data-style-toggle]').forEach(btn => btn.addEventListener('click', () => toggleStyleStatus(btn)));
-}
-async function toggleStyleStatus(btn){
-  const id = btn.dataset.styleToggle;
-  const cur = btn.dataset.status;
-  const next = cur === 'published' ? 'disabled' : 'published';
-  if (next === 'disabled' && !confirm('确认下线该风格？')) return;
+async function loadOpsStyles(){
   try {
-    await api('/v1/admin/styles-admin/' + encodeURIComponent(id) + '/status', { method:'POST', body:{ status: next } });
     const r = await api('/v1/admin/styles-admin');
-    renderStylesAdmin(r.styles || []);
-    toast(next === 'published' ? '已上线' : '已下线');
+    renderOpsStyles(r.styles || []);
+  } catch(e) { if (e.status !== 401) $('opsStyles').innerHTML = errHtml(e.message); }
+}
+
+/* ---------- 运营：商品与价格 ---------- */
+function renderOpsProducts(products){
+  if (!products.length) { $('opsProducts').innerHTML = '<p class="muted">暂无商品</p>'; return; }
+  $('opsProducts').innerHTML = products.map(p => {
+    const cny = p.priceCnyMinor;
+    /* 🔴 这条警告不是装饰：人民币价为空 = 这个商品对所有中文用户整条消失。
+       它是后台最容易误操作出来的一个后果，而「为什么我的商店是空的」
+       在此前只能靠读 app.js 才能回答。 */
+    const cnyWarn = (cny == null && p.active)
+      ? `<div class="opsnote">🔴 没有人民币价，且当前是上架状态 —— 这个商品对<b>所有中文用户完全不可见</b>（App 会把没有人民币价的商品整条过滤掉），不是退回显示美元价。</div>`
+      : '';
+    const skuWarn = (p.active && p.productType && !p.googleProductId)
+      ? `<div class="opsnote">⚠ 没有 Google Play SKU：Android 内购点下去会找不到商品。当前主要加购入口是客服邮箱 / QQ 群，所以这不一定是错的。</div>`
+      : '';
+    return `<div class="opsform" data-product="${escapeHtml(p.internalKey)}">
+      <div class="head"><div style="flex:1;min-width:0">
+        <b style="font-family:Georgia,serif;font-size:15px">${escapeHtml(p.displayName || '')}</b>
+        ${p.active ? '<span class="badge badge-cobalt">上架</span>' : '<span class="badge badge-gray">下架</span>'}
+        <span class="badge badge-light">${escapeHtml(p.productType || '')}${p.period ? ' / ' + escapeHtml(p.period) : ''}</span>
+        <div class="muted" style="font-size:11.5px;margin-top:3px"><code>${escapeHtml(p.internalKey)}</code>
+          · 当前 ${fmt$(p.priceMinor)}${cny != null ? ' / ¥' + (cny/100).toFixed(2) : ' / 无人民币价'}
+          · ${p.grantedUnits} 张${p.grantedUnits > 0 ? '（单张 ' + fmt$(p.priceMinor / p.grantedUnits) + '）' : ''}</div>
+        ${cnyWarn}${skuWarn}
+      </div></div>
+      <div class="opsgrid">
+        <label><span>名称（英文，App 中文界面另有内置译名）</span><input class="pf-name" maxlength="80" value="${escapeHtml(p.displayName || '')}"></label>
+        <label><span>发放张数</span><input class="pf-units" type="number" min="0" max="100000" value="${p.grantedUnits}"></label>
+        <label><span>美元价（美分）</span><input class="pf-usd" type="number" min="0" max="10000000" value="${p.priceMinor}"></label>
+        <label><span>人民币价（分，留空=不卖人民币）</span><input class="pf-cny" type="number" min="0" max="10000000" value="${cny ?? ''}" placeholder="留空 → 中文用户看不到"></label>
+        <label><span>Google Play SKU</span><input class="pf-gsku" maxlength="120" value="${escapeHtml(p.googleProductId || '')}" placeholder="留空 = 不做安卓内购"></label>
+        <label><span>App Store SKU</span><input class="pf-asku" maxlength="120" value="${escapeHtml(p.appleProductId || '')}" placeholder="iOS 收据校验尚未接通"></label>
+      </div>
+      <div class="opsactions">
+        <button class="small" data-save-product="${escapeHtml(p.internalKey)}">保存</button>
+        <button class="small ghost" data-toggle-product="${escapeHtml(p.internalKey)}" data-active="${p.active?'1':'0'}">${p.active?'下架':'上架'}</button>
+        <span class="muted" style="font-size:11.5px">保存后 /v1/products 立刻反映</span>
+      </div>
+    </div>`;
+  }).join('');
+  $('opsProducts').querySelectorAll('[data-save-product]').forEach(b => b.addEventListener('click', () => saveProduct(b)));
+  $('opsProducts').querySelectorAll('[data-toggle-product]').forEach(b => b.addEventListener('click', () => toggleProduct(b)));
+}
+
+async function saveProduct(btn){
+  const card = btn.closest('.opsform');
+  const key = btn.dataset.saveProduct;
+  const cnyRaw = card.querySelector('.pf-cny').value.trim();
+  /* 🔴 空串必须送 null（= 写 SQL NULL），不能送 0：0 是「免费」，null 是「不卖人民币」。 */
+  const body = {
+    displayName: card.querySelector('.pf-name').value,
+    grantedUnits: Number(card.querySelector('.pf-units').value),
+    priceMinor: Number(card.querySelector('.pf-usd').value),
+    priceCnyMinor: cnyRaw === '' ? null : Number(cnyRaw),
+    googleProductId: card.querySelector('.pf-gsku').value.trim(),
+    appleProductId: card.querySelector('.pf-asku').value.trim(),
+  };
+  if (body.priceCnyMinor === null && !confirm('人民币价留空会让这个商品对所有中文用户完全消失（App 过滤掉没有人民币价的商品）。确认？')) return;
+  btn.disabled = true;
+  try {
+    await api('/v1/admin/products-admin/' + encodeURIComponent(key), { method:'PATCH', body });
+    toast('已保存');
+    loadOpsProducts();
+  } catch(e) {
+    if (e.status !== 401) toast('保存失败：' + e.message, true);
+  } finally { btn.disabled = false; }
+}
+
+async function toggleProduct(btn){
+  const key = btn.dataset.toggleProduct;
+  const active = !(btn.dataset.active === '1');
+  /* 🔴 只送 active 这一个字段。原来这里顺手把价格与张数一起回传了，于是
+     「上架」按钮会把运营在输入框里改了但还没点保存的值一并写进去 ——
+     一个只想上架的动作同时改了价。 */
+  try {
+    await api('/v1/admin/products-admin/' + encodeURIComponent(key), { method:'PATCH', body:{ active } });
+    toast(active ? '已上架' : '已下架');
+    loadOpsProducts();
   } catch(e) {
     if (e.status !== 401) toast('操作失败：' + e.message, true);
   }
+}
+
+async function loadOpsProducts(){
+  try {
+    const r = await api('/v1/admin/products-admin');
+    renderOpsProducts(r.products || []);
+  } catch(e) { if (e.status !== 401) $('opsProducts').innerHTML = errHtml(e.message); }
+}
+
+/* ---------- 运营：反馈原因码 ---------- */
+function renderOpsReasons(r){
+  const known = new Set(r.knownClientCodes || []);
+  const rows = r.reasonCodes || [];
+  const seen = new Set(rows.map(x => x.code));
+  const unused = (r.knownClientCodes || []).filter(c => !seen.has(c));
+  let html = rows.length ? `<div class="wrap"><table>
+    <tr><th>原因码</th><th>来源</th><th>差评次数</th><th>好评次数</th></tr>
+    ${rows.map(x => `<tr>
+      <td><code>${escapeHtml(x.code)}</code></td>
+      <td>${known.has(x.code) ? '<span class="badge badge-light">当前 App 芯片</span>' : '<span class="badge badge-warn">未知码（老客户端 / 脏数据）</span>'}</td>
+      <td>${x.negative}</td><td>${x.positive}</td></tr>`).join('')}
+  </table></div>` : '<p class="muted">还没有任何带原因码的反馈。</p>';
+  if (unused.length) {
+    html += `<p class="muted" style="margin-top:8px;font-size:12px">当前 App 里存在但还没人点过的码：${unused.map(c => '<code>' + escapeHtml(c) + '</code>').join(' ')}</p>`;
+  }
+  $('opsReasons').innerHTML = html;
+}
+
+/* ---------- 运营：操作审计 ---------- */
+const AUDIT_LABEL = {
+  'config.set': '改配置', 'product.update': '改商品',
+  'style.update': '改风格', 'style.status': '风格上下架', 'user.status': '禁用/启用用户',
+};
+function renderOpsAudit(r){
+  const rows = r.audit || [];
+  const note = `<p class="muted" style="margin:0 0 8px;font-size:12px">审计住在 <code>events</code> 表，当前保留 <b>${r.retentionDays}</b> 天，超期由每日清理任务删除。</p>`;
+  if (!rows.length) { $('opsAudit').innerHTML = note + '<p class="muted">还没有任何后台写操作。</p>'; return; }
+  $('opsAudit').innerHTML = note + `<div class="wrap"><table>
+    <tr><th>时间</th><th>动作</th><th>详情</th></tr>
+    ${rows.map(x => `<tr>
+      <td class="muted" title="${escapeHtml(x.at)}">${escapeHtml(x.at.replace('T',' ').slice(0,19))}</td>
+      <td>${escapeHtml(AUDIT_LABEL[x.action] || x.action)} <span class="muted" style="font-size:11px">${escapeHtml(x.action)}</span></td>
+      <td class="trunc" title="${escapeHtml(JSON.stringify(x.props))}">${escapeHtml(auditSummary(x))}</td>
+    </tr>`).join('')}
+  </table></div>`;
+}
+/* 把 props 压成一句人话。拼不出来就回落到原始 JSON —— 宁可难看，也不丢信息。 */
+function auditSummary(x){
+  const p = x.props || {};
+  if (x.action === 'config.set') return `${p.key}：${fmtAuditVal(p.from)} → ${p.cleared ? '恢复默认（' + fmtAuditVal(p.to) + '）' : fmtAuditVal(p.to)}`;
+  if (x.action === 'user.status') return `${String(p.userId||'').slice(0,8)}…：${p.from} → ${p.to}${p.reason ? '　原因：' + p.reason : ''}`;
+  if (x.action === 'style.status') return `${p.styleId} → ${p.status}`;
+  if (x.action === 'style.update') return `${p.styleId}：${JSON.stringify(p.fields || {})}`;
+  if (x.action === 'product.update') {
+    const bits = [];
+    if ('priceMinor' in p) bits.push(`美元价 ${p.priceMinorBefore} → ${p.priceMinor}`);
+    if ('priceCnyMinor' in p) bits.push(`人民币价 ${fmtAuditVal(p.priceCnyMinorBefore)} → ${fmtAuditVal(p.priceCnyMinor)}`);
+    if ('grantedUnits' in p) bits.push(`张数 ${p.grantedUnitsBefore} → ${p.grantedUnits}`);
+    if ('active' in p) bits.push(p.active ? '上架' : '下架');
+    if ('displayName' in p) bits.push(`名称 ${p.displayNameBefore} → ${p.displayName}`);
+    if ('googleProductId' in p) bits.push(`Google SKU → ${fmtAuditVal(p.googleProductId)}`);
+    if ('appleProductId' in p) bits.push(`Apple SKU → ${fmtAuditVal(p.appleProductId)}`);
+    return `${p.productKey}：${bits.join('，') || '（无字段变更）'}`;
+  }
+  return JSON.stringify(p);
+}
+function fmtAuditVal(v){ return v === null || v === undefined ? '空' : String(v); }
+
+async function loadOps(){
+  $('opsStyles').innerHTML = '加载中…';
+  $('opsProducts').innerHTML = '加载中…';
+  $('opsReasons').innerHTML = '加载中…';
+  $('opsAudit').innerHTML = '加载中…';
+  await ensureImgTok();
+  await loadOpsStyles();
+  await loadOpsProducts();
+  try {
+    renderOpsProductFacts(await api('/v1/admin/config'));
+  } catch(e) { if (e.status !== 401) $('opsProductFacts').innerHTML = errHtml(e.message); }
+  try {
+    renderOpsReasons(await api('/v1/admin/feedback-reasons'));
+  } catch(e) { if (e.status !== 401) $('opsReasons').innerHTML = errHtml(e.message); }
+  try {
+    renderOpsAudit(await api('/v1/admin/audit'));
+  } catch(e) { if (e.status !== 401) $('opsAudit').innerHTML = errHtml(e.message); }
+}
+
+/* 商品表下面那排只读事实：内购通道到底通不通、加购额度有效期是多少。
+   这两件事决定了「改完价有没有人能买到」，而它们都不在 products 表里。 */
+function renderOpsProductFacts(cfg){
+  const byKey = {};
+  for (const s of (cfg.settings || [])) byKey[s.key] = s;
+  const packDays = byKey['pack_credit_expiry_days'];
+  const mock = byKey['allow_mock_purchases'];
+  const play = byKey['play_billing_configured'];
+  const days = packDays ? Number(packDays.value) : null;
+  $('opsProductFacts').innerHTML = [
+    `<div class="rtcard${play && play.value ? '' : ' warn'}"><h3>Google Play 收据校验</h3>
+      <span class="big">${play && play.value ? '已配置' : '未配置'}</span>
+      <div class="kv">未配置时 App 不显示商店内购区，加购只能走客服邮箱 / QQ 群。改它要改 project.env 的 GOOGLE_SERVICE_ACCOUNT_JSON 后重启。</div></div>`,
+    `<div class="rtcard warn"><h3>Apple 收据校验</h3><span class="big">未接通</span>
+      <div class="kv">App Store Server API 校验尚未实现（服务端对 apple 平台直接回 501），<code>/v1/auth/config</code> 里 billing.apple 恒为 false。填 App Store SKU 暂时没有用。</div></div>`,
+    `<div class="rtcard${days === 0 ? '' : ' warn'}"><h3>加购额度有效期</h3>
+      <span class="big">${days === 0 ? '永不过期' : days + ' 天'}</span>
+      <div class="kv">${days === 0
+        ? '与 App 加购卡片上的「永不过期」文案一致。'
+        : '🔴 App 的加购卡片文案写的是「永不过期」，和这里的 ' + days + ' 天<b>对不上</b>：用户 ' + days + ' 天后会发现买的张数少了，而界面从没提过有效期。改成 0 即可对齐（在「配置 · 额度与发放」里）。'}</div></div>`,
+    `<div class="rtcard${mock && mock.value ? ' down' : ''}"><h3>演示购买开关</h3>
+      <span class="big">${mock && mock.value ? '🔴 开启' : '关闭'}</span>
+      <div class="kv">生产必须关闭。开启时带管理员令牌的请求能拿到 mock 购买通道。</div></div>`,
+    `<div class="rtcard"><h3>每次生成扣除</h3><span class="big">1 张</span>
+      <div class="kv">恒定 1 张，不随风格或画质变化 —— 所以没有「按风格定价」这件事，商品的单张价 = 总价 ÷ 发放张数。</div></div>`,
+  ].join('');
 }
 
 /* 🔴 结果必须**留在页面上**：一条 3 秒消失的 toast 没法拿去跟 SMTP 服务商后台对照。
@@ -976,11 +1351,12 @@ async function sendTestEmail(){
   }
 }
 
+/* 🔴 商品与风格 2026-09-12 从这里搬到了「运营」标签页。
+   留在两个页面各一份编辑入口是最糟的布局：两份表单写同一张表，
+   一边改完另一边还显示旧值，而运营并不知道自己看的是哪一份。 */
 async function loadConfig(){
   $('configForm').innerHTML = '加载中…';
   $('runtimePanel').innerHTML = '加载中…';
-  $('productsTable').innerHTML = '加载中…';
-  $('stylesTable').innerHTML = '加载中…';
   try {
     const r = await api('/v1/admin/config');
     renderConfig(r.settings || []);
@@ -988,14 +1364,6 @@ async function loadConfig(){
     renderGuardBar(r.abuse);
     renderRuntime(r.runtime, r.generation);
   } catch(e) { if (e.status !== 401) { $('configForm').innerHTML = errHtml(e.message); $('runtimePanel').innerHTML = errHtml(e.message); } }
-  try {
-    const r = await api('/v1/admin/products-admin');
-    renderProducts(r.products || []);
-  } catch(e) { if (e.status !== 401) $('productsTable').innerHTML = errHtml(e.message); }
-  try {
-    const r = await api('/v1/admin/styles-admin');
-    renderStylesAdmin(r.styles || []);
-  } catch(e) { if (e.status !== 401) $('stylesTable').innerHTML = errHtml(e.message); }
 }
 
 /* ---------- Tabs / boot ---------- */
@@ -1004,6 +1372,7 @@ function loadTabByName(name){
   if (name === 'overview') return loadOverview();
   if (name === 'users') return loadUsers();
   if (name === 'stats') return loadStats();
+  if (name === 'ops') return loadOps();
   if (name === 'db') return loadDb();
   if (name === 'config') return loadConfig();
 }

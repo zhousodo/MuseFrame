@@ -108,7 +108,7 @@ func main() {
 
 	wk := worker.New(worker.Options{
 		Store: st, Runtime: rt, Provider: prov, Logger: lg, AssetDir: cfg.AssetDir,
-		MaxAttempts: cfg.MaxJobAttempts, NewID: httpapi.NewUUID,
+		NewID: httpapi.NewUUID,
 	})
 
 	// 图片令牌的 HMAC 密钥必须活过重启，且绝不能是运维输入。
@@ -143,7 +143,7 @@ func main() {
 	go wk.Run(rootCtx)
 
 	// 保留期清理：开机一次 + 每 24 小时一次。
-	go retentionLoop(rootCtx, st, cfg, lg)
+	go retentionLoop(rootCtx, st, rt, lg)
 	// 限流键清理：每 60 秒一次。
 	go sweepLoop(rootCtx, app)
 
@@ -222,11 +222,17 @@ func openStoreWithRetry(ctx context.Context, cfg *config.Config, lg *logx.Logger
 	return nil, lastErr
 }
 
-func retentionLoop(ctx context.Context, st *store.Store, cfg *config.Config, lg *logx.Logger) {
+// retentionLoop 每 24 小时跑一次保留期清理。
+//
+// 🔴 保留天数**每轮重新从注册表读**，不在函数入口取一次：这个循环的生命周期
+// 等于进程的生命周期，取一次就等于「改完要重启才生效」—— 而它俩 2026-09-12 起
+// 是后台热键，后台上改完不重启就该在下一轮生效。
+func retentionLoop(ctx context.Context, st *store.Store, rt *cfgstore.Store, lg *logx.Logger) {
 	run := func() {
 		jobCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
-		res, err := store.PruneOldRows(jobCtx, st.Q(), time.Now().UTC(), cfg.EventRetentionDays, cfg.IdempotencyDays)
+		res, err := store.PruneOldRows(jobCtx, st.Q(), time.Now().UTC(),
+			rt.EventRetentionDays(), rt.IdempotencyRetentionDays())
 		if err != nil {
 			lg.Warn("保留期清理失败", map[string]any{"error": err.Error()})
 			return
