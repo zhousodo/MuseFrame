@@ -133,11 +133,22 @@ type AdminJobRow struct {
 	CandidateAssetID *string `json:"candidateAssetId"`
 }
 
+// adminJobSecondsExpr 是 /v1/admin/jobs 的 seconds 列。
+//
+// 🔴 必须是 floor，不能是 CAST(... AS integer)：
+// Node 版写的是 SQLite 的 CAST((julianday(a)-julianday(b))*86400 AS INTEGER)，
+// 而 SQLite 的 CAST AS INTEGER 是**截断**；PostgreSQL 的 CAST(numeric AS integer)
+// 是**四舍五入**。于是耗时小数部分 >= 0.5 的任务，两端就差 1 秒 —— 这正是
+// agent #32 在 Node/Go 双跑比对里抓到的唯一一处真差异（Go 侧恒大 1）。
+// 耗时按构造非负（finished_at/updated_at 不早于 created_at），
+// 该区间内 floor 与 SQLite 的截断完全等价。
+const adminJobSecondsExpr = `floor(EXTRACT(EPOCH FROM (COALESCE(j.finished_at, j.updated_at) - j.created_at)))::integer`
+
 // ListAdminJobs 任务列表，ORDER BY created_at DESC。
 func ListAdminJobs(ctx context.Context, q Queryer, limit int) ([]AdminJobRow, error) {
 	rows, err := q.Query(ctx, `
 		SELECT j.id, j.status, j.stage, j.error_code, j.attempt_count, j.cost_minor, j.created_at,
-		       CAST(EXTRACT(EPOCH FROM (COALESCE(j.finished_at, j.updated_at) - j.created_at)) AS integer),
+		       `+adminJobSecondsExpr+`,
 		       substr(j.user_id,1,8),
 		       (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=j.user_id AND ai.email_normalized IS NOT NULL LIMIT 1),
 		       s.public_name, j.source_asset_id,
