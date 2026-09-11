@@ -104,17 +104,49 @@ func (m *Mailer) Send(to, subject, text, html string) ([]string, error) {
 }
 
 // SendLoginCode 发登录验证码。
+//
+// 🔴 正文里的「N 分钟内有效」必须跟真实有效期**同源**。
+// 原先这里把「10 分钟」写死在两段模板里（纯文本 + HTML），而真实有效期由
+// public_email.go 的 emailWindow 决定。任何人把有效期调短，用户都会照信里
+// 写的 10 分钟去慢慢输码，然后拿到「验证码已过期」—— 而接口回归全绿，
+// 现象和「收不到验证码」混在一起没法区分。
+// 现在两段模板与有效期一起来自 cfgstore.Store.EmailCodeTTL()。
 func (m *Mailer) SendLoginCode(to, code string) error {
-	subject := code + " 是你的 MuseFrame 登录验证码"
-	text := "你的 MuseFrame 登录验证码是：" + code + "\n\n验证码 10 分钟内有效。如果不是你本人操作，请忽略此邮件。"
-	html := `<div style="font-family:-apple-system,'PingFang SC',sans-serif;max-width:420px;margin:0 auto;padding:24px">` +
-		`<div style="font:600 22px Georgia,serif;letter-spacing:2px;color:#171717">MUSEFRAME</div>` +
-		`<p style="color:#6E6B66;font-size:14px">你的登录验证码：</p>` +
-		`<div style="font:700 34px ui-monospace,monospace;letter-spacing:8px;color:#1C49D8;padding:8px 0">` + code + `</div>` +
-		`<p style="color:#6E6B66;font-size:12px">10 分钟内有效。如果不是你本人操作，请忽略此邮件。</p></div>`
+	subject, text, html := m.loginCodeBody(code)
 	_, err := m.Send(to, subject, text, html)
 	return err
 }
+
+// loginCodeBody 组装验证码信的主题与两份正文。
+//
+// 🔴 拆出来是为了能在单测里直接断言「信里写的分钟数 == 真实有效期」，
+// 不用去假扮一整段 SMTP 会话。两份正文（纯文本 / HTML）共用同一个
+// validity 字符串 —— 它们曾经是两处独立的「10 分钟」。
+func (m *Mailer) loginCodeBody(code string) (subject, text, html string) {
+	validity := itoa(m.codeTTLMinutes()) + " 分钟内有效"
+	subject = code + " 是你的 MuseFrame 登录验证码"
+	text = "你的 MuseFrame 登录验证码是：" + code + "\n\n验证码 " + validity + "。如果不是你本人操作，请忽略此邮件。"
+	html = `<div style="font-family:-apple-system,'PingFang SC',sans-serif;max-width:420px;margin:0 auto;padding:24px">` +
+		`<div style="font:600 22px Georgia,serif;letter-spacing:2px;color:#171717">MUSEFRAME</div>` +
+		`<p style="color:#6E6B66;font-size:14px">你的登录验证码：</p>` +
+		`<div style="font:700 34px ui-monospace,monospace;letter-spacing:8px;color:#1C49D8;padding:8px 0">` + code + `</div>` +
+		`<p style="color:#6E6B66;font-size:12px">` + validity + `。如果不是你本人操作，请忽略此邮件。</p></div>`
+	return subject, text, html
+}
+
+// codeTTLMinutes 是正文里要写的分钟数，四舍五入且至少 1
+// （区间下界是 60 秒，所以 1 分钟是真的能取到的值）。
+func (m *Mailer) codeTTLMinutes() int {
+	d := m.rt.EmailCodeTTL()
+	mins := int((d + 30*time.Second) / time.Minute)
+	if mins < 1 {
+		mins = 1
+	}
+	return mins
+}
+
+// itoa 避免为一个数字引入 strconv（本包此前只用 fmt 拼端口）。
+func itoa(n int) string { return fmt.Sprintf("%d", n) }
 
 func fromAddress(from string) string {
 	if i := strings.LastIndex(from, "<"); i >= 0 {

@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ErrSecretNotWritable：secret 键不允许写入数据库。
@@ -75,6 +76,40 @@ var Registry = []Item{
 	{"smtp_pass", KindString, "SMTP_PASS", "", "SMTP 登录密码/密钥（只读环境变量，不可从后台写入）", true},
 	{"smtp_from", KindString, "SMTP_FROM", "MuseFrame <no-reply@lenscript.cn>", "发件人地址", false},
 	{"email_login_enabled", KindBool, "EMAIL_LOGIN_ENABLED", false, "开启邮箱验证码登录", false},
+	// 🔴 2026-09-12 新增。这个值此前是**四处独立的字面量**：
+	//   public_email.go 的 emailWindow 常量（真正的有效期与重发窗口）、
+	//   同文件 ExpiresInSeconds: 600（告诉 App 的数字）、
+	//   mailer.go 纯文本正文里的「10 分钟内有效」、
+	//   mailer.go HTML 正文里的「10 分钟内有效」。
+	// 四份里改一份，用户就会按信里写的时间慢慢输码，拿到「验证码已过期」——
+	// 而所有接口回归全绿（掌镜 2026-09-11 踩的正是同一个坑）。
+	// 现在四处全部改读 Store.EmailCodeTTL()，注册表这一项是唯一真相源。
+	{"email_code_ttl_seconds", KindNumber, "EMAIL_CODE_TTL_SECONDS", float64(600),
+		"邮箱验证码有效期（秒，同时也是重发窗口；合法区间 60..3600，越界自动夹到边界）", false},
+}
+
+// EmailCodeTTL 是邮箱验证码的有效期。
+//
+// 🔴 必须夹在区间内，不能直接信注册表里的数字：
+//   - 配成 0 或负数（手滑清空）= 每个码一签发就过期，邮箱登录整条路死掉，
+//     而后台看起来一切正常；
+//   - 配成一天 = 一个泄漏的验证码在一天内都能登进账号，而它同时是
+//     「每窗口最多签 5 次」的窗口长度，等于一天只能要 5 次码。
+//
+// 上下界是**安全边界**而不是口味问题，所以写在代码里、不做成配置项。
+func (s *Store) EmailCodeTTL() time.Duration {
+	const (
+		minTTL = 60 * time.Second
+		maxTTL = time.Hour
+	)
+	d := time.Duration(s.Int("email_code_ttl_seconds")) * time.Second
+	if d < minTTL {
+		return minTTL
+	}
+	if d > maxTTL {
+		return maxTTL
+	}
+	return d
 }
 
 var byKey = func() map[string]Item {

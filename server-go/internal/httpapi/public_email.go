@@ -17,7 +17,14 @@ import (
 
 var emailRe = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
 
-const emailWindow = 10 * time.Minute
+// emailWindow 是验证码有效期，同时也是「每窗口最多签 5 次」的窗口长度。
+//
+// 🔴 2026-09-12：原先这里是 `const emailWindow = 10 * time.Minute`，而邮件
+// 正文里的「10 分钟内有效」和出参里的 ExpiresInSeconds: 600 是另外三份独立
+// 的字面量。改一处就会让信里写的时间和真实有效期对不上，用户照信里写的时间
+// 慢慢输码 → 「验证码已过期」，而所有接口回归全绿。现在四处同源，
+// 唯一真相源是注册表项 email_code_ttl_seconds（见 cfgstore.Store.EmailCodeTTL）。
+func (a *App) emailWindow() time.Duration { return a.rt.EmailCodeTTL() }
 
 // EmailRequestResult 是 POST /v1/auth/email/request 的出参。
 type EmailRequestResult struct {
@@ -53,12 +60,13 @@ func (a *App) hEmailRequest(c *Ctx) (any, error) {
 	}
 	issued := 0
 	windowStart := now
-	if prior != nil && prior.WindowStart != nil && now.Sub(*prior.WindowStart) < emailWindow {
+	window := a.emailWindow()
+	if prior != nil && prior.WindowStart != nil && now.Sub(*prior.WindowStart) < window {
 		issued = prior.IssueCount
 		windowStart = *prior.WindowStart
 	}
 	if issued >= 5 {
-		retry := int((emailWindow - now.Sub(windowStart)).Seconds()) + 1
+		retry := int((window - now.Sub(windowStart)).Seconds()) + 1
 		return nil, apierr.WithDetails(429, apierr.CodeRateLimited, "验证码请求过于频繁，请稍后再试。",
 			map[string]any{"retryAfterSeconds": retry})
 	}
@@ -84,11 +92,13 @@ func (a *App) hEmailRequest(c *Ctx) (any, error) {
 			return nil, apierr.New(502, apierr.CodeEmailSendFailed, "验证码发送失败，请稍后重试。")
 		}
 	}
-	if err := store.UpsertEmailCode(ctx, a.st.Q(), email, codeHash, now.Add(emailWindow), now, issued+1, windowStart); err != nil {
+	if err := store.UpsertEmailCode(ctx, a.st.Q(), email, codeHash, now.Add(window), now, issued+1, windowStart); err != nil {
 		return nil, err
 	}
 
-	out := EmailRequestResult{OK: true, ExpiresInSeconds: 600}
+	// 🔴 告诉 App 的数字必须是**刚才真的用掉的那个 window**，不是再算一遍：
+	// 中途有人改了配置时，重算会让出参和库里那一行的 expires_at 对不上。
+	out := EmailRequestResult{OK: true, ExpiresInSeconds: int(window.Seconds())}
 	// 🔴 与另外两个开发逃生口一样是**双闸**：只有旗标时，任何未鉴权调用方
 	// 都能拿到**任意地址**的明文验证码 —— 那是所有邮箱账号的接管。
 	if testMode && a.isAdminRequest(c.R) {

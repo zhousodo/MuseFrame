@@ -91,12 +91,80 @@ func TestSecretFromEnvOnly(t *testing.T) {
 	}
 }
 
-func TestRegistryHasTwentySixKeys(t *testing.T) {
-	if len(Registry) != 26 {
-		t.Fatalf("注册表应有 26 个键（与 Node 版 configStore.js 一致），实际 %d", len(Registry))
+// 🔴 这个数字是**契约断言**，不是计数练习：Node 版那 26 个键必须一个不少地
+// 存在（少一个就是静默丢配置），而新增键必须是有意为之、连同这里的数字一起改。
+//
+// 2026-09-12：26 → 27，新增 email_code_ttl_seconds（把验证码有效期从四处
+// 写死的字面量收敛成一个注册表项，见 Registry 里那条注释）。
+// 密钥项仍必须恰为 2 个 —— 这条一旦变大就说明有人往注册表里加了新密钥，
+// 而注册表是后台可写面，新密钥必须先确认 Secret:true。
+func TestRegistryHasExpectedKeys(t *testing.T) {
+	const wantKeys = 27
+	if len(Registry) != wantKeys {
+		t.Fatalf("注册表应有 %d 个键，实际 %d（Node 版那 26 个必须一个不少）", wantKeys, len(Registry))
+	}
+	for _, k := range []string{"free_units", "support_email", "support_qq_group",
+		"smtp_host", "smtp_from", "email_login_enabled", "email_code_ttl_seconds"} {
+		if _, ok := byKey[k]; !ok {
+			t.Errorf("注册表缺键 %s", k)
+		}
 	}
 	if got := SecretKeys(); len(got) != 2 {
 		t.Fatalf("密钥项应恰为 2 个，实际 %v", got)
+	}
+}
+
+// TestEmailCodeTTLClampsToSafeRange 🔴 有效期必须被夹在区间内。
+//
+//	配成 0（手滑清空）= 每个码一签发就过期，邮箱登录整条路死掉，而后台
+//	显示「已保存」、所有接口回归全绿；配成一天 = 一个泄漏的验证码一整天
+//	都能登进账号，而它同时是「每窗口最多签 5 次」的窗口长度，等于一天
+//	只能要 5 次码。上下界是安全边界，所以写死在代码里。
+func TestEmailCodeTTLClampsToSafeRange(t *testing.T) {
+	cases := []struct {
+		env  string
+		want int // 秒
+	}{
+		{"", 600},       // 默认 10 分钟
+		{"600", 600},    // 正常值原样生效
+		{"90", 90},      // 区间内的短值可用
+		{"0", 60},       // 🔴 夹到下界，不是「立刻过期」
+		{"-5", 60},      // 🔴 负数同理
+		{"abc", 600},    // 非法值回落默认（Number 的既有行为）
+		{"86400", 3600}, // 🔴 夹到上界
+	}
+	for _, c := range cases {
+		env := map[string]string{}
+		if c.env != "" {
+			env["EMAIL_CODE_TTL_SECONDS"] = c.env
+		}
+		s := NewForTest(env)
+		if got := int(s.EmailCodeTTL().Seconds()); got != c.want {
+			t.Errorf("EMAIL_CODE_TTL_SECONDS=%q 应得 %d 秒，实得 %d", c.env, c.want, got)
+		}
+	}
+}
+
+// TestEmailCodeTTLIsHotEditable 它必须是**非密钥**项，否则后台改不了
+// （本次改动的全部意义就是让运营能改这个值，而不用去碰 project.env）。
+func TestEmailCodeTTLIsHotEditable(t *testing.T) {
+	if IsSecret("email_code_ttl_seconds") {
+		t.Fatal("验证码有效期不是密钥，不该被标成 Secret（那样后台会拒写）")
+	}
+	be := &fakeBackend{rows: map[string]string{"email_code_ttl_seconds": "120"}}
+	s, err := New(context.Background(), be)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.lookup = func(string) (string, bool) { return "", false }
+	if got := int(s.EmailCodeTTL().Seconds()); got != 120 {
+		t.Fatalf("DB 覆盖应生效（热改），实得 %d 秒", got)
+	}
+	if err := s.Set(context.Background(), "email_code_ttl_seconds", float64(300)); err != nil {
+		t.Fatalf("后台写入应成功: %v", err)
+	}
+	if got := int(s.EmailCodeTTL().Seconds()); got != 300 {
+		t.Fatalf("写入后应立刻生效，实得 %d 秒", got)
 	}
 }
 

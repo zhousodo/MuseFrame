@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"strings"
 
 	"museframe-api/internal/apierr"
 	"museframe-api/internal/cfgstore"
@@ -25,7 +26,103 @@ func (a *App) adminConfigResult(c *Ctx) (AdminConfigResult, error) {
 			Description: "Google Play 收据校验服务账号是否已配置", RequiresRestart: true, ReadOnly: true,
 		},
 	)
+	settings = append(settings, a.deployOnlySettings()...)
 	return AdminConfigResult{Settings: settings, Generation: a.generationSummary(c.R.Context()), Abuse: abuse}, nil
+}
+
+// deployOnlySettings 是**部署级**配置的只读视图。
+//
+// 🔴 为什么要把它们搬到后台来（2026-09-12 盘点结论）：
+//
+//	注册表里的 27 个键是「热键」——后台能看能改。但 internal/config 里还有
+//	十几个同样影响产品行为的值（会话有效期、事件保留期、每账号存储上限、
+//	图像引擎走远端还是本地、是否信任 CF-Connecting-IP、测试登录逃生口……），
+//	后台对它们**一个字都看不到**。于是「为什么用户 91 天后被登出了」
+//	「为什么 /v1/admin/db 里三个月前的事件没了」这类问题，唯一的查法是
+//	SSH 上服务器读 project.env —— 而运营没有那台机器的权限。
+//
+// 🔴 它们一律 ReadOnly + RequiresRestart：这些值在进程启动时读一次就固化了
+//
+//	（连接池、盐、目录这类东西没法热换），后台能改的假象比看不见更糟 ——
+//	改完没生效，而页面显示「已保存」。前端对 readOnly 项不渲染保存按钮
+//	（admin.html 的 configRowHtml），所以这里加行不会多出任何写入口。
+//
+// 🔴 密钥仍然只给「已配置 / 未配置」：ADMIN_TOKEN、IP_HASH_SALT、
+//
+//	GOOGLE_SERVICE_ACCOUNT_JSON、数据库连接串的**值**一个字节都不进响应。
+func (a *App) deployOnlySettings() []cfgstore.Setting {
+	ro := func(key string, value any, desc string) cfgstore.Setting {
+		return cfgstore.Setting{
+			Key: key, Value: value, Source: "env", Description: desc,
+			RequiresRestart: true, ReadOnly: true,
+		}
+	}
+	// 🔴 刻意不叫 str/num：本包已有一个包级 str()（见 hAdminConfigPut），
+	//    同名局部闭包会把它遮掉，是个纯粹自找的阅读陷阱。
+	roText := func(key, v, desc string) cfgstore.Setting {
+		s := ro(key, v, desc)
+		s.Type = string(cfgstore.KindString)
+		return s
+	}
+	roNum := func(key string, v int, desc string) cfgstore.Setting {
+		s := ro(key, float64(v), desc)
+		s.Type = string(cfgstore.KindNumber)
+		return s
+	}
+	roFlag := func(key string, v bool, desc string) cfgstore.Setting {
+		s := ro(key, v, desc)
+		s.Type = string(cfgstore.KindBool)
+		return s
+	}
+
+	out := []cfgstore.Setting{
+		roText("deploy_image_provider", a.cfg.ImageProvider,
+			"【部署级】图像引擎：remote = 调上游模型，local = 本地像素引擎（IMAGE_PROVIDER）"),
+		roNum("deploy_session_ttl_days", a.cfg.SessionTTLDays,
+			"【部署级】登录会话有效期天数（SESSION_TTL_DAYS）"),
+		roNum("deploy_event_retention_days", a.cfg.EventRetentionDays,
+			"【部署级】events 表保留天数，超期由后台任务删除（EVENT_RETENTION_DAYS）"),
+		roNum("deploy_idempotency_retention_days", a.cfg.IdempotencyDays,
+			"【部署级】幂等记录保留天数（IDEMPOTENCY_RETENTION_DAYS）"),
+		roNum("deploy_max_job_attempts", a.cfg.MaxJobAttempts,
+			"【部署级】单个生成任务最多重试几次（MAX_JOB_ATTEMPTS）"),
+		roNum("deploy_max_user_storage_bytes", int(a.cfg.MaxUserStorageBytes),
+			"【部署级】每账号存储上限（字节，MAX_USER_STORAGE_BYTES）"),
+		roNum("deploy_shutdown_grace_seconds", a.cfg.ShutdownGraceS,
+			"【部署级】收到 SIGTERM 后的排空窗口（秒，SHUTDOWN_GRACE_SECONDS）"),
+		roNum("deploy_db_pool_max_conns", int(a.cfg.PoolMaxConns),
+			"【部署级】数据库连接池上限（统一 PG 硬顶 4，MUSEFRAME_DATABASE_POOL_MAX_CONNS）"),
+		roText("deploy_trusted_proxy", a.cfg.TrustedProxy,
+			"【部署级】哪些对端允许设置转发头（TRUSTED_PROXY）"),
+		roFlag("deploy_trust_cf_connecting_ip", a.cfg.TrustCFIP,
+			"【部署级】是否信任 cf-connecting-ip（TRUST_CF_CONNECTING_IP）"),
+		roFlag("deploy_play_acknowledge", a.cfg.PlayAcknowledge,
+			"【部署级】服务端确认 Google Play 购买（PLAY_ACKNOWLEDGE）"),
+		// 🔴 这一项是测试逃生口：开着它 + 管理员身份就能拿到**任意邮箱**的明文
+		//    验证码。生产必须为 false，所以它必须在后台一眼能看见。
+		roFlag("deploy_allow_test_login", a.cfg.AllowTestLogin,
+			"【部署级】🔴 测试登录逃生口（回显明文验证码，生产必须为 false，ALLOW_TEST_LOGIN）"),
+		roFlag("deploy_admin_token_configured", a.cfg.AdminToken != "",
+			"【部署级】管理令牌是否已配置（值不显示；ADMIN_TOKEN）"),
+		roFlag("deploy_ip_hash_salt_configured", a.cfg.IPHashSalt != "",
+			"【部署级】per-IP 免费额度盐是否已配置（值不显示；IP_HASH_SALT）"),
+		roFlag("deploy_google_web_client_id_configured", a.cfg.GoogleWebClientID != "",
+			"【部署级】Google 网页端 Client ID 是否已配置（GOOGLE_WEB_CLIENT_ID）"),
+	}
+
+	// 🔴 遗留明文密钥告警。cfgstore.Load 会把 app_config 里 secret 键的行
+	//    丢掉（不生效），但**不会删**它们 —— 那几行是 Node 版「后台热改密钥」
+	//    留下的明文，仍然随每日备份 tar 落盘。这个信号此前只存在于
+	//    Store.SkippedSecretRows 字段里，没有任何人看得到。
+	if rows := a.rt.SkippedSecretRows; len(rows) > 0 {
+		out = append(out, cfgstore.Setting{
+			Key: "leftover_secret_rows_in_db", Value: strings.Join(rows, ","),
+			Source: "db", Type: string(cfgstore.KindString), ReadOnly: true, RequiresRestart: false,
+			Description: "🔴 app_config 表里还有这些密钥键的遗留明文行（已不生效，但仍随备份落盘）。" +
+				"请直接在库里 DELETE 掉它们。正常情况下这一项应当不出现。",
+		})
+	}
+	return out
 }
 
 func (a *App) hAdminConfigGet(c *Ctx) (any, error) {
