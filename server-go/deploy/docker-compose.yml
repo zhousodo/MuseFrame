@@ -1,0 +1,69 @@
+# MuseFrame（留影）后端 —— Go + 统一 PostgreSQL。
+#
+# 与旧 compose 的差异（逐条都有理由）：
+#   🔴 image 使用**不可变 tag**（${MUSEFRAME_IMAGE_TAG}），不再是 museframe-api:latest。
+#      浮动 tag 是用户明令禁止的：回滚时没法确定「上一版」到底是哪一版。
+#   - 不再有 build:：生产机不 docker build，镜像在别处构建好后按摘要/版本号拉起。
+#   - 不再挂 ./data（SQLite 与资产同目录）：数据库在统一 PG，资产单独挂持久卷。
+#   - 健康检查走二进制自带的 healthcheck 子命令（distroless 里没有 curl/wget）。
+name: museframe
+
+services:
+  api:
+    image: museframe-api:${MUSEFRAME_IMAGE_TAG:?必须显式指定不可变镜像 tag，禁止 latest}
+    container_name: museframe-api
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 40s      # 大于 SHUTDOWN_GRACE_SECONDS(25)，留出排空余量
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    user: "${MUSEFRAME_UID:-1000}:${MUSEFRAME_GID:-1000}"
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    env_file:
+      - project.env             # 权限 600，含 ADMIN_TOKEN / IMAGE_PROVIDER_API_KEY / SMTP_PASS
+    environment:
+      PORT: "8787"
+      HOST: "0.0.0.0"
+      MUSEFRAME_ASSET_DIR: /var/lib/museframe/assets
+    ports:
+      - "127.0.0.1:8787:8787"   # 公网入口只有边缘代理；ufw 不放行 8787
+    volumes:
+      - museframe-assets:/var/lib/museframe/assets
+    networks:
+      - platform-db-net
+      - default
+    # 内存算式（Node 版实测 51.84MiB / 512MiB）：
+    #   常驻   = 静态二进制 ~12 MB + Go 运行时与连接池 ~25 MB      ≈  40 MB
+    #   峰值   = 常驻 + 并发解码峰值
+    #   并发解码峰值 = MAX_SOURCE_PIXELS(40 MP) × 4 B/px × worker_concurrency(3)
+    #                ≈ 160 MB × 3 = 480 MB（理论最坏：三张 40 MP 源图同时解码）
+    #   生产实际图片是 1536×2048 ≈ 3.1 MP → 12.6 MB/张，三张合计 ~38 MB，
+    #   因此**日常峰值约 80 MB**，而 512m 保的是理论最坏那一档。
+    # 结论：维持 512m。要降到 256m 必须先把 MAX_SOURCE_PIXELS 调小（那是契约变更，
+    # 会改变 422 ASSET_UNSUPPORTED 的触发阈值），不能只改 compose。
+    mem_limit: 512m
+    mem_reservation: 96m
+    healthcheck:
+      # /v1/ready 是**只读**探针（SELECT 1），绝不写库。
+      test: ["CMD", "/museframe-api", "healthcheck"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  museframe-assets:
+    name: museframe-assets
+
+networks:
+  platform-db-net:
+    external: true
+    name: platform-db-net
