@@ -1,0 +1,6 @@
+# 一次性迁移 / 运维工具镜像：建表脚本执行器与资产迁移工具。
+# 与运行镜像分开，是为了让运行角色 museframe_app 永远不需要 DDL 权限。
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY dist/museframe-assets /museframe-assets
+USER nonroot:nonroot
+ENTRYPOINT ["/museframe-assets"]
