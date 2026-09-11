@@ -29,6 +29,7 @@
 """
 import argparse
 import hashlib
+import re
 import json
 import os
 import ssl
@@ -213,8 +214,24 @@ def norm_json(o):
     return o
 
 
+# ── Cloudflare 邮箱混淆：每次请求换一个 XOR 密钥，同一份 HTML 两次请求
+#    的字节就不同（实测 /、/en/、/guide/ 等 11 条落地页全中，长度不变）。
+#    这跟后端毫无关系，不剔掉就是 11 条假红。剔的范围**卡得很死**：只动
+#    /cdn-cgi/l/email-protection# 后面那串十六进制和 data-cfemail 属性值，
+#    别的一个字节都不碰；同时另外独立断言**字节长度**，混淆串长度固定，
+#    真少了一段内容长度立刻对不上。
+_CF_EMAIL = re.compile(rb"(/cdn-cgi/l/email-protection#)[0-9a-fA-F]+")
+_CF_ATTR = re.compile(rb'(data-cfemail=")[0-9a-fA-F]+(")')
+
+
+def strip_cf_noise(raw):
+    raw = _CF_EMAIL.sub(rb"<CF-EMAIL-OBFUSCATION>", raw)
+    return _CF_ATTR.sub(rb"<CF-EMAIL-OBFUSCATION>", raw)
+
+
 def digest(status, ctype, raw):
     """返回 (体 sha256, 规范化 sha256)。JSON 先剔易变字段。"""
+    raw = strip_cf_noise(raw)
     raw_sha = hashlib.sha256(raw).hexdigest()
     base_ct = (ctype or "").split(";")[0].strip().lower()
     if base_ct in ("application/json", "application/problem+json"):
@@ -408,8 +425,19 @@ def cmd_verify(args):
                          b["norm_sha"][:16], n["norm_sha"][:16], "🔴 探测失败(ERR)"])
             red_ids.append(c["id"])
             continue
+        # 字节长度断言的适用范围：**只对按原始字节哈希的响应**（HTML/JS/CSS/图片）。
+        # 它是给 Cloudflare 邮箱混淆兜底用的 —— 混淆串长度固定，真丢内容长度必变。
+        # JSON 不适用：Go 的 encoding/json 与 Node 的 JSON.stringify 在三处**编码层**
+        # 不同（对象键序、& 转义成 &、Encode 尾部多一个换行），字节长度必然差，
+        # 但 parse 回来逐字段完全相等（已在切换后逐字节 opcode 级别核对 + 解析层深度
+        # 比对双证）。对 JSON 用长度断言只会制造假红，掩盖不了任何真问题：真丢字段
+        # 时规范化 sha 一定先红。
+        json_body = (n["ctype"] or "").split(";")[0].strip().lower() in (
+            "application/json", "application/problem+json")
+        skip_len = json_body or (c["id"] in EXPECT_BODY_DIFF and bool(expect_new))
         same = (b["status"] == n["status"] and b["norm_sha"] == n["norm_sha"]
-                and b["location"] == n["location"])
+                and b["location"] == n["location"]
+                and (skip_len or b["length"] == n["length"]))
         if same:
             verdict = "一致"
         else:
@@ -422,6 +450,8 @@ def cmd_verify(args):
                 bits.append("体")
             if b["location"] != n["location"]:
                 bits.append("Location")
+            if not skip_len and b["length"] != n["length"]:
+                bits.append("字节长度(%d→%d)" % (b["length"], n["length"]))
             verdict = "🔴 " + "/".join(bits) + "不一致"
         rows.append([c["id"], c["edge"], c["path"], b["status"], n["status"],
                      b["norm_sha"][:16], n["norm_sha"][:16], verdict])
