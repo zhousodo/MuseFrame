@@ -152,7 +152,7 @@ Go 版把这条路径整条拆掉：
 | `cfgstore.Set(secretKey, …)` | 返回 `ErrSecretNotWritable` → `PUT /v1/admin/config` 得到 **422** |
 | `provider.Adapter.apiKey` | 从 `config.Config`（环境变量）注入，不经过 cfgstore |
 | `mailer` | 只接收已取好的口令字符串，自己不查库 |
-| `GET /v1/admin/config` | secret 项掩码为 `••••` + 末 4 位，`source` 只可能是 `env` / `default` |
+| `GET /v1/admin/config` | secret 项掩码为固定 `••••••••`（2026-09-12 起不再回末 4 位 —— 后台页面可截图，末位足以做泄漏库匹配），`source` 只可能是 `env` / `default` |
 
 **迁移红线**：`app_config` 里的 `image_provider_api_key` / `smtp_pass` 两行
 **不迁进 PG**（迁了也不生效，但不该留在库里）。

@@ -142,8 +142,12 @@ func TestAdminConfigSecretWriteRejected(t *testing.T) {
 				t.Fatal("密钥项的 source 不得为 db")
 			}
 			v, _ := s.Value.(string)
-			if !strings.HasPrefix(v, "\u2022\u2022\u2022\u2022") {
-				t.Fatalf("密钥项必须掩码为 4 个圆点 + 末 4 位，实际 %q", v)
+			// 掩码是固定 8 个圆点，不带原文末位 —— 末 4 位也是泄漏（见 cfgstore.MaskedSecret）。
+			if v != cfgstore.MaskedSecret {
+				t.Fatalf("密钥项必须掩码为固定 8 个圆点，实际 %q", v)
+			}
+			if strings.ContainsAny(strings.ReplaceAll(v, "\u2022", ""), "abcdefghijklmnopqrstuvwxyz0123456789-") {
+				t.Fatalf("掩码里出现了原文字符：%q", v)
 			}
 		}
 	}

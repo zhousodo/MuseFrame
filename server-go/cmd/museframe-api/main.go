@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,7 +32,32 @@ import (
 )
 
 // version 由 -ldflags "-X main.version=<tag>" 注入。
+//
+// 🔴 这个变量**不要直接用**，一律走 resolveVersion()：2026-09-12 的验收里后台
+// 「运行状态 · 后端版本」显示的是字面量 "dev" —— 本地交叉编译那一步漏了 -X
+// （或者 $TAG 当时是空串），而镜像本身是有 tag 的。一条只在构建命令正确时才对
+// 的展示等于没有展示：运维拿它回答「线上跑的是哪个版本」，显示 dev 比不显示更坏。
 var version = "dev"
+
+// versionEnvVars 是回退读的环境变量，按优先级。IMAGE_TAG 是 platformctl 的
+// project.env 里本来就有的那个键（compose 把它透给容器），所以哪怕 ldflags
+// 再漏一次，后台显示的也会是真实的镜像 tag 而不是 "dev"。
+var versionEnvVars = []string{"MUSEFRAME_IMAGE_TAG", "IMAGE_TAG"}
+
+// resolveVersion 决定后台「后端版本」那一行显示什么：
+// ldflags 注入值优先，注入缺失（空 / 占位 "dev"）时回退读镜像 tag 环境变量，
+// 两路都没有才回到 "dev"（此时显示 dev 是诚实的：确实无从得知）。
+func resolveVersion(injected string, getenv func(string) string) string {
+	if v := strings.TrimSpace(injected); v != "" && v != "dev" {
+		return v
+	}
+	for _, name := range versionEnvVars {
+		if v := strings.TrimSpace(getenv(name)); v != "" {
+			return v
+		}
+	}
+	return "dev"
+}
 
 // seedProviderHealth 用 generation_jobs 的历史收口行给上游健康账本播种。
 // 失败不致命：播不上只是回到「零样本 + 探针」，不该让进程起不来。
@@ -56,8 +82,15 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		os.Exit(runHealthcheck())
 	}
+	// `museframe-api version` 打一行解析后的版本号。发版时用它在**打包前**验证
+	// -X 注入到底有没有生效 —— 这正是上一轮漏掉的那一步。
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		os.Stdout.WriteString(resolveVersion(version, os.Getenv) + "\n")
+		os.Exit(0)
+	}
 
 	lg := logx.New()
+	buildVersion := resolveVersion(version, os.Getenv)
 	cfg, err := config.Load()
 	if err != nil {
 		lg.Warn("启动失败：配置不合法", map[string]any{"error": err.Error()})
@@ -120,7 +153,7 @@ func main() {
 
 	app := httpapi.New(httpapi.Options{
 		Config: cfg, Runtime: rt, Store: st, Logger: lg, Provider: prov, Worker: wk,
-		Mailer: mail, Play: playClient, Version: version, ImgTokenKey: []byte(imgKey),
+		Mailer: mail, Play: playClient, Version: buildVersion, ImgTokenKey: []byte(imgKey),
 	})
 	pub, adm := app.RouteCount()
 	lg.Info("路由已注册", map[string]any{"public": pub, "admin": adm, "total": pub + adm})
@@ -157,7 +190,7 @@ func main() {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		lg.Info("museframe-api listening", map[string]any{"host": cfg.Host, "port": cfg.Port, "version": version})
+		lg.Info("museframe-api listening", map[string]any{"host": cfg.Host, "port": cfg.Port, "version": buildVersion})
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}

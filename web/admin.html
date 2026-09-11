@@ -228,7 +228,7 @@
 
   <section id="tab-db" class="tabpane" style="display:none">
     <p class="muted viewnote" style="margin-top:14px">只读地翻库。左侧选表分页浏览，下面的查询台只接受 SELECT / WITH。
-      密钥列已脱敏；时间一律是 UTC ISO-8601 带 Z。这里<b>改不了</b>任何数据 —— 要改去对应的功能页，那样才有审计。</p>
+      密钥列已脱敏；<b>这一页是全后台唯一展示 UTC 的地方</b>（展示的是库里原始列值，ISO-8601 带 Z；其余页面一律北京时间 UTC+8）。这里<b>改不了</b>任何数据 —— 要改去对应的功能页，那样才有审计。</p>
     <div class="muted" style="font-size:11px">表格较宽，可左右滚动查看全部列 →</div>
     <div class="dblayout">
       <div class="dbsidebar" id="dbTableList">加载中…</div>
@@ -266,7 +266,11 @@
     <div id="emailTestResult" class="mailres muted">还没在本页发过测试邮件。上面「运行状态 · 邮件通道」里是本进程最近一次发送的结果（含用户收到的验证码信）。</div>
   </section>
 </main>
-<div id="viewer" onclick="this.style.display='none'"><img id="viewerImg"></div>
+<!-- 🔴 大图查看器里**不放常驻的 <img>**：一个还没 src 的 <img> 会被浏览器
+     当成空图请求（验收扫出来的「总览有 1 个 <img src="">」就是它，不是缩略图
+     —— thumb() 本来就在 id 为空时渲染「—」而不是 img）。图元素改成点开时才建、
+     关掉就销毁，页面静态态下一个空图都没有。 -->
+<div id="viewer" onclick="closeViewer()"></div>
 <div id="toast"></div>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -325,16 +329,64 @@ function errHtml(msg){ return `<p class="bad">加载失败：${escapeHtml(msg)}<
 function fmt$(m){ return '$' + (m/100).toFixed(2); }
 function fmtNum(v){ return Number.isInteger(v) ? String(v) : Number(v).toFixed(2); }
 function ago(t){ const s=(Date.now()-new Date(t))/1000; return s<3600?Math.round(s/60)+' 分钟前':s<86400?Math.round(s/3600)+' 小时前':Math.round(s/86400)+' 天前'; }
+
+/* ---------- 时间：后台一律显示北京时间（UTC+8） ----------
+   🔴 后端每一个时间戳都是 UTC ISO-8601 带 Z。2026-09-12 验收时这个页面同时存在
+   两套时区且都没有标注：页头 stamp() 用 toLocaleString()（= 浏览器时区，当时是
+   北京时间 04:41），操作审计那一列直接截 ISO 串（= UTC 20:44）。两个数字差 8 小时，
+   运维无法判断「这条审计是刚刚还是八小时前」——而审计的全部用处就是对时间。
+   统一成北京时间，并且在列头/标签上写明 (UTC+8)。
+   刻意**不用** toLocaleString()/toLocaleDateString()：运维的机器不一定在 +08
+   （CI 容器、跳板机一律 UTC），靠浏览器时区就等于又回到「两套时间」。
+   唯一保留 UTC 原文的地方是「数据库浏览器」，那里展示的是库里的原始列值，
+   页面上已写明；这些辅助函数的 title 里也一并带上 UTC 原文以便对照。 */
+const TZ_LABEL = '(UTC+8)';
+const TZ_OFFSET_MS = 8 * 3600 * 1000;
+function bjISO(t){
+  if (!t) return null;
+  const d = new Date(t);
+  return isNaN(d.getTime()) ? null : new Date(d.getTime() + TZ_OFFSET_MS).toISOString();
+}
+/* 'YYYY-MM-DD HH:MM:SS'（北京时间）；解析不出来回 '—' 而不是 'Invalid Date'。 */
+function fmtBJ(t){ const v = bjISO(t); return v ? v.replace('T', ' ').slice(0, 19) : '—'; }
+/* 只要日期那一段（到期日这类不需要时分秒的地方）。 */
+function fmtBJDate(t){ const v = bjISO(t); return v ? v.slice(0, 10) : '—'; }
+/* 当下的北京时间，给页头的「数据时间」用。 */
+function nowBJ(){ return fmtBJ(new Date().toISOString()); }
+/* 列表里的相对时间（「3 小时前」）本身没有时区歧义，但悬停要能拿到精确时刻：
+   title 同时给北京时间和 UTC 原文。 */
+function agoCell(t){
+  return `<span title="${escapeHtml(fmtBJ(t))} ${TZ_LABEL}　/　UTC ${escapeHtml(String(t || '—'))}">${escapeHtml(ago(t))}</span>`;
+}
 // Short-lived image token (fetched once, cached ~50min) so the real admin token
-// never appears in <img> URLs.
+// never appears in image element URLs.
 let IMG_TOK = '';
 async function ensureImgTok(){
   if (IMG_TOK) return IMG_TOK;
   try { IMG_TOK = (await api('/v1/admin/img-token')).token; setTimeout(() => { IMG_TOK=''; }, 3000000); } catch(_) {}
   return IMG_TOK;
 }
-function thumb(id){ return id ? `<img class="thumb" loading="lazy" src="/v1/admin/assets/${id}/file?img_token=${encodeURIComponent(IMG_TOK)}" onclick="view(this.src)">` : '<span class="muted">—</span>'; }
-function view(src){ $('viewerImg').src = src; $('viewer').style.display='flex'; }
+/* 缩略图为空（也包括空白串）时渲染「—」，不渲染 <img> —— src 拼不出资产 id
+   的 <img> 只会变成一个坏图图标加一次无谓请求。 */
+function thumb(id){
+  const aid = id ? String(id).trim() : '';
+  if (!aid) return '<span class="muted">—</span>';
+  return `<img class="thumb" loading="lazy" src="/v1/admin/assets/${encodeURIComponent(aid)}/file?img_token=${encodeURIComponent(IMG_TOK)}" onclick="view(this.src)" alt="">`;
+}
+function view(src){
+  if (!src) return;                       // 没有 src 就不开，更不建空 img
+  const box = $('viewer');
+  const img = document.createElement('img');
+  img.id = 'viewerImg';
+  img.src = src;
+  box.replaceChildren(img);               // 先 src 后入 DOM：不会有一瞬间的空 img
+  box.style.display = 'flex';
+}
+function closeViewer(){
+  const box = $('viewer');
+  box.style.display = 'none';
+  box.replaceChildren();                  // 关掉就把 img 拆掉，静态态零空图元素
+}
 
 let toastTimer;
 function toast(msg, isErr){
@@ -346,7 +398,7 @@ function toast(msg, isErr){
   toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
 }
 
-function stamp(){ $('stamp').textContent = '数据时间 ' + new Date().toLocaleString(); }
+function stamp(){ $('stamp').textContent = `数据时间 ${nowBJ()} ${TZ_LABEL}`; }
 
 /* ---------- 概览 ---------- */
 async function loadOverview(){
@@ -372,27 +424,27 @@ async function loadOverview(){
 
   try {
     const jobs = (await api('/v1/admin/jobs')).jobs || [];
-    $('jobs').innerHTML = '<tr><th>原图</th><th>结果</th><th>风格</th><th>邮箱</th><th>状态</th><th>耗时</th><th>尝试</th><th>用户</th><th>时间</th></tr>' +
+    $('jobs').innerHTML = '<tr><th>原图</th><th>结果</th><th>风格</th><th>邮箱</th><th>状态</th><th>耗时</th><th>尝试</th><th>用户</th><th>时间 (UTC+8)</th></tr>' +
       (jobs.length ? jobs.map(x=>`<tr><td>${thumb(x.sourceAssetId)}</td><td>${thumb(x.candidateAssetId)}</td><td>${escapeHtml(x.style||'')}</td>
         <td class="muted">${escapeHtml(x.email||'—')}</td>
         <td class="${x.status==='succeeded'?'ok':x.status==='failed'?'bad':'muted'}">${escapeHtml(x.status)}${x.error_code?'<br><span class=muted>'+escapeHtml(x.error_code)+'</span>':''}</td>
-        <td>${x.seconds!=null?x.seconds+'s':'—'}</td><td>${x.attempt_count}</td><td class="muted">${escapeHtml(x.user||'')}</td><td class="muted">${ago(x.created_at)}</td></tr>`).join('') : '<tr><td colspan=9 class=muted>暂无任务</td></tr>');
+        <td>${x.seconds!=null?x.seconds+'s':'—'}</td><td>${x.attempt_count}</td><td class="muted">${escapeHtml(x.user||'')}</td><td class="muted">${agoCell(x.created_at)}</td></tr>`).join('') : '<tr><td colspan=9 class=muted>暂无任务</td></tr>');
   } catch(e) {
     if (e.status !== 401) $('jobs').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
   }
 
   try {
     const pu = (await api('/v1/admin/purchases')).purchases || [];
-    $('purchases').innerHTML = '<tr><th>商品</th><th>邮箱</th><th>金额</th><th>状态</th><th>用户</th><th>时间</th></tr>' +
-      (pu.length ? pu.map(p=>`<tr><td>${escapeHtml(p.product)}</td><td class="muted">${escapeHtml(p.email||'—')}</td><td>${fmt$(p.amount_minor)}</td><td>${escapeHtml(p.status)}</td><td class="muted">${escapeHtml(p.user||'')}</td><td class="muted">${ago(p.purchased_at)}</td></tr>`).join('') : '<tr><td colspan=6 class=muted>暂无购买</td></tr>');
+    $('purchases').innerHTML = '<tr><th>商品</th><th>邮箱</th><th>金额</th><th>状态</th><th>用户</th><th>时间 (UTC+8)</th></tr>' +
+      (pu.length ? pu.map(p=>`<tr><td>${escapeHtml(p.product)}</td><td class="muted">${escapeHtml(p.email||'—')}</td><td>${fmt$(p.amount_minor)}</td><td>${escapeHtml(p.status)}</td><td class="muted">${escapeHtml(p.user||'')}</td><td class="muted">${agoCell(p.purchased_at)}</td></tr>`).join('') : '<tr><td colspan=6 class=muted>暂无购买</td></tr>');
   } catch(e) {
     if (e.status !== 401) $('purchases').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
   }
 
   try {
     const fb = (await api('/v1/admin/feedback')).feedback || [];
-    $('feedback').innerHTML = '<tr><th>评价</th><th>原因</th><th>风格</th><th>时间</th></tr>' +
-      (fb.length ? fb.map(f=>{ const reasons = parseReasonCodes(f.reason_codes); return `<tr><td>${f.rating==='positive'?'👍':'👎'}</td><td>${escapeHtml(reasons.join(', ')||'—')}</td><td>${escapeHtml(f.style||'—')}</td><td class="muted">${ago(f.created_at)}</td></tr>`; }).join('') : '<tr><td colspan=4 class=muted>暂无反馈</td></tr>');
+    $('feedback').innerHTML = '<tr><th>评价</th><th>原因</th><th>风格</th><th>时间 (UTC+8)</th></tr>' +
+      (fb.length ? fb.map(f=>{ const reasons = parseReasonCodes(f.reason_codes); return `<tr><td>${f.rating==='positive'?'👍':'👎'}</td><td>${escapeHtml(reasons.join(', ')||'—')}</td><td>${escapeHtml(f.style||'—')}</td><td class="muted">${agoCell(f.created_at)}</td></tr>`; }).join('') : '<tr><td colspan=4 class=muted>暂无反馈</td></tr>');
   } catch(e) {
     if (e.status !== 401) $('feedback').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
   }
@@ -404,7 +456,7 @@ async function loadUsers(){
   try {
     const search = ($('userSearch').value || '').trim();
     const users = (await api('/v1/admin/users' + (search ? '?q=' + encodeURIComponent(search) : ''))).users || [];
-    $('usersTable').innerHTML = '<tr><th>邮箱</th><th>显示名</th><th>登录方式</th><th>身份</th><th>状态</th><th>余额</th><th>生成数</th><th>ID</th><th>注册时间</th><th></th></tr>' +
+    $('usersTable').innerHTML = '<tr><th>邮箱</th><th>显示名</th><th>登录方式</th><th>身份</th><th>状态</th><th>余额</th><th>生成数</th><th>ID</th><th>注册时间 (UTC+8)</th><th></th></tr>' +
       (users.length ? users.map(u=>{
         /* 🔴 status 不是装饰：active 之外的值会让该账号的所有令牌被当成未登录。
            此前这一列根本不在出参里，「这个人是不是被封了」只能去数据库浏览器翻 users 表。 */
@@ -421,7 +473,7 @@ async function loadUsers(){
         <td>${u.units ?? 0}</td>
         <td>${u.jobs ?? 0}</td>
         <td class="muted" title="${escapeHtml(u.userId||'')}">${escapeHtml(u.id)}</td>
-        <td class="muted">${ago(u.createdAt)}</td>
+        <td class="muted">${agoCell(u.createdAt)}</td>
         <td style="white-space:nowrap">
           <button class="small ghost" data-grant-user="${escapeHtml(u.userId||'')}" data-grant-label="${escapeHtml(u.email || u.id)}" onclick="pickGrantUser(this)">加额度</button>
           <button class="small ghost" data-user-status="${escapeHtml(u.userId||'')}" data-cur="${escapeHtml(u.status||'active')}" data-label="${escapeHtml(u.email || u.id)}">${suspended ? '启用' : '禁用'}</button>
@@ -458,6 +510,7 @@ async function setUserStatus(btn){
     toast(toSuspend ? '已禁用' : '已启用');
     if (r.auditLogged === false) toast('动作已生效，但审计没写上（见容器日志）', true);
     loadUsers();
+    refreshAudit();
   } catch(e) {
     if (e.status !== 401) toast('操作失败：' + e.message, true);
   } finally { btn.disabled = false; }
@@ -503,7 +556,7 @@ async function grantUnitsManual(){
   try {
     const r = await api('/v1/admin/users/grant', { method:'POST', body });
     $('grantResult').innerHTML = `已给 <b>${escapeHtml(who)}</b> 加 <b>${r.granted}</b> 张，当前可用 <b>${r.availableUnits}</b> 张` +
-      (r.expiresAt ? `，${r.expiresAt.slice(0,10)} 到期` : '') + (r.isGuest ? '<span class="badge badge-warn">游客账号</span>' : '');
+      (r.expiresAt ? `，${fmtBJDate(r.expiresAt)} ${TZ_LABEL} 到期` : '') + (r.isGuest ? '<span class="badge badge-warn">游客账号</span>' : '');
     toast('已加额度');
     $('grantNote').value = '';
     loadUsers();
@@ -813,7 +866,7 @@ function mailLastHtml(ls){
   /* kind 只有 login_code / manual 两种 —— 账本里**刻意没有主题和正文**：
      验证码信的主题以明文验证码开头，记下来等于一条账号接管旁路。 */
   const what = ls.kind === 'login_code' ? '用户验证码信' : '后台测试邮件';
-  const when = `${escapeHtml(ls.at||'')} · ${ls.at ? ago(ls.at) : ''}`;
+  const when = `${escapeHtml(fmtBJ(ls.at))} ${TZ_LABEL} · ${ls.at ? escapeHtml(ago(ls.at)) : ''}`;
   if (ls.ok) return `<span class="big ok">✅ 成功</span><span class="kv">${what} → ${escapeHtml(ls.to||'')}<br>${when}</span>`;
   return `<span class="big bad">⛔ 失败</span><span class="kv">${what} → ${escapeHtml(ls.to||'')}<br>${when}<br>原因：<code>${escapeHtml(ls.error||'未记录')}</code></span>`;
 }
@@ -826,7 +879,7 @@ function renderRuntime(rt, gen){
   /* ① 跑的是哪个构建、起来多久了。「改完配置到底重启没重启」此前在面板上无从得知。 */
   cards.push(rtCard('后端版本 / 启动时间',
     `<span class="big"><code>${escapeHtml(rt.version||'未知')}</code></span>
-     <span class="kv">已运行 ${fmtDur(rt.uptimeSeconds)}<br>启动于 ${escapeHtml(rt.startedAt||'—')}<br>服务器时间 ${escapeHtml(rt.serverTime||'—')}（UTC）</span>`));
+     <span class="kv">已运行 ${fmtDur(rt.uptimeSeconds)}<br>启动于 ${escapeHtml(fmtBJ(rt.startedAt))} ${TZ_LABEL}<br>服务器时间 ${escapeHtml(fmtBJ(rt.serverTime))} ${TZ_LABEL}<br><span class="muted" style="font-size:11px" title="后端一切时间戳都是 UTC；本页统一换算成北京时间展示">服务器内部记时为 UTC：${escapeHtml(rt.serverTime||'—')}</span></span>`));
 
   /* ② 连接池。「某个列表一直转圈」最常见的真因是池子被占满，而不是慢查询。
         统一 PG 实例 max_connections=50，本项目 app 角色只有 5 个槽、池子硬顶 4。 */
@@ -1009,6 +1062,7 @@ async function saveConfigItem(btn){
     renderGuardBar(r.abuse);
     renderRuntime(r.runtime, r.generation);
     toast('已保存');
+    refreshAudit();
   } catch(e) {
     if (e.status !== 401) toast('保存失败：' + e.message, true);
   }
@@ -1021,6 +1075,7 @@ async function restoreConfigItem(key){
     renderGuardBar(r.abuse);
     renderRuntime(r.runtime, r.generation);
     toast('已恢复默认');
+    refreshAudit();
   } catch(e) {
     if (e.status !== 401) toast('操作失败：' + e.message, true);
   }
@@ -1033,7 +1088,9 @@ async function restoreConfigItem(key){
 function renderOpsStyles(styles){
   if (!styles.length) { $('opsStyles').innerHTML = '<p class="muted">暂无风格</p>'; return; }
   $('opsStyles').innerHTML = styles.map((s, i) => {
-    const cover = s.coverUrl
+    /* 空封面绝不渲染 <img>：src="" 的图元素会发一次指向当前页的请求，
+       而且在后台看起来像「封面坏了」而不是「没有封面文件」。 */
+    const cover = (s.coverUrl && String(s.coverUrl).trim())
       ? `<img class="cover" src="${escapeHtml(s.coverUrl)}" loading="lazy" onclick="view(this.src)" alt="">`
       : `<div class="nocover">无封面<br>文件</div>`;
     const vis = s.visibleInApp
@@ -1096,6 +1153,7 @@ async function saveStyle(btn){
     if (r.auditLogged === false) toast('已保存，但审计没写上（见容器日志）', true);
     else toast('已保存');
     loadOpsStyles();
+    refreshAudit();
   } catch(e) {
     if (e.status !== 401) toast('保存失败：' + e.message, true);
   } finally { btn.disabled = false; }
@@ -1110,6 +1168,7 @@ async function toggleStyleStatus(btn){
     await api('/v1/admin/styles-admin/' + encodeURIComponent(id) + '/status', { method:'POST', body:{ status: next } });
     toast(next === 'published' ? '已上架' : '已下架');
     loadOpsStyles();
+    refreshAudit();
   } catch(e) {
     if (e.status !== 401) toast('操作失败：' + e.message, true);
   }
@@ -1184,6 +1243,7 @@ async function saveProduct(btn){
     await api('/v1/admin/products-admin/' + encodeURIComponent(key), { method:'PATCH', body });
     toast('已保存');
     loadOpsProducts();
+    refreshAudit();
   } catch(e) {
     if (e.status !== 401) toast('保存失败：' + e.message, true);
   } finally { btn.disabled = false; }
@@ -1199,6 +1259,7 @@ async function toggleProduct(btn){
     await api('/v1/admin/products-admin/' + encodeURIComponent(key), { method:'PATCH', body:{ active } });
     toast(active ? '已上架' : '已下架');
     loadOpsProducts();
+    refreshAudit();
   } catch(e) {
     if (e.status !== 401) toast('操作失败：' + e.message, true);
   }
@@ -1240,9 +1301,9 @@ function renderOpsAudit(r){
   const note = `<p class="muted" style="margin:0 0 8px;font-size:12px">审计住在 <code>events</code> 表，当前保留 <b>${r.retentionDays}</b> 天，超期由每日清理任务删除。</p>`;
   if (!rows.length) { $('opsAudit').innerHTML = note + '<p class="muted">还没有任何后台写操作。</p>'; return; }
   $('opsAudit').innerHTML = note + `<div class="wrap"><table>
-    <tr><th>时间</th><th>动作</th><th>详情</th></tr>
+    <tr><th>时间 (UTC+8)</th><th>动作</th><th>详情</th></tr>
     ${rows.map(x => `<tr>
-      <td class="muted" title="${escapeHtml(x.at)}">${escapeHtml(x.at.replace('T',' ').slice(0,19))}</td>
+      <td class="muted" title="UTC ${escapeHtml(x.at)}">${escapeHtml(fmtBJ(x.at))}</td>
       <td>${escapeHtml(AUDIT_LABEL[x.action] || x.action)} <span class="muted" style="font-size:11px">${escapeHtml(x.action)}</span></td>
       <td class="trunc" title="${escapeHtml(JSON.stringify(x.props))}">${escapeHtml(auditSummary(x))}</td>
     </tr>`).join('')}
@@ -1269,6 +1330,19 @@ function auditSummary(x){
   return JSON.stringify(p);
 }
 function fmtAuditVal(v){ return v === null || v === undefined ? '空' : String(v); }
+
+/* 🔴 每一次留痕的写操作之后都要调这个：此前改完配置 / 改完商品 / 禁用完用户，
+   审计列表还是加载那一刻的样子，要手动切到「运营」再整页刷新才看得到刚刚那一行。
+   而「这次到底留痕了没有」恰恰是当场必须确认的事 —— 响应里的 auditLogged:false
+   只弹一条 2.2 秒的 toast，列表不跟上就等于没有第二个地方可以核对。
+   运营页已经加载过就原地刷新；还没打开过（tabState.ops 仍为 false）就什么都不做 ——
+   showTab() 会在第一次切过去时 loadOps() 拉最新的一份，不为一个看不见的面板白发请求。 */
+async function refreshAudit(){
+  if (!tabState.ops) return;
+  try {
+    renderOpsAudit(await api('/v1/admin/audit'));
+  } catch(e) { if (e.status !== 401) $('opsAudit').innerHTML = errHtml(e.message); }
+}
 
 async function loadOps(){
   $('opsStyles').innerHTML = '加载中…';
@@ -1330,14 +1404,14 @@ async function sendTestEmail(){
   try {
     const r = await api('/v1/admin/email/test', { method:'POST', body:{ to } });
     box.className = 'mailres ok';
-    box.innerHTML = `<b>✅ 已交给 SMTP 服务器</b>（${new Date().toISOString()}）<br>
+    box.innerHTML = `<b>✅ 已交给 SMTP 服务器</b>（${nowBJ()} ${TZ_LABEL}）<br>
       收件人：<code>${escapeHtml((r.accepted||[]).join(', ') || to)}</code><br>
       <span class="muted">「已交给服务器」不等于「已进收件箱」：服务商仍可能静默丢弃或判垃圾邮件。请去收件箱和垃圾箱各看一眼。</span>`;
     toast('测试邮件已发送');
   } catch(e) {
     if (e.status === 401) { btn.disabled = false; return; }
     box.className = 'mailres bad';
-    box.innerHTML = `<b>⛔ 发送失败</b>（${new Date().toISOString()}）<br>
+    box.innerHTML = `<b>⛔ 发送失败</b>（${nowBJ()} ${TZ_LABEL}）<br>
       ${escapeHtml(e.message || '未知错误')}<br>
       <span class="muted">先看上面「运行状态 · 邮件通道」里缺了哪一项：host/user 可以在本页改，SMTP_PASS 只能改 project.env 后重启容器。</span>`;
     toast('发送失败：' + e.message, true);

@@ -716,16 +716,24 @@ type Setting struct {
 	Warning string `json:"warning,omitempty"`
 }
 
-// MaskSecret 复刻 Node 版 maskSecret：4 个圆点 + 末 4 位；空值为 null。
+// MaskedSecret 是密钥项在后台配置清单里的唯一表现形式：固定 8 个圆点，
+// 一个原文字符都不回。
+//
+// 🔴 2026-09-12 改掉了 Node 版 maskSecret 的「4 个圆点 + 末 4 位」：
+// 后台页面是任何拿到管理员令牌的人都能截图的东西，而末 4 位对密钥是实打实的
+// 信息泄漏 —— SMTP 口令与上游 API key 的末 4 位既能用来在泄漏库里做匹配确认，
+// 也足够让一个只看过一眼屏幕的人验证自己手里的那串是不是线上那串。
+// 掩码的唯一职责是回答「配没配」，而这件事不需要任何明文字符；
+// 真要核对值，去配置源（app.env，600）看，那一步有审计也有门禁。
+const MaskedSecret = "••••••••"
+
+// MaskSecret 把密钥值换成固定掩码；空值为 null（= 后台显示「未配置」）。
+// 长度也不泄漏：不同长度的密钥掩码完全一致。
 func MaskSecret(v string) any {
 	if v == "" {
 		return nil
 	}
-	r := []rune(v)
-	if len(r) <= 4 {
-		return "••••" + v
-	}
-	return "••••" + string(r[len(r)-4:])
+	return MaskedSecret
 }
 
 // quoteVal 把 Setting.Value 里的任意值写成一个带引号的短串（只给告警文案用）。
