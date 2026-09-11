@@ -213,3 +213,39 @@ func ListAdminStyles(ctx context.Context, q Queryer) ([]AdminStyleRow, error) {
 	}
 	return out, rows.Err()
 }
+
+// TodayCounts 是「最近 24 小时」的运营计数，给后台「应用配置 / 运行状态」页。
+//
+// 🔴 窗口是**滚动 24 小时**，不是自然日：与 AdminOverview.UsersToday 同一个判据
+// （那一项也是 created_at >= now-24h）。两处用不同窗口的话，同一个面板上会出现
+// 两个都叫「今日注册」但数字不一样的格子，而没人说得清哪个对。
+type TodayCounts struct {
+	Registrations int   `json:"registrations"`
+	Jobs          int   `json:"jobs"`
+	JobsSucceeded int   `json:"jobsSucceeded"`
+	JobsFailed    int   `json:"jobsFailed"`
+	Purchases     int   `json:"purchases"`
+	RevenueMinor  int64 `json:"revenueMinor"`
+}
+
+// GetTodayCounts 统计滚动 24 小时窗口内的注册 / 生成 / 失败 / 购买。
+//
+// 🔴 一条 SQL 五个标量子查询，而不是五次往返：这个接口在后台页面加载时被调用，
+// 而连接池只有 4 个槽（见 PoolStats 的说明）。
+func GetTodayCounts(ctx context.Context, q Queryer, now time.Time) (TodayCounts, error) {
+	since := now.Add(-24 * time.Hour)
+	var t TodayCounts
+	err := q.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*) FROM users             WHERE created_at >= $1),
+		  (SELECT count(*) FROM generation_jobs   WHERE created_at >= $1),
+		  (SELECT count(*) FROM generation_jobs   WHERE created_at >= $1 AND status = 'succeeded'),
+		  (SELECT count(*) FROM generation_jobs   WHERE created_at >= $1 AND status = 'failed'),
+		  (SELECT count(*) FROM purchases         WHERE created_at >= $1 AND status = 'verified'),
+		  (SELECT COALESCE(SUM(amount_minor),0) FROM purchases WHERE created_at >= $1 AND status = 'verified')`,
+		since).Scan(&t.Registrations, &t.Jobs, &t.JobsSucceeded, &t.JobsFailed, &t.Purchases, &t.RevenueMinor)
+	if err != nil {
+		return TodayCounts{}, err
+	}
+	return t, nil
+}

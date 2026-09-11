@@ -4,7 +4,9 @@ import (
 	"context"
 
 	"museframe-api/internal/cfgstore"
+	"museframe-api/internal/mailer"
 	"museframe-api/internal/store"
+	"museframe-api/internal/worker"
 )
 
 // GenerationSummary 是面向运维的「这套部署现在能不能生成、用什么生成」。
@@ -80,4 +82,133 @@ type AdminConfigResult struct {
 	Settings   []cfgstore.Setting `json:"settings"`
 	Generation GenerationSummary  `json:"generation"`
 	Abuse      AbuseSummary       `json:"abuse"`
+	// Runtime 2026-09-12 新增，见 RuntimeSummary 的说明。
+	Runtime RuntimeSummary `json:"runtime"`
+}
+
+// RuntimeSummary 是「这个进程现在的实际状态」。
+//
+// 🔴 为什么配置页必须有这一块（2026-09-12 盘点结论）：
+//
+//	后台此前能看见**配置**，却看不见**这些配置有没有在起作用**。于是所有
+//	「改完没生效 / 用户说收不到信 / 页面转圈」的问题都退化成同一个查法：
+//	SSH 上服务器看 docker logs 和 psql —— 而运营没有那台机器的权限。
+//	具体这四个真空区：
+//	  ① 跑的是哪个镜像、起来多久了 —— 改完配置到底重启没重启，此前无从得知；
+//	  ② SMTP 配没配、最近一次发送成功了吗 —— 验证码发不出去只在一行
+//	     lg.Warn 里留痕，面板上一片祥和；
+//	  ③ 连接池占用 / 队列深度 —— 「转圈」的两个最常见真因；
+//	  ④ 最近 24h 的注册/生成/失败/购买 —— 判断「改动有没有把转化打挂」的最小盘。
+//
+// 🔴 这一块是**纯只读遥测**：没有任何字段会被写回，也没有任何密钥值。
+//
+//	SMTP 口令只给「已配置」布尔，收件地址打码，错误文本过 logx.Redact。
+type RuntimeSummary struct {
+	// Version 是构建版本（= 镜像 tag 里的 gitsha）。
+	Version       string            `json:"version"`
+	StartedAt     string            `json:"startedAt"`
+	UptimeSeconds int               `json:"uptimeSeconds"`
+	ServerTime    string            `json:"serverTime"`
+	DB            DBSummary         `json:"db"`
+	SMTP          SMTPSummary       `json:"smtp"`
+	Queue         worker.Queue      `json:"queue"`
+	Today         store.TodayCounts `json:"today"`
+	Support       SupportSummary    `json:"support"`
+}
+
+// DBSummary 是数据库连通性 + 连接池占用。
+type DBSummary struct {
+	OK bool `json:"ok"`
+	store.PoolStats
+}
+
+// SMTPSummary 是邮件通道状态 + 最近一次发送结果。
+type SMTPSummary struct {
+	Configured bool   `json:"configured"`
+	Host       string `json:"host"`
+	Port       int    `json:"port"`
+	From       string `json:"from"`
+	// UserConfigured / PassConfigured 只给布尔。smtp_user 虽然在配置清单里就是
+	// 明文（它不是密钥），但这里给布尔更直接：运营要的答案是「齐了没」。
+	UserConfigured bool `json:"userConfigured"`
+	PassConfigured bool `json:"passConfigured"`
+	// LoginEnabled 是邮箱验证码登录的总开关。SMTP 配好了但这个关着，
+	// 用户照样登不进来 —— 这两件事必须摆在一起看。
+	LoginEnabled bool `json:"loginEnabled"`
+	// CodeTTLSeconds 是当前真正生效的验证码有效期（已夹过区间）。
+	CodeTTLSeconds int `json:"codeTtlSeconds"`
+	// LastSend 是最近一次发送尝试；本进程还没发过信时为 nil。
+	LastSend *MailSendResult `json:"lastSend"`
+}
+
+// MailSendResult 是最近一次发信的结果。**没有主题和正文**：
+// 验证码信的主题以明文验证码开头（见 mailer.SendStatus 的说明）。
+type MailSendResult struct {
+	At    string `json:"at"`
+	OK    bool   `json:"ok"`
+	Kind  string `json:"kind"`
+	To    string `json:"to"`
+	Error string `json:"error,omitempty"`
+}
+
+// SupportSummary 是展示给用户的求助入口当前值。额度用完时 App 把这两个值
+// 摊给用户看，所以它们配错 = 付费转化直接断掉，必须在面板上一眼可见。
+type SupportSummary struct {
+	Email    string `json:"email"`
+	QQGroup  string `json:"qqGroup"`
+	Complete bool   `json:"complete"`
+}
+
+// MailStatusReporter 是**可选**口：发信器实现了它，后台就能显示最近一次发送结果。
+// 做成可选是为了不逼着测试替身实现它（也不让 Mailer 接口变大影响别处）。
+type MailStatusReporter interface {
+	LastSend() (mailer.SendStatus, bool)
+}
+
+func (a *App) runtimeSummary(ctx context.Context) RuntimeSummary {
+	now := a.now()
+	out := RuntimeSummary{
+		Version: a.version, StartedAt: store.ISO(a.startedAt),
+		UptimeSeconds: int(now.Sub(a.startedAt).Seconds()),
+		ServerTime:    store.ISO(now),
+		DB:            DBSummary{OK: a.st.Ready(ctx), PoolStats: a.st.PoolStats()},
+		SMTP:          a.smtpSummary(),
+		Support: SupportSummary{
+			Email:   a.rt.String("support_email"),
+			QQGroup: a.rt.String("support_qq_group"),
+		},
+	}
+	out.Support.Complete = out.Support.Email != "" || out.Support.QQGroup != ""
+	if a.worker != nil {
+		out.Queue = a.worker.Depth()
+	}
+	// 计数失败不该让整个配置页 500：宁可少一块数字，也不能让运营连配置都打不开。
+	if t, err := store.GetTodayCounts(ctx, a.st.Q(), now); err == nil {
+		out.Today = t
+	} else {
+		a.lg.Warn("admin: 24h 计数查询失败", nil)
+	}
+	return out
+}
+
+func (a *App) smtpSummary() SMTPSummary {
+	s := SMTPSummary{
+		Host: a.rt.String("smtp_host"), Port: a.rt.ClampedInt("smtp_port"),
+		From: a.rt.String("smtp_from"), UserConfigured: a.rt.String("smtp_user") != "",
+		PassConfigured: a.cfg.SMTPPass != "",
+		LoginEnabled:   a.rt.Bool("email_login_enabled"),
+		CodeTTLSeconds: int(a.rt.EmailCodeTTL().Seconds()),
+	}
+	if a.mailer != nil {
+		s.Configured = a.mailer.Configured()
+	}
+	if rep, ok := a.mailer.(MailStatusReporter); ok {
+		if last, has := rep.LastSend(); has {
+			s.LastSend = &MailSendResult{
+				At: store.ISO(last.At), OK: last.OK, Kind: last.Kind,
+				To: last.To, Error: last.Error,
+			}
+		}
+	}
+	return s
 }

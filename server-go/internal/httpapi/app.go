@@ -73,6 +73,9 @@ type App struct {
 	ipSalt     string
 	version    string
 	adminTok   []byte
+	// startedAt 是进程起来的时刻（用注入的时钟取，测试里是确定值）。
+	// 后台据此显示「跑了多久」—— 「改完配置到底有没有重启」此前在面板上无从得知。
+	startedAt time.Time
 }
 
 // Mailer 是发信口；生产用 SMTP 实现，测试注入假实现。
@@ -127,6 +130,7 @@ func New(o Options) *App {
 		limiter:  ratelimit.New(o.Config.RateLimitMaxKeys, func() time.Time { return now() }),
 		ipr:      netx.NewIPResolver(o.Config.TrustedProxy, o.Config.TrustCFIP),
 	}
+	a.startedAt = now()
 	a.registerPublicRoutes()
 	a.registerAdminRoutes()
 	return a

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"museframe-api/internal/cfgstore"
 	"museframe-api/internal/store"
 )
 
@@ -191,5 +192,141 @@ func TestAdminDBTimestampsAreUTC(t *testing.T) {
 	q := e.do("POST", "/v1/admin/db/query", map[string]any{"sql": "select created_at from users"}, e.admin())
 	if strings.Contains(string(q.Body), "+08:00") || strings.Contains(string(q.Body), "+00:00") {
 		t.Fatalf("SQL 控制台的时间列也必须是 Z：%s", q.Body)
+	}
+}
+
+// TestAdminConfigExposesDeployLevelReadOnly 2026-09-12 新增：后台要能看见
+// **部署级**配置，但一行都不许改、一个密钥值都不许露。
+//
+// 🔴 为什么这条测试值得写：部署级那批值（会话有效期、保留期、存储上限、
+// 测试登录逃生口……）此前在后台完全不可见，运营查「为什么用户被登出了」
+// 只能去 SSH 读 project.env。把它们搬进 /v1/admin/config 的同时，必须
+// 同时钉死两件事：① 全部 readOnly（前端据此不渲染保存按钮，且 rt.Set
+// 对未知键返回 422，所以没有新写入口）；② 密钥只给布尔，不给值。
+func TestAdminConfigExposesDeployLevelReadOnly(t *testing.T) {
+	e := newTestEnv(t)
+	resp := e.do("GET", "/v1/admin/config", nil, e.admin())
+	if resp.Code != 200 {
+		t.Fatalf("应 200，实际 %d %s", resp.Code, resp.Body)
+	}
+	var out AdminConfigResult
+	resp.JSON(t, &out)
+
+	byKey := map[string]cfgstore.Setting{}
+	for _, s := range out.Settings {
+		byKey[s.Key] = s
+	}
+	want := []string{
+		"deploy_image_provider", "deploy_session_ttl_days", "deploy_event_retention_days",
+		"deploy_idempotency_retention_days", "deploy_max_job_attempts",
+		"deploy_shutdown_grace_seconds",
+		"deploy_db_pool_max_conns", "deploy_trusted_proxy", "deploy_trust_cf_connecting_ip",
+		"deploy_play_acknowledge", "deploy_allow_test_login",
+		"deploy_admin_token_configured", "deploy_ip_hash_salt_configured",
+		"deploy_google_web_client_id_configured",
+	}
+	for _, k := range want {
+		s, ok := byKey[k]
+		if !ok {
+			t.Errorf("配置清单缺部署级项 %s", k)
+			continue
+		}
+		// ① 一律只读。
+		if !s.ReadOnly {
+			t.Errorf("🔴 %s 必须是 readOnly —— 它在进程启动时就固化了，"+
+				"后台能改的假象比看不见更糟（改完没生效，页面显示已保存）", k)
+		}
+	}
+	// ② 管理令牌 / IP 盐只给布尔，**值一个字节都不许出现在响应里**。
+	//    testenv 里这两个值是已知的，所以可以直接 grep。
+	body := string(resp.Body)
+	for _, secret := range []string{adminToken, "test-ip-salt-not-the-admin-token"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("🔴 /v1/admin/config 响应里出现了密钥值（%d 字节的那个）", len(secret))
+		}
+	}
+	if v, _ := byKey["deploy_admin_token_configured"].Value.(bool); !v {
+		t.Error("testenv 配了 ADMIN_TOKEN，该项应为 true")
+	}
+	if v, _ := byKey["deploy_ip_hash_salt_configured"].Value.(bool); !v {
+		t.Error("testenv 配了 IP_HASH_SALT，该项应为 true")
+	}
+	// ③ 部署级键不在注册表里，所以 PUT 必须被拒 —— 这是「没有新写入口」的硬证据。
+	if r := e.do("PUT", "/v1/admin/config",
+		map[string]any{"key": "deploy_session_ttl_days", "value": 1}, e.admin()); r.Code != 422 {
+		t.Fatalf("🔴 部署级项可写了（%d %s）—— 写了也不会生效，必须拒绝", r.Code, r.Body)
+	}
+	// ④ 正常情况下不该有遗留明文密钥告警项。
+	if _, ok := byKey["leftover_secret_rows_in_db"]; ok {
+		t.Error("干净库里不该出现 leftover_secret_rows_in_db 告警项")
+	}
+	// ⑤ 验证码有效期作为**热键**出现，且可改（本次把它从四处字面量收敛进注册表）。
+	ttl, ok := byKey["email_code_ttl_seconds"]
+	if !ok {
+		t.Fatal("配置清单里应有 email_code_ttl_seconds")
+	}
+	if ttl.ReadOnly || ttl.Secret {
+		t.Error("验证码有效期应当是可热改的非密钥项")
+	}
+	if r := e.do("PUT", "/v1/admin/config",
+		map[string]any{"key": "email_code_ttl_seconds", "value": 300}, e.admin()); r.Code != 200 {
+		t.Fatalf("验证码有效期应可热改，实际 %d %s", r.Code, r.Body)
+	}
+	// ⑥ 2026-09-12 第二批收进注册表的运营旋钮：必须是**可热改的非密钥热键**，
+	//    必须带区间供前端展示，且越界的 PUT 必须 422（而不是静默夹）。
+	//    max_user_storage_bytes 此前是部署级只读行，现在升级成热键 ——
+	//    所以上面那份 want 里刻意不再有 deploy_max_user_storage_bytes：
+	//    同一个键既有可改行又有只读行，是最容易让运营改错地方的布局。
+	for _, tc := range []struct {
+		key      string
+		good     any
+		tooSmall any
+		tooBig   any
+	}{
+		{"email_code_max_attempts", 3, 0, 999},
+		{"email_code_max_issues_per_window", 2, 0, 999},
+		{"max_user_storage_bytes", 64 * 1024 * 1024, 1, 1 << 40},
+	} {
+		s, ok := byKey[tc.key]
+		if !ok {
+			t.Errorf("配置清单缺热键 %s", tc.key)
+			continue
+		}
+		if s.ReadOnly || s.Secret {
+			t.Errorf("%s 应当是可热改的非密钥项", tc.key)
+		}
+		if s.Min == nil || s.Max == nil {
+			t.Errorf("%s 应带 min/max 供前端展示（省掉「保存→422→猜区间」这一轮）", tc.key)
+		}
+		if r := e.do("PUT", "/v1/admin/config",
+			map[string]any{"key": tc.key, "value": tc.good}, e.admin()); r.Code != 200 {
+			t.Errorf("%s 区间内的值应可热改，实际 %d %s", tc.key, r.Code, r.Body)
+		}
+		for _, bad := range []any{tc.tooSmall, tc.tooBig} {
+			if r := e.do("PUT", "/v1/admin/config",
+				map[string]any{"key": tc.key, "value": bad}, e.admin()); r.Code != 422 {
+				t.Errorf("🔴 %s=%v 越界应 422（静默夹会让页面显示的和生效的不是一回事），实际 %d %s",
+					tc.key, bad, r.Code, r.Body)
+			}
+		}
+	}
+	// ⑦ 运行状态块必须有值：它是「改完配置到底生效没 / SMTP 通不通 / 队列堵没堵」
+	//    唯一不用 SSH 的查法。全 0 / 空串等于这一块白给。
+	rt := out.Runtime
+	if rt.Version == "" || rt.StartedAt == "" || rt.ServerTime == "" {
+		t.Errorf("🔴 runtime 必须给出版本与启动时间，实际 %+v", rt)
+	}
+	if !rt.DB.OK || rt.DB.MaxConns <= 0 {
+		t.Errorf("🔴 runtime.db 必须反映真实连接池，实际 %+v", rt.DB)
+	}
+	if rt.SMTP.CodeTTLSeconds <= 0 {
+		t.Errorf("runtime.smtp 应带上当前生效的验证码有效期，实际 %+v", rt.SMTP)
+	}
+	if rt.Support.Email == "" && rt.Support.QQGroup == "" {
+		t.Error("runtime.support 应给出客服入口当前值（配错=付费转化直接断掉）")
+	}
+	// 响应体里不得出现 SMTP 口令相关的任何值 —— 只给布尔。
+	if strings.Contains(body, "\"passConfigured\":") == false {
+		t.Error("runtime.smtp 应只给 passConfigured 布尔，不给口令")
 	}
 }

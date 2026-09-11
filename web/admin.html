@@ -67,6 +67,22 @@
   .cfgctrl input, .cfgctrl select { width:180px; padding:7px 9px; font-size:13px; margin:0; }
   .cfgctrl button { margin:0; }
 
+  /* 运行状态卡片（2026-09-12）：配置页此前只能看见「配了什么」，看不见「在不在起作用」。 */
+  .rtgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:10px; }
+  .rtcard { background:#fff; border:1px solid var(--line); border-radius:12px; padding:11px 13px; font-size:12.5px; line-height:1.6; }
+  .rtcard.down { border-color:rgba(180,35,24,.35); background:rgba(180,35,24,.06); }
+  .rtcard.warn { border-color:rgba(180,120,24,.35); background:rgba(180,120,24,.07); }
+  .rtcard h3 { margin:0 0 4px; font:600 11px/1.4 inherit; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+  .rtcard .big { display:block; font-size:19px; font-weight:600; line-height:1.25; word-break:break-all; }
+  .rtcard code { background:#EFEDE6; border-radius:4px; padding:1px 5px; font-size:11.5px; word-break:break-all; }
+  .rtcard .kv { color:var(--muted); }
+  /* 配置项的「源里写的 != 实际生效的」告警。静默偏差是本轮要消灭的东西，所以它必须显眼。 */
+  .cfgwarn { color:var(--bad); font-size:12px; margin-top:3px; }
+  .cfgrange { color:var(--muted); font-size:11px; margin-top:2px; }
+  .mailres { margin-top:8px; font-size:12.5px; border-radius:10px; padding:9px 12px; border:1px solid var(--line); background:#fff; }
+  .mailres.ok { border-color:rgba(33,122,84,.35); background:rgba(33,122,84,.07); }
+  .mailres.bad { border-color:rgba(180,35,24,.35); background:rgba(180,35,24,.06); }
+
   .legend { display:flex; gap:14px; font-size:11px; color:var(--muted); margin-bottom:2px; }
   .legend i { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; vertical-align:middle; }
 
@@ -173,7 +189,10 @@
   <section id="tab-config" class="tabpane" style="display:none">
     <div id="genbarConfig"></div>
     <div id="guardbarConfig"></div>
-    <h2 style="margin-top:20px">系统配置</h2>
+    <h2 style="margin-top:20px">运行状态</h2>
+    <p class="muted" style="margin-top:-6px;font-size:12px">只读遥测：配置改完有没有生效、邮件通不通、库和队列堵没堵、今天的盘子。全部来自本次请求的实时值，不含任何密钥。</p>
+    <div id="runtimePanel" class="rtgrid">加载中…</div>
+    <h2>系统配置</h2>
     <div id="configForm">加载中…</div>
     <h2>商品管理</h2>
     <div class="wrap" id="productsTable">加载中…</div>
@@ -187,6 +206,9 @@
         <button class="small" id="sendTestEmail">发送测试邮件</button>
       </div>
     </div>
+    <!-- 🔴 结果必须留在页面上，不能只是一条 3 秒就消失的 toast：
+         「发了没有 / 为什么失败」是运维要拿去对照 SMTP 服务商后台的东西。 -->
+    <div id="emailTestResult" class="mailres muted">还没在本页发过测试邮件。上面「运行状态 · 邮件通道」里是本进程最近一次发送的结果（含用户收到的验证码信）。</div>
   </section>
 </main>
 <div id="viewer" onclick="this.style.display='none'"><img id="viewerImg"></div>
@@ -647,6 +669,114 @@ function renderGuardBar(a){
   ['guardbarOverview','guardbarConfig'].forEach(id => { const el = $(id); if (el) { el.className = cls; el.innerHTML = bits.join('<br>'); } });
 }
 
+/* ---------- 运行状态（2026-09-12 新增） ---------- */
+/* 🔴 为什么配置页必须有这一块：后台此前能看见**配置**，看不见这些配置有没有在起作用。
+   于是「改完没生效 / 用户说收不到信 / 页面一直转圈」全部退化成同一个查法 ——
+   SSH 上服务器看 docker logs 和 psql，而运营没有那台机器的权限。
+   这里的每一格都对应一个曾经只能靠 SSH 回答的问题。 */
+function fmtDur(sec){
+  sec = Math.max(0, Math.round(Number(sec)||0));
+  const d = Math.floor(sec/86400), h = Math.floor(sec%86400/3600), m = Math.floor(sec%3600/60);
+  if (d) return `${d} 天 ${h} 小时`;
+  if (h) return `${h} 小时 ${m} 分`;
+  if (m) return `${m} 分 ${sec%60} 秒`;
+  return `${sec} 秒`;
+}
+function fmtBytes(n){
+  n = Number(n)||0;
+  const u = ['B','KiB','MiB','GiB','TiB'];
+  let i = 0;
+  while (n >= 1024 && i < u.length-1) { n /= 1024; i++; }
+  return (i ? n.toFixed(n<10?1:0) : String(n)) + ' ' + u[i];
+}
+function rtCard(title, body, cls){
+  return `<div class="rtcard${cls?' '+cls:''}"><h3>${escapeHtml(title)}</h3>${body}</div>`;
+}
+function mailLastHtml(ls){
+  if (!ls) return '<span class="kv">本进程还没发过信</span>';
+  /* kind 只有 login_code / manual 两种 —— 账本里**刻意没有主题和正文**：
+     验证码信的主题以明文验证码开头，记下来等于一条账号接管旁路。 */
+  const what = ls.kind === 'login_code' ? '用户验证码信' : '后台测试邮件';
+  const when = `${escapeHtml(ls.at||'')} · ${ls.at ? ago(ls.at) : ''}`;
+  if (ls.ok) return `<span class="big ok">✅ 成功</span><span class="kv">${what} → ${escapeHtml(ls.to||'')}<br>${when}</span>`;
+  return `<span class="big bad">⛔ 失败</span><span class="kv">${what} → ${escapeHtml(ls.to||'')}<br>${when}<br>原因：<code>${escapeHtml(ls.error||'未记录')}</code></span>`;
+}
+function renderRuntime(rt, gen){
+  const el = $('runtimePanel');
+  if (!el) return;
+  if (!rt) { el.innerHTML = '<p class="muted">本次响应没有 runtime 块（后端版本偏旧？）</p>'; return; }
+  const cards = [];
+
+  /* ① 跑的是哪个构建、起来多久了。「改完配置到底重启没重启」此前在面板上无从得知。 */
+  cards.push(rtCard('后端版本 / 启动时间',
+    `<span class="big"><code>${escapeHtml(rt.version||'未知')}</code></span>
+     <span class="kv">已运行 ${fmtDur(rt.uptimeSeconds)}<br>启动于 ${escapeHtml(rt.startedAt||'—')}<br>服务器时间 ${escapeHtml(rt.serverTime||'—')}（UTC）</span>`));
+
+  /* ② 连接池。「某个列表一直转圈」最常见的真因是池子被占满，而不是慢查询。
+        统一 PG 实例 max_connections=50，本项目 app 角色只有 5 个槽、池子硬顶 4。 */
+  const db = rt.db || {};
+  const dbFull = db.maxConns > 0 && db.acquiredConns >= db.maxConns;
+  cards.push(rtCard('数据库 / 连接池',
+    `<span class="big ${db.ok?'ok':'bad'}">${db.ok?'✅ 可读写':'⛔ 探测失败'}</span>
+     <span class="kv">占用 ${db.acquiredConns||0} / 上限 ${db.maxConns||0}（空闲 ${db.idleConns||0}、已建 ${db.totalConns||0}）<br>
+     取连接时池子为空累计 ${db.emptyAcquireCount||0} 次 · 等连接被取消 ${db.canceledAcquireCount||0} 次</span>`,
+    !db.ok ? 'down' : (dbFull ? 'warn' : '')));
+
+  /* ③ 邮件通道。验证码发不出去此前只在一行 lg.Warn 里留痕，面板上一片祥和。 */
+  const sm = rt.smtp || {};
+  const smBad = !sm.configured || !sm.loginEnabled || (sm.lastSend && !sm.lastSend.ok);
+  const miss = [];
+  if (!sm.host) miss.push('smtp_host');
+  if (!sm.userConfigured) miss.push('smtp_user');
+  if (!sm.passConfigured) miss.push('SMTP_PASS（只能改 project.env）');
+  cards.push(rtCard('邮件通道 / 最近一次发送',
+    `${mailLastHtml(sm.lastSend)}
+     <span class="kv" style="display:block;margin-top:5px">
+       通道 ${sm.configured?'<span class="ok">已配置</span>':'<span class="bad">未配置</span>'}${miss.length?`（缺 ${escapeHtml(miss.join('、'))}）`:''} ·
+       邮箱登录 ${sm.loginEnabled?'<span class="ok">已开启</span>':'<span class="bad">已关闭</span>'}<br>
+       <code>${escapeHtml(sm.host||'—')}:${sm.port||'—'}</code> 发件人 <code>${escapeHtml(sm.from||'—')}</code><br>
+       验证码有效期 ${sm.codeTtlSeconds||0} 秒（= 重发窗口）
+     </span>`, smBad ? 'warn' : ''));
+
+  /* ④ 上游图像供应。判据与 /v1/health 同源（最近 20 次真实调用 + 轻量探针）。 */
+  const g = gen || {};
+  cards.push(rtCard('上游图像供应',
+    `<span class="big ${g.available?'ok':'bad'}">${g.available?'✅ 可用':'⛔ 不可用'}</span>
+     <span class="kv">模式 <code>${escapeHtml(g.mode||'—')}</code>${g.provider?` · 接口 <code>${escapeHtml(g.provider)}</code>`:''}<br>
+     ${g.reason?`原因 <code>${escapeHtml(g.reason)}</code><br>`:''}
+     最近 24h 调用 ${g.recentCalls||0} 次 / 失败 ${g.recentFailures||0} 次<br>
+     最近成功 ${g.lastSuccessAt?escapeHtml(g.lastSuccessAt):'<span class="bad">无</span>'}<br>
+     最近失败 ${g.lastErrorAt?escapeHtml(g.lastErrorAt):'无'}
+     ${g.lastError?`<br>上游原话 <code>${escapeHtml(g.lastError)}</code>`:''}</span>`,
+    g.available ? '' : 'down'));
+
+  /* ⑤ 队列。queued 堆着而 active=0 = 并发被配成 0 或 worker 卡住。 */
+  const q = rt.queue || {};
+  cards.push(rtCard('生成队列',
+    `<span class="big">${q.queued||0} 排队 / ${q.active||0} 在跑</span>
+     <span class="kv">最老的排队任务等了 ${fmtDur(q.oldestQueuedAgeSec)}${q.draining?'<br><span class="bad">正在排空（收到 SIGTERM）</span>':''}</span>`,
+    (q.queued||0) > 0 && (q.active||0) === 0 ? 'warn' : ''));
+
+  /* ⑥ 最近 24h 的盘子：判断「改动有没有把转化打挂」的最小集合。
+        窗口是滚动 24 小时，与总览的「今日注册」同一个判据。 */
+  const t = rt.today || {};
+  cards.push(rtCard('最近 24 小时',
+    `<span class="big">${t.registrations||0} 注册 · ${t.jobs||0} 生成</span>
+     <span class="kv">生成成功 ${t.jobsSucceeded||0} · <span class="${(t.jobsFailed||0)>0?'bad':''}">失败 ${t.jobsFailed||0}</span><br>
+     购买 ${t.purchases||0} 笔 · 收入 ${fmt$(t.revenueMinor||0)}</span>`,
+    (t.jobs||0) > 0 && (t.jobsSucceeded||0) === 0 ? 'warn' : ''));
+
+  /* ⑦ 客服入口。额度用完时 App 把这两个值摊给用户看 —— 配错 = 付费转化直接断掉。 */
+  const sp = rt.support || {};
+  cards.push(rtCard('求助入口（展示给用户）',
+    `<span class="kv">支持邮箱 ${sp.email?`<code>${escapeHtml(sp.email)}</code>`:'<span class="bad">未设置</span>'}<br>
+     QQ 群 ${sp.qqGroup?`<code>${escapeHtml(sp.qqGroup)}</code>`:'<span class="bad">未设置</span>'}</span>
+     ${sp.complete?'':'<span class="bad">两个都空：额度用完的用户看不到任何求助/加购入口。</span>'}`,
+    sp.complete ? '' : 'down'));
+
+  el.innerHTML = cards.join('');
+}
+
 /* ---------- 配置 ---------- */
 function configRowHtml(s){
   const key = escapeHtml(s.key);
@@ -666,7 +796,10 @@ function configRowHtml(s){
     control = `<input id="${inputId}" type="text" value="${escapeHtml(masked)}" disabled>`
       + `<div class="muted">密钥只从环境变量读，后台改不了：请改 project.env 后重启容器。</div>`;
   } else if (isNum) {
-    control = `<input id="${inputId}" type="number" value="${s.value ?? ''}" ${s.readOnly?'disabled':''}>`;
+    /* 🔴 min/max 来自后端注册表的区间表。写上去不是装饰：没有它，运营只能靠
+       「保存 → 422 → 猜区间」来找合法值，而 422 的文案是唯一的线索来源。 */
+    const rng = (s.min != null ? ` min="${Number(s.min)}"` : '') + (s.max != null ? ` max="${Number(s.max)}"` : '');
+    control = `<input id="${inputId}" type="number"${rng} value="${s.value ?? ''}" ${s.readOnly?'disabled':''}>`;
   } else {
     control = `<input id="${inputId}" type="text" value="${escapeHtml(s.value!=null?String(s.value):'')}" ${s.readOnly?'disabled':''}>`;
   }
@@ -677,8 +810,15 @@ function configRowHtml(s){
   /* secret 与 readOnly 一样不给保存按钮（Go 端必然 422）。 */
   const saveBtn = (s.readOnly || s.secret) ? '' : `<button class="small" data-save="${escapeHtml(s.key)}" data-type="${type}" data-secret="${s.secret?'1':'0'}" data-input="${inputId}">保存</button>`;
   const restoreBtn = (s.rawSet && !s.readOnly && !s.secret) ? `<button class="small ghost" data-restore="${escapeHtml(s.key)}">恢复默认</button>` : '';
+  /* 合法区间写在说明下面一行（后端给 min/max 的项才有）。 */
+  const rangeHint = (s.min != null && s.max != null)
+    ? `<div class="cfgrange">合法区间 ${Number(s.min)} … ${Number(s.max)}（越界会被拒绝保存）</div>` : '';
+  /* 🔴 warning = 「配置源里写的值」和「真正生效的值」不一样（越界被夹，或根本不是数字）。
+     不标出来的话，面板会展示一个看似正常的数而实际生效的是另一个 ——
+     这种静默偏差正是本轮要消灭的东西，所以它必须出现在那一行上，而不是日志里。 */
+  const warnHint = s.warning ? `<div class="cfgwarn">${escapeHtml(s.warning)}</div>` : '';
   return `<div class="cfgrow">
-    <div class="cfgmeta"><b>${key}</b> ${sourceBadge}${restartBadge}${roBadge}<div class="muted">${escapeHtml(s.description||'')}</div></div>
+    <div class="cfgmeta"><b>${key}</b> ${sourceBadge}${restartBadge}${roBadge}<div class="muted">${escapeHtml(s.description||'')}</div>${rangeHint}${warnHint}</div>
     <div class="cfgctrl">${control}${saveBtn}${restoreBtn}</div>
   </div>`;
 }
@@ -703,6 +843,7 @@ async function saveConfigItem(btn){
     renderConfig(r.settings || []);
     renderGenBar(r.generation);
     renderGuardBar(r.abuse);
+    renderRuntime(r.runtime, r.generation);
     toast('已保存');
   } catch(e) {
     if (e.status !== 401) toast('保存失败：' + e.message, true);
@@ -714,6 +855,7 @@ async function restoreConfigItem(key){
     renderConfig(r.settings || []);
     renderGenBar(r.generation);
     renderGuardBar(r.abuse);
+    renderRuntime(r.runtime, r.generation);
     toast('已恢复默认');
   } catch(e) {
     if (e.status !== 401) toast('操作失败：' + e.message, true);
@@ -800,19 +942,43 @@ async function toggleStyleStatus(btn){
   }
 }
 
+/* 🔴 结果必须**留在页面上**：一条 3 秒消失的 toast 没法拿去跟 SMTP 服务商后台对照。
+   发完顺手刷一次运行状态，这样「最近一次发送」那张卡片立刻反映这次的结果 ——
+   页面上能看到的东西和后端账本里记的是同一个事实，不用猜。 */
 async function sendTestEmail(){
+  const btn = $('sendTestEmail'), box = $('emailTestResult');
   const to = $('testEmailTo').value.trim();
   if (!to) { toast('请输入收件邮箱地址', true); return; }
+  btn.disabled = true;
+  box.className = 'mailres muted';
+  box.textContent = '正在发送…（SMTP 拨号超时 10 秒、会话超时 30 秒，最坏情况等 30 秒）';
   try {
     const r = await api('/v1/admin/email/test', { method:'POST', body:{ to } });
-    toast('测试邮件已发送: ' + (r.accepted||[]).join(', '));
+    box.className = 'mailres ok';
+    box.innerHTML = `<b>✅ 已交给 SMTP 服务器</b>（${new Date().toISOString()}）<br>
+      收件人：<code>${escapeHtml((r.accepted||[]).join(', ') || to)}</code><br>
+      <span class="muted">「已交给服务器」不等于「已进收件箱」：服务商仍可能静默丢弃或判垃圾邮件。请去收件箱和垃圾箱各看一眼。</span>`;
+    toast('测试邮件已发送');
   } catch(e) {
-    if (e.status !== 401) toast(e.message, true);
+    if (e.status === 401) { btn.disabled = false; return; }
+    box.className = 'mailres bad';
+    box.innerHTML = `<b>⛔ 发送失败</b>（${new Date().toISOString()}）<br>
+      ${escapeHtml(e.message || '未知错误')}<br>
+      <span class="muted">先看上面「运行状态 · 邮件通道」里缺了哪一项：host/user 可以在本页改，SMTP_PASS 只能改 project.env 后重启容器。</span>`;
+    toast('发送失败：' + e.message, true);
+  } finally {
+    btn.disabled = false;
+    /* 重新拉一次配置，让「最近一次发送」卡片反映这次结果（含失败原因）。 */
+    try {
+      const r = await api('/v1/admin/config');
+      renderRuntime(r.runtime, r.generation);
+    } catch(_) { /* 刷新失败不该盖掉上面那条结果 */ }
   }
 }
 
 async function loadConfig(){
   $('configForm').innerHTML = '加载中…';
+  $('runtimePanel').innerHTML = '加载中…';
   $('productsTable').innerHTML = '加载中…';
   $('stylesTable').innerHTML = '加载中…';
   try {
@@ -820,7 +986,8 @@ async function loadConfig(){
     renderConfig(r.settings || []);
     renderGenBar(r.generation);
     renderGuardBar(r.abuse);
-  } catch(e) { if (e.status !== 401) $('configForm').innerHTML = errHtml(e.message); }
+    renderRuntime(r.runtime, r.generation);
+  } catch(e) { if (e.status !== 401) { $('configForm').innerHTML = errHtml(e.message); $('runtimePanel').innerHTML = errHtml(e.message); } }
   try {
     const r = await api('/v1/admin/products-admin');
     renderProducts(r.products || []);
