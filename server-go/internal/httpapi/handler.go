@@ -162,6 +162,28 @@ var staticMIME = map[string]string{
 	".svg": "image/svg+xml", ".json": "application/json", ".woff2": "font/woff2",
 }
 
+// serveFileNoIndexRedirect 发送一个已定位到的静态文件。
+//
+// 🔴 为什么不用 http.ServeFile：net/http 的 serveFile 里有一条**无条件**的
+//    规范化跳转 —— 只要 r.URL.Path 以 "/index.html" 结尾就 301 到 "./"，
+//    与传进来的文件名无关。旧 Node 后端对 /index.html 是 200，Go 一上来就
+//    变成 301，而 museframe.caddy 的 @app 块又恰好把 /app、/app/* 统一
+//    `rewrite * /index.html` 再打后端 —— 于是整个 Web App 入口在切换那一刻
+//    集体 301。2026-09-11 第一次切换就炸在这里，已回滚。
+//
+//    http.ServeContent 没有这条跳转，其余语义（Range、If-Modified-Since、
+//    Last-Modified、Content-Length）与 ServeFile 完全一致。路径穿越在调用方
+//    已经用 filepath.Clean + 根前缀校验挡掉了，不依赖 ServeFile 的 containsDotDot。
+func serveFileNoIndexRedirect(w http.ResponseWriter, r *http.Request, abs string, fi os.FileInfo) {
+	f, err := os.Open(abs)
+	if err != nil {
+		http.Error(w, "Not found.", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
+}
+
 // serveStatic 提供 SPA 静态文件 + 兜底。
 // MUSEFRAME_WEB_DIR 为空时（容器里由边缘代理托管静态资源）一律 404，
 // 绝不返回 200 HTML 软 404 —— 那会让整站被搜索引擎判为低质量。
@@ -200,15 +222,16 @@ func (a *App) serveStatic(w http.ResponseWriter, r *http.Request) (int, error) {
 		}
 		w.Header().Set("Content-Type", ct)
 		w.Header().Set("Cache-Control", cache)
-		http.ServeFile(w, r, abs)
+		serveFileNoIndexRedirect(w, r, abs, fi)
 		return http.StatusOK, nil
 	}
 	index := filepath.Join(root, "index.html")
-	if _, err := os.Stat(index); err != nil {
+	ifi, err := os.Stat(index)
+	if err != nil {
 		return 0, apierr.New(http.StatusNotFound, apierr.CodeNotFound, "Not found.")
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeFile(w, r, index)
+	serveFileNoIndexRedirect(w, r, index, ifi)
 	return http.StatusOK, nil
 }
