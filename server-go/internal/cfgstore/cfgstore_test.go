@@ -94,23 +94,128 @@ func TestSecretFromEnvOnly(t *testing.T) {
 // 🔴 这个数字是**契约断言**，不是计数练习：Node 版那 26 个键必须一个不少地
 // 存在（少一个就是静默丢配置），而新增键必须是有意为之、连同这里的数字一起改。
 //
-// 2026-09-12：26 → 27，新增 email_code_ttl_seconds（把验证码有效期从四处
-// 写死的字面量收敛成一个注册表项，见 Registry 里那条注释）。
+// 2026-09-12（第一批）：26 → 27，新增 email_code_ttl_seconds（把验证码有效期从
+// 四处写死的字面量收敛成一个注册表项，见 Registry 里那条注释）。
+// 2026-09-12（第二批）：27 → 30，新增 email_code_max_attempts、
+// email_code_max_issues_per_window（原先是 public_email.go 里两个裸 5）、
+// max_user_storage_bytes（原先只活在 env、改一次要重启容器）。
 // 密钥项仍必须恰为 2 个 —— 这条一旦变大就说明有人往注册表里加了新密钥，
 // 而注册表是后台可写面，新密钥必须先确认 Secret:true。
 func TestRegistryHasExpectedKeys(t *testing.T) {
-	const wantKeys = 27
+	const wantKeys = 30
 	if len(Registry) != wantKeys {
 		t.Fatalf("注册表应有 %d 个键，实际 %d（Node 版那 26 个必须一个不少）", wantKeys, len(Registry))
 	}
 	for _, k := range []string{"free_units", "support_email", "support_qq_group",
-		"smtp_host", "smtp_from", "email_login_enabled", "email_code_ttl_seconds"} {
+		"smtp_host", "smtp_from", "email_login_enabled", "email_code_ttl_seconds",
+		"email_code_max_attempts", "email_code_max_issues_per_window", "max_user_storage_bytes"} {
 		if _, ok := byKey[k]; !ok {
 			t.Errorf("注册表缺键 %s", k)
 		}
 	}
 	if got := SecretKeys(); len(got) != 2 {
 		t.Fatalf("密钥项应恰为 2 个，实际 %v", got)
+	}
+	// 🔴 每个登记了区间的键都必须真的在注册表里存在，且必须是数值型。
+	//    numRanges 里留一个拼错的键名 = 那一项实际上毫无校验，而看代码像有。
+	for k := range numRanges {
+		it, ok := byKey[k]
+		if !ok {
+			t.Errorf("🔴 numRanges 登记了不存在的键 %s —— 那一项实际上没有任何区间校验", k)
+			continue
+		}
+		if it.Type != KindNumber {
+			t.Errorf("🔴 numRanges 登记了非数值项 %s（类型 %s）", k, it.Type)
+		}
+	}
+}
+
+// TestSetRejectsOutOfRange 🔴 越界的写必须被**拒绝**，不能静默夹。
+//
+//	夹一下再存是更糟的选择：运营输 0、库里变成 1，页面刷新后显示 1，
+//	没人知道刚才那次保存其实没按要求生效。错误消息里必须带上合法区间，
+//	否则运营只能靠二分猜。
+func TestSetRejectsOutOfRange(t *testing.T) {
+	s := NewForTest(nil)
+	ctx := context.Background()
+	for _, c := range []struct {
+		key string
+		bad any
+	}{
+		{"email_code_ttl_seconds", 0},
+		{"email_code_ttl_seconds", 86400},
+		{"email_code_max_attempts", 0},
+		{"email_code_max_attempts", 999},
+		{"email_code_max_issues_per_window", 0},
+		{"worker_concurrency", 0},
+		{"worker_concurrency", 99},
+		{"max_user_storage_bytes", 1},
+		{"smtp_port", 70000},
+	} {
+		err := s.Set(ctx, c.key, c.bad)
+		if err == nil {
+			t.Errorf("🔴 %s=%v 越界却被接受了", c.key, c.bad)
+			continue
+		}
+		if !strings.Contains(err.Error(), c.key) {
+			t.Errorf("%s 的错误消息里应点名该键，实际 %q", c.key, err.Error())
+		}
+	}
+	// 区间内的值必须照常可写。
+	for _, c := range []struct {
+		key string
+		ok  any
+	}{
+		{"email_code_ttl_seconds", 900},
+		{"email_code_max_attempts", 3},
+		{"email_code_max_issues_per_window", 1},
+		{"worker_concurrency", 8},
+		{"max_user_storage_bytes", 64 * 1024 * 1024},
+	} {
+		if err := s.Set(ctx, c.key, c.ok); err != nil {
+			t.Errorf("%s=%v 在区间内却被拒：%v", c.key, c.ok, err)
+		}
+	}
+}
+
+// TestListFlagsClampedValueAsWarning 🔴 「后台显示的值」与「真正生效的值」
+// 不一致时，必须在那一行上说出来。
+//
+//	写校验只管住新的写入，管不住**已经躺在库里**的越界行（Node 版写下的）
+//	和 project.env 里手写的脏值。读的时候夹一次是对的，但如果不标注，
+//	面板会展示一个看似正常的数，而实际生效的是另一个 —— 这正是本轮要消灭的
+//	那类静默偏差。
+func TestListFlagsClampedValueAsWarning(t *testing.T) {
+	s := NewForTest(map[string]string{"EMAIL_CODE_MAX_ATTEMPTS": "999"})
+	var got Setting
+	for _, it := range s.List() {
+		if it.Key == "email_code_max_attempts" {
+			got = it
+		}
+	}
+	if v, _ := got.Value.(float64); v != 10 {
+		t.Fatalf("越界的 env 值应被夹到上界 10，实际 %v", got.Value)
+	}
+	if got.Warning == "" {
+		t.Fatal("🔴 被夹过的项必须带 warning，否则后台显示的和实际生效的不是一回事")
+	}
+	if !strings.Contains(got.Warning, "EMAIL_CODE_MAX_ATTEMPTS") {
+		t.Errorf("warning 应点名是哪个来源写错了，实际 %q", got.Warning)
+	}
+	if got.Min == nil || got.Max == nil || *got.Min != 1 || *got.Max != 10 {
+		t.Errorf("数值项应带上区间供前端展示，实际 min=%v max=%v", got.Min, got.Max)
+	}
+	// 非数字同样要标注（env 里写了 "8GiB" 这种）。
+	s2 := NewForTest(map[string]string{"MAX_USER_STORAGE_BYTES": "8GiB"})
+	for _, it := range s2.List() {
+		if it.Key == "max_user_storage_bytes" {
+			if it.Warning == "" {
+				t.Error("🔴 env 里不是数字时必须标注已回落默认值")
+			}
+			if v, _ := it.Value.(float64); v != 256*1024*1024 {
+				t.Errorf("应回落默认值，实际 %v", it.Value)
+			}
+		}
 	}
 }
 

@@ -77,6 +77,37 @@ func (s *Store) Close() {
 // Pool 暴露底层池（仅测试与迁移工具用）。
 func (s *Store) Pool() *pgxpool.Pool { return s.pool }
 
+// PoolStats 是连接池的当下快照，给后台「应用配置」页显示。
+//
+// 🔴 为什么运营需要看见它：统一 PG 实例 max_connections=50，本项目 app 角色
+// 只有 5 个槽、池子硬顶 4（见 config.MaxPoolConnsHardLimit）。
+// 「后台某个列表一直转圈」最常见的真因就是池子被占满（Acquired == Max）而不是
+// 慢查询；没有这几个数，唯一的查法是上服务器 psql 查 pg_stat_activity。
+type PoolStats struct {
+	MaxConns      int32 `json:"maxConns"`
+	TotalConns    int32 `json:"totalConns"`
+	AcquiredConns int32 `json:"acquiredConns"`
+	IdleConns     int32 `json:"idleConns"`
+	// EmptyAcquireCount 是「要连接时池子是空的」的累计次数。非零且在涨
+	// = 池子太小或有连接泄漏，是比瞬时占用更可靠的信号。
+	EmptyAcquireCount int64 `json:"emptyAcquireCount"`
+	// CanceledAcquireCount 是等连接时请求自己先超时/被取消的累计次数。
+	CanceledAcquireCount int64 `json:"canceledAcquireCount"`
+}
+
+// PoolStats 返回连接池快照。池未建时返回零值（不 panic）。
+func (s *Store) PoolStats() PoolStats {
+	if s.pool == nil {
+		return PoolStats{}
+	}
+	st := s.pool.Stat()
+	return PoolStats{
+		MaxConns: st.MaxConns(), TotalConns: st.TotalConns(),
+		AcquiredConns: st.AcquiredConns(), IdleConns: st.IdleConns(),
+		EmptyAcquireCount: st.EmptyAcquireCount(), CanceledAcquireCount: st.CanceledAcquireCount(),
+	}
+}
+
 // Ready 是只读探活：SELECT 1，绝不写库。
 // （paida 的老实现每次探活写一次 PRAGMA user_version，是零流量库长出 4MB WAL 的根因；
 //

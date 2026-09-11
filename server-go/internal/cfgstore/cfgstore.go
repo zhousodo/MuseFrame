@@ -85,8 +85,97 @@ var Registry = []Item{
 	// 而所有接口回归全绿（掌镜 2026-09-11 踩的正是同一个坑）。
 	// 现在四处全部改读 Store.EmailCodeTTL()，注册表这一项是唯一真相源。
 	{"email_code_ttl_seconds", KindNumber, "EMAIL_CODE_TTL_SECONDS", float64(600),
-		"邮箱验证码有效期（秒，同时也是重发窗口；合法区间 60..3600，越界自动夹到边界）", false},
+		"邮箱验证码有效期（秒，同时也是重发窗口）", false},
+	// 🔴 2026-09-12 第二批。这三项此前是**纯字面量 / 纯 env**，后台看不见也改不了：
+	//   public_email.go 的 `issued >= 5` 与 `rec.Attempts >= 5` 是两个裸 5；
+	//   每账号存储上限只活在 config.MAX_USER_STORAGE_BYTES 里，改一次要重启整个容器。
+	// 它们都是**运营旋钮**而不是部署常量：刷码攻击来的时候要能立刻把签发次数压到 1，
+	// 磁盘快满的时候要能立刻把存储上限压下去 —— 这两件事都等不起一次发版。
+	{"email_code_max_attempts", KindNumber, "EMAIL_CODE_MAX_ATTEMPTS", float64(5),
+		"同一个验证码最多可猜几次（猜满即锁，需重新获取）", false},
+	{"email_code_max_issues_per_window", KindNumber, "EMAIL_CODE_MAX_ISSUES_PER_WINDOW", float64(5),
+		"同一个邮箱在一个有效期窗口内最多可签发几个验证码（越小越抗刷）", false},
+	{"max_user_storage_bytes", KindNumber, "MAX_USER_STORAGE_BYTES", float64(256 * 1024 * 1024),
+		"每个账号的原图存储上限（字节，超过即拒绝上传并回 413）", false},
 }
+
+// numRanges 是数值项的合法**闭区间**，按键名索引。没有条目 = 不限。
+//
+// 🔴 为什么必须有这张表，而且必须同时管「写」和「读」两头：
+//
+//	写（Set）：后台手滑把 worker_concurrency 存成 0，队列会静默冻结，而每个
+//	排队任务的额度都已经预留掉了，除了重启没有出路 —— 页面还显示「已保存」。
+//	越界的写现在直接 422，并在消息里写出合法区间。
+//
+//	读（ClampedNumber）：光靠写校验不够。库里可能已经躺着 Node 版写下的越界行，
+//	project.env 里也可能有人手写了 EMAIL_CODE_TTL_SECONDS=0。读的时候再夹一次，
+//	保证**任何**来源的脏值都不能把服务打死；同时 List() 会给这一项挂
+//	warning，让后台看得见「这个值被夹过」，而不是默默生效一个不同的数。
+//
+// 🔴 区间本身写死在代码里、不做成配置项：它们是安全/可用性边界，不是口味问题。
+var numRanges = map[string][2]float64{
+	// 下界 60 秒：配成 0（手滑清空）= 每个码一签发就过期，邮箱登录整条路死掉。
+	// 上界 1 小时：一个泄漏的验证码不该能用一整天，而它同时是签发次数窗口的长度。
+	"email_code_ttl_seconds": {60, 3600},
+	// 1 次太严但合法（攻击时的应急档）；10 次以上就等于把 6 位码的猜中率抬进可行区。
+	"email_code_max_attempts": {1, 10},
+	// 同上：1 是应急档；上界 20 防止有人填个 9999 把防刷彻底关掉。
+	"email_code_max_issues_per_window": {1, 20},
+	// 1 MiB..8 GiB。下界保证至少能放下一张图（单图上限 20 MB 另有 MaxUpload 管），
+	// 上界防止手滑多打几个 0 之后一个账号就能把数据盘写满。
+	"max_user_storage_bytes": {1 << 20, 8 << 30},
+	// 0 = 停发免费额度（合法的运营动作）；上界纯防手滑。
+	"free_units":             {0, 1000},
+	"free_grants_per_ip_day": {0, 10000},
+	"free_grants_per_day":    {0, 1000000},
+	// 与 worker.Concurrency 的夹区间一致：0 会冻结队列，过大会同时打爆上游与内存。
+	"worker_concurrency": {1, 8},
+	"smtp_port":          {1, 65535},
+	// 1 秒..15 分钟。上游单次 edits 调用实测可达 6 分钟，所以上界给得宽；
+	// 下界防止配成 0 后每个任务都在连接建立前就超时（现象与「上游挂了」一模一样）。
+	"image_provider_timeout_ms": {1000, 900000},
+}
+
+// NumRange 返回某个数值项的合法闭区间。ok 为假表示不限。
+func NumRange(key string) (min, max float64, ok bool) {
+	r, ok := numRanges[key]
+	if !ok {
+		return 0, 0, false
+	}
+	return r[0], r[1], true
+}
+
+// ClampedNumber 是带区间夹取的 Number。所有消费方都该用它，而不是裸 Number ——
+// 脏值的来源可能是 DB 行、env、甚至是将来改错的默认值。
+func (s *Store) ClampedNumber(key string) float64 {
+	v := s.Number(key)
+	if min, max, ok := NumRange(key); ok {
+		if v < min {
+			return min
+		}
+		if v > max {
+			return max
+		}
+	}
+	return v
+}
+
+// ClampedInt 是 ClampedNumber 的整数封装。
+func (s *Store) ClampedInt(key string) int { return int(s.ClampedNumber(key)) }
+
+// EmailCodeMaxAttempts 是「同一个码最多猜几次」。
+func (s *Store) EmailCodeMaxAttempts() int { return s.ClampedInt("email_code_max_attempts") }
+
+// EmailCodeMaxIssuesPerWindow 是「一个窗口内最多签几个码」。
+func (s *Store) EmailCodeMaxIssuesPerWindow() int {
+	return s.ClampedInt("email_code_max_issues_per_window")
+}
+
+// MaxUserStorageBytes 是每账号存储上限（字节）。
+//
+// 🔴 返回 int64 而不是 int：32 位平台上 8 GiB 的上界会在 int 里溢出成负数，
+// 于是「存储上限」变成「任何上传都超限」。
+func (s *Store) MaxUserStorageBytes() int64 { return int64(s.ClampedNumber("max_user_storage_bytes")) }
 
 // EmailCodeTTL 是邮箱验证码的有效期。
 //
@@ -97,19 +186,10 @@ var Registry = []Item{
 //     「每窗口最多签 5 次」的窗口长度，等于一天只能要 5 次码。
 //
 // 上下界是**安全边界**而不是口味问题，所以写在代码里、不做成配置项。
+// 区间本身现在统一登记在 numRanges 里（Set 的写校验与这里的读夹取同一个真相源：
+// 原先这里有一对独立的 minTTL/maxTTL 常量，改区间时会漏掉另一处）。
 func (s *Store) EmailCodeTTL() time.Duration {
-	const (
-		minTTL = 60 * time.Second
-		maxTTL = time.Hour
-	)
-	d := time.Duration(s.Int("email_code_ttl_seconds")) * time.Second
-	if d < minTTL {
-		return minTTL
-	}
-	if d > maxTTL {
-		return maxTTL
-	}
-	return d
+	return time.Duration(s.ClampedInt("email_code_ttl_seconds")) * time.Second
 }
 
 var byKey = func() map[string]Item {
@@ -326,6 +406,11 @@ func (s *Store) Set(ctx context.Context, key string, value any) error {
 	if err != nil {
 		return err
 	}
+	// 🔴 区间校验必须在**写库之前**。夹一下再存是更糟的选择：运营输 0、库里变成 60，
+	// 页面刷新后显示 60，没人知道刚才那次保存其实没按要求生效。直接拒绝 + 说出区间。
+	if err := checkRange(it, stored); err != nil {
+		return err
+	}
 	if s.backend != nil {
 		if err := s.backend.UpsertAppConfig(ctx, key, stored); err != nil {
 			return err
@@ -336,6 +421,28 @@ func (s *Store) Set(ctx context.Context, key string, value any) error {
 	s.mu.Unlock()
 	return nil
 }
+
+// checkRange 校验一个已编码的数值是否落在注册区间内。
+func checkRange(it Item, stored string) error {
+	if it.Type != KindNumber {
+		return nil
+	}
+	min, max, ok := NumRange(it.Key)
+	if !ok {
+		return nil
+	}
+	n, err := strconv.ParseFloat(stored, 64)
+	if err != nil {
+		return fmt.Errorf("%s 必须是数字", it.Key)
+	}
+	if n < min || n > max {
+		return fmt.Errorf("%s 必须在 %s..%s 之间（收到 %s）",
+			it.Key, fmtNum(min), fmtNum(max), fmtNum(n))
+	}
+	return nil
+}
+
+func fmtNum(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
 
 func encode(it Item, value any) (string, error) {
 	switch it.Type {
@@ -393,6 +500,14 @@ type Setting struct {
 	RequiresRestart bool   `json:"requiresRestart"`
 	RawSet          bool   `json:"rawSet"`
 	ReadOnly        bool   `json:"readOnly,omitempty"`
+	// Min / Max 是数值项的合法闭区间；前端据此给 <input type=number> 加 min/max
+	// 并把区间写在说明里，省掉「保存 → 422 → 猜区间」这一轮。
+	Min *float64 `json:"min,omitempty"`
+	Max *float64 `json:"max,omitempty"`
+	// Warning 非空表示「当前生效值和配置源里写的那个值不一样」——
+	// 源里的数字越界被夹了，或者根本不是数字。不标出来的话后台会展示一个
+	// 看似正常的数，而真正生效的是另一个（本轮要消灭的正是这种静默偏差）。
+	Warning string `json:"warning,omitempty"`
 }
 
 // MaskSecret 复刻 Node 版 maskSecret：4 个圆点 + 末 4 位；空值为 null。
@@ -407,6 +522,30 @@ func MaskSecret(v string) any {
 	return "••••" + string(r[len(r)-4:])
 }
 
+// numWarning 在「配置源里写的数字 != 真正生效的数字」时给出一句中文说明。
+// 两种情况：源里根本不是数字（回落默认值），或者数字越界（被夹到边界）。
+func (s *Store) numWarning(it Item, effective float64) string {
+	raw, has := s.rawOverride(it.Key)
+	from := "数据库覆盖项"
+	if !has && it.EnvVar != "" {
+		if v, set := s.lookupEnv(it.EnvVar); set {
+			raw, has, from = v, true, "环境变量 "+it.EnvVar
+		}
+	}
+	if !has {
+		return ""
+	}
+	n, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return "🔴 " + from + " 里的值不是数字，已回落默认值 " + fmtNum(effective) + "。请修正或恢复默认。"
+	}
+	if n != effective {
+		return "🔴 " + from + " 里写的是 " + fmtNum(n) + "，越界已夹到 " + fmtNum(effective) +
+			"。请把它改成区间内的值，否则后台显示的和实际生效的不是一回事。"
+	}
+	return ""
+}
+
 // List 返回全部注册项的生效值（secret 项掩码）。
 // secret 项的 source 只可能是 env / default，永远不会是 db。
 func (s *Store) List() []Setting {
@@ -419,7 +558,12 @@ func (s *Store) List() []Setting {
 		}
 		switch it.Type {
 		case KindNumber:
-			st.Value = s.Number(it.Key)
+			st.Value = s.ClampedNumber(it.Key)
+			if min, max, ok := NumRange(it.Key); ok {
+				lo, hi := min, max
+				st.Min, st.Max = &lo, &hi
+			}
+			st.Warning = s.numWarning(it, st.Value.(float64))
 		case KindBool:
 			st.Value = s.Bool(it.Key)
 		default:

@@ -110,7 +110,9 @@ func (a *App) hUpload(c *Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if used+int64(len(c.Raw)) > a.cfg.MaxUserStorageBytes {
+	// 🔴 上限从 config（env-only、改一次要重启整个容器）挪到注册表热键：
+	// 数据盘快满的时候，把每账号上限压下去这件事等不起一次发版。
+	if used+int64(len(c.Raw)) > a.rt.MaxUserStorageBytes() {
 		return nil, apierr.New(413, apierr.CodeStorageQuotaExceeded,
 			"Storage limit reached — delete some projects and try again.")
 	}

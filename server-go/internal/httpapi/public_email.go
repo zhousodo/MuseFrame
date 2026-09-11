@@ -65,7 +65,10 @@ func (a *App) hEmailRequest(c *Ctx) (any, error) {
 		issued = prior.IssueCount
 		windowStart = *prior.WindowStart
 	}
-	if issued >= 5 {
+	// 🔴 2026-09-12：这里原先是裸字面量 `issued >= 5`。刷码攻击来的时候，把它压到 1
+	// 需要改代码 + 发版，而攻击是分钟级的。现在读注册表项 email_code_max_issues_per_window
+	// （后台可热改、带 1..20 区间校验），改完下一个请求立即生效。
+	if issued >= a.rt.EmailCodeMaxIssuesPerWindow() {
 		retry := int((window - now.Sub(windowStart)).Seconds()) + 1
 		return nil, apierr.WithDetails(429, apierr.CodeRateLimited, "验证码请求过于频繁，请稍后再试。",
 			map[string]any{"retryAfterSeconds": retry})
@@ -173,7 +176,8 @@ func (a *App) hEmailVerify(c *Ctx) (any, error) {
 	if rec.ExpiresAt.Before(now) {
 		return nil, apierr.New(422, apierr.CodeCodeExpired, "验证码已过期，请重新获取。")
 	}
-	if rec.Attempts >= 5 {
+	// 同上：原先也是裸 5。注册表项 email_code_max_attempts 可热改（区间 1..10）。
+	if rec.Attempts >= a.rt.EmailCodeMaxAttempts() {
 		return nil, apierr.New(429, apierr.CodeCodeLocked, "尝试次数过多，请重新获取验证码。")
 	}
 	sum := sha256.Sum256([]byte(email + ":" + code))

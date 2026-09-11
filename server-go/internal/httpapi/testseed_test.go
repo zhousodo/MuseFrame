@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"net/http/httptest"
 	"time"
 
 	"museframe-api/internal/store"
@@ -152,3 +153,44 @@ func (e *testEnv) grantUnits(userID string, units int) {
 }
 
 var _ = time.Now
+
+// fakeJPEG 造 n 字节、带合法 JPEG 魔数（FF D8）的假图。
+//
+// 🔴 PUT /upload 只校验魔数与长度（不解码），所以这里不需要一张真图 ——
+// 真图会让「上限 2 MiB」这类用例必须随图片体积调参，反而更脆。
+func fakeJPEG(n int) []byte {
+	if n < 2 {
+		n = 2
+	}
+	b := make([]byte, n)
+	b[0], b[1] = 0xFF, 0xD8
+	for i := 2; i < n; i++ {
+		b[i] = byte(i % 251)
+	}
+	return b
+}
+
+// newIntent 开一个上传意向，返回 assetId。
+func (e *testEnv) newIntent(token string) string {
+	e.t.Helper()
+	r := e.do("POST", "/v1/assets/upload-intents",
+		map[string]any{"contentType": "image/jpeg", "byteSize": 4096}, bearer(token))
+	if r.Code != 200 {
+		e.t.Fatalf("开上传意向失败: %d %s", r.Code, r.Body)
+	}
+	var out UploadIntent
+	r.JSON(e.t, &out)
+	return out.AssetID
+}
+
+// putRaw 打一个请求体是**裸二进制**的 PUT（e.do 只会发 JSON）。
+func (e *testEnv) putRaw(path string, body []byte, token string) (int, []byte) {
+	e.t.Helper()
+	req := httptest.NewRequest("PUT", path, newBytesReader(body))
+	req.RemoteAddr = "127.0.0.1:5000"
+	req.Header.Set("Content-Type", "image/jpeg")
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	e.app.Handler().ServeHTTP(w, req)
+	return w.Code, w.Body.Bytes()
+}

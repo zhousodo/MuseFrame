@@ -155,19 +155,164 @@ func TestCheck11_AdminTokenHeaderOnly(t *testing.T) {
 }
 
 // 校验点 12：worker_concurrency 必须夹在 [1, 8]。
+//
+// 🔴 2026-09-12 起这条有**两道闸**，两道都要测：
+//   - 写闸：PUT 一个越界值直接 422（cfgstore 的 numRanges 区间校验）。
+//     夹一下再存是更糟的选择 —— 页面显示「已保存」，而生效的是另一个数。
+//   - 读闸：库里**已经躺着**的越界行（Node 版写下的 / 手动 SQL 改的）仍要被夹。
+//     写闸管不住历史数据，所以读闸不能撤。这里用 UpsertAppConfig 直接绕过写闸
+//     塞脏值，模拟的就是那种历史行。
 func TestCheck12_WorkerConcurrencyClamped(t *testing.T) {
 	e := newTestEnv(t)
 	ctx := nil2ctx()
 	wk := worker.New(worker.Options{Store: e.st, Runtime: e.rt, Logger: newNopLogger(), NewID: e.nextID, Now: e.clock})
-	for _, c := range []struct {
-		set  int
-		want int
-	}{{0, 1}, {-5, 1}, {1, 1}, {3, 3}, {8, 8}, {99, 8}} {
+
+	// 写闸：越界必须被拒，且**不得**落库。
+	for _, bad := range []int{0, -5, 99} {
+		if err := e.rt.Set(ctx, "worker_concurrency", bad); err == nil {
+			t.Errorf("🔴 worker_concurrency=%d 越界却被接受（设 0 会让队列静默冻结且额度仍被预留）", bad)
+		}
+	}
+	if got := wk.Concurrency(); got != 3 {
+		t.Errorf("被拒的写不该改变生效值，应仍是默认 3，实际 %d", got)
+	}
+	// 区间内的值照常生效。
+	for _, c := range []struct{ set, want int }{{1, 1}, {3, 3}, {8, 8}} {
 		if err := e.rt.Set(ctx, "worker_concurrency", c.set); err != nil {
 			t.Fatal(err)
 		}
 		if got := wk.Concurrency(); got != c.want {
-			t.Errorf("worker_concurrency=%d 应夹到 %d，实际 %d（设 0 会让队列静默冻结且额度仍被预留）", c.set, c.want, got)
+			t.Errorf("worker_concurrency=%d 应生效为 %d，实际 %d", c.set, c.want, got)
 		}
+	}
+	// 读闸：绕过 Set 往库里塞历史越界行，Reload 之后仍必须被夹。
+	for _, c := range []struct {
+		raw  string
+		want int
+	}{{"0", 1}, {"-5", 1}, {"99", 8}, {"不是数字", 3}} {
+		if err := e.st.UpsertAppConfig(ctx, "worker_concurrency", c.raw); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.rt.Reload(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if got := wk.Concurrency(); got != c.want {
+			t.Errorf("库里的历史脏值 %q 应被夹到 %d，实际 %d", c.raw, c.want, got)
+		}
+	}
+}
+
+// TestOTPLimitsAreHotConfigurable 🔴 2026-09-12：OTP 的两个上限此前是
+// public_email.go 里两个**裸 5**。
+//
+//	刷码攻击是分钟级的，而「把每窗口签发次数压到 1」在改之前需要改代码 + 交叉编译
+//	+ 推镜像 + 重启容器。现在它们是注册表热键（email_code_max_issues_per_window /
+//	email_code_max_attempts，区间 1..20 / 1..10），改完下一个请求立即生效。
+//	这条测试钉死的就是「改了之后真的变了」—— 光有配置项而消费方还读着字面量，
+//	是比没有配置项更坏的状态（后台显示已保存，攻击照旧）。
+func TestOTPLimitsAreHotConfigurable(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := nil2ctx()
+
+	// ① 每窗口签发次数：压到 2，第 3 次必须 429。
+	//    （/v1/auth/email/request 的 per-IP 限流是 5 次 / 10 分钟，这里只打 3 次，
+	//     所以命中的 429 只可能来自签发上限这条闸，不含糊。）
+	if err := e.rt.Set(ctx, "email_code_max_issues_per_window", 2); err != nil {
+		t.Fatal(err)
+	}
+	const addr = "otp-limit@example.com"
+	for i := 1; i <= 2; i++ {
+		if r := e.do("POST", "/v1/auth/email/request", map[string]any{"email": addr}, nil); r.Code != 200 {
+			t.Fatalf("第 %d 次签发应 200，实际 %d %s", i, r.Code, r.Body)
+		}
+	}
+	r := e.do("POST", "/v1/auth/email/request", map[string]any{"email": addr}, nil)
+	if r.Code != 429 {
+		t.Fatalf("🔴 签发上限已调到 2，第 3 次必须 429（否则消费方还在读字面量 5），实际 %d %s", r.Code, r.Body)
+	}
+
+	// ② 同一个码的猜测次数：压到 1，猜错一次之后连**正确的码**也必须被锁。
+	if err := e.rt.Set(ctx, "email_code_max_attempts", 1); err != nil {
+		t.Fatal(err)
+	}
+	const addr2 = "otp-attempts@example.com"
+	if r := e.do("POST", "/v1/auth/email/request", map[string]any{"email": addr2}, nil); r.Code != 200 {
+		t.Fatalf("签发应 200，实际 %d %s", r.Code, r.Body)
+	}
+	good := e.mail.lastCode
+	wrong := "000000"
+	if good == wrong {
+		wrong = "111111"
+	}
+	if r := e.do("POST", "/v1/auth/email/verify",
+		map[string]any{"email": addr2, "code": wrong}, nil); r.Code != 422 {
+		t.Fatalf("猜错一次应 422 CODE_INVALID，实际 %d %s", r.Code, r.Body)
+	}
+	r = e.do("POST", "/v1/auth/email/verify", map[string]any{"email": addr2, "code": good}, nil)
+	if r.Code != 429 {
+		t.Fatalf("🔴 猜测上限已调到 1，第 2 次（哪怕码是对的）必须 429 锁死，实际 %d %s", r.Code, r.Body)
+	}
+
+	// ③ 放宽到 5 之后，同一个码在猜错一次后仍然可用 —— 证明读的是配置而不是缓存。
+	if err := e.rt.Set(ctx, "email_code_max_attempts", 5); err != nil {
+		t.Fatal(err)
+	}
+	const addr3 = "otp-relaxed@example.com"
+	if r := e.do("POST", "/v1/auth/email/request", map[string]any{"email": addr3}, nil); r.Code != 200 {
+		t.Fatalf("签发应 200，实际 %d %s", r.Code, r.Body)
+	}
+	good3 := e.mail.lastCode
+	if r := e.do("POST", "/v1/auth/email/verify",
+		map[string]any{"email": addr3, "code": "000001"}, nil); r.Code != 422 {
+		t.Fatalf("猜错一次应 422，实际 %d %s", r.Code, r.Body)
+	}
+	if r := e.do("POST", "/v1/auth/email/verify",
+		map[string]any{"email": addr3, "code": good3}, nil); r.Code != 200 {
+		t.Fatalf("上限放宽到 5 后，猜错一次不该锁死，实际 %d %s", r.Code, r.Body)
+	}
+}
+
+// TestStorageQuotaIsHotConfigurable 🔴 每账号存储上限从 config（env-only、
+// 改一次要重启整个容器）挪到注册表热键之后，必须证明**它仍然拦得住**。
+//
+//	这条是「改了读取来源」这类改动唯一有意义的回归：上限本身很好测
+//	（把它压到一张图之下，上传必须 413），而一旦接错（比如读成 0 或读成 int32
+//	溢出的负数），现象是所有上传全部 413，或者所有上传都不再受限 —— 两种都要能照出来。
+func TestStorageQuotaIsHotConfigurable(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := nil2ctx()
+	_, tok := e.signUp("quota@example.com")
+	img := fakeJPEG(4096)
+
+	// 上限压到下界 1 MiB：4 KiB 的图应当照常上传成功。
+	if err := e.rt.Set(ctx, "max_user_storage_bytes", 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if code, body := e.putRaw("/v1/assets/"+e.newIntent(tok)+"/upload", img, tok); code != 200 {
+		t.Fatalf("1 MiB 上限下 4 KiB 的图应上传成功，实际 %d %s", code, body)
+	}
+
+	// 直接往库里塞一个越界小值（绕过写闸，模拟历史脏行）：读闸必须把它夹到 1 MiB，
+	// 而不是让它变成「0 字节上限 = 所有上传全 413」。
+	if err := e.st.UpsertAppConfig(ctx, "max_user_storage_bytes", "0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.rt.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.rt.MaxUserStorageBytes(); got != 1<<20 {
+		t.Fatalf("🔴 库里的 0 应被夹到下界 1 MiB，实际 %d —— 0 会让所有上传全部 413", got)
+	}
+
+	// 把上限压到「比已用量还小」：下一张图必须 413 STORAGE_QUOTA_EXCEEDED。
+	// 1 MiB 是下界，所以这里靠「已用 4 KiB + 再传 4 KiB」凑不过 1 MiB——
+	// 改用把图放大到超过上限本身。
+	big := fakeJPEG(2 << 20) // 2 MiB > 1 MiB 上限
+	code, body := e.putRaw("/v1/assets/"+e.newIntent(tok)+"/upload", big, tok)
+	if code != 413 {
+		t.Fatalf("🔴 超过每账号上限必须 413（否则一个账号能把数据盘写满），实际 %d %s", code, body)
+	}
+	if !strings.Contains(string(body), "STORAGE_QUOTA_EXCEEDED") {
+		t.Errorf("错误码应为 STORAGE_QUOTA_EXCEEDED，实际 %s", body)
 	}
 }

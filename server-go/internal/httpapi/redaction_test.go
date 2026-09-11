@@ -219,7 +219,7 @@ func TestAdminConfigExposesDeployLevelReadOnly(t *testing.T) {
 	want := []string{
 		"deploy_image_provider", "deploy_session_ttl_days", "deploy_event_retention_days",
 		"deploy_idempotency_retention_days", "deploy_max_job_attempts",
-		"deploy_max_user_storage_bytes", "deploy_shutdown_grace_seconds",
+		"deploy_shutdown_grace_seconds",
 		"deploy_db_pool_max_conns", "deploy_trusted_proxy", "deploy_trust_cf_connecting_ip",
 		"deploy_play_acknowledge", "deploy_allow_test_login",
 		"deploy_admin_token_configured", "deploy_ip_hash_salt_configured",
@@ -271,5 +271,62 @@ func TestAdminConfigExposesDeployLevelReadOnly(t *testing.T) {
 	if r := e.do("PUT", "/v1/admin/config",
 		map[string]any{"key": "email_code_ttl_seconds", "value": 300}, e.admin()); r.Code != 200 {
 		t.Fatalf("验证码有效期应可热改，实际 %d %s", r.Code, r.Body)
+	}
+	// ⑥ 2026-09-12 第二批收进注册表的运营旋钮：必须是**可热改的非密钥热键**，
+	//    必须带区间供前端展示，且越界的 PUT 必须 422（而不是静默夹）。
+	//    max_user_storage_bytes 此前是部署级只读行，现在升级成热键 ——
+	//    所以上面那份 want 里刻意不再有 deploy_max_user_storage_bytes：
+	//    同一个键既有可改行又有只读行，是最容易让运营改错地方的布局。
+	for _, tc := range []struct {
+		key      string
+		good     any
+		tooSmall any
+		tooBig   any
+	}{
+		{"email_code_max_attempts", 3, 0, 999},
+		{"email_code_max_issues_per_window", 2, 0, 999},
+		{"max_user_storage_bytes", 64 * 1024 * 1024, 1, 1 << 40},
+	} {
+		s, ok := byKey[tc.key]
+		if !ok {
+			t.Errorf("配置清单缺热键 %s", tc.key)
+			continue
+		}
+		if s.ReadOnly || s.Secret {
+			t.Errorf("%s 应当是可热改的非密钥项", tc.key)
+		}
+		if s.Min == nil || s.Max == nil {
+			t.Errorf("%s 应带 min/max 供前端展示（省掉「保存→422→猜区间」这一轮）", tc.key)
+		}
+		if r := e.do("PUT", "/v1/admin/config",
+			map[string]any{"key": tc.key, "value": tc.good}, e.admin()); r.Code != 200 {
+			t.Errorf("%s 区间内的值应可热改，实际 %d %s", tc.key, r.Code, r.Body)
+		}
+		for _, bad := range []any{tc.tooSmall, tc.tooBig} {
+			if r := e.do("PUT", "/v1/admin/config",
+				map[string]any{"key": tc.key, "value": bad}, e.admin()); r.Code != 422 {
+				t.Errorf("🔴 %s=%v 越界应 422（静默夹会让页面显示的和生效的不是一回事），实际 %d %s",
+					tc.key, bad, r.Code, r.Body)
+			}
+		}
+	}
+	// ⑦ 运行状态块必须有值：它是「改完配置到底生效没 / SMTP 通不通 / 队列堵没堵」
+	//    唯一不用 SSH 的查法。全 0 / 空串等于这一块白给。
+	rt := out.Runtime
+	if rt.Version == "" || rt.StartedAt == "" || rt.ServerTime == "" {
+		t.Errorf("🔴 runtime 必须给出版本与启动时间，实际 %+v", rt)
+	}
+	if !rt.DB.OK || rt.DB.MaxConns <= 0 {
+		t.Errorf("🔴 runtime.db 必须反映真实连接池，实际 %+v", rt.DB)
+	}
+	if rt.SMTP.CodeTTLSeconds <= 0 {
+		t.Errorf("runtime.smtp 应带上当前生效的验证码有效期，实际 %+v", rt.SMTP)
+	}
+	if rt.Support.Email == "" && rt.Support.QQGroup == "" {
+		t.Error("runtime.support 应给出客服入口当前值（配错=付费转化直接断掉）")
+	}
+	// 响应体里不得出现 SMTP 口令相关的任何值 —— 只给布尔。
+	if strings.Contains(body, "\"passConfigured\":") == false {
+		t.Error("runtime.smtp 应只给 passConfigured 布尔，不给口令")
 	}
 }

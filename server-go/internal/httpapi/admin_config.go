@@ -27,7 +27,10 @@ func (a *App) adminConfigResult(c *Ctx) (AdminConfigResult, error) {
 		},
 	)
 	settings = append(settings, a.deployOnlySettings()...)
-	return AdminConfigResult{Settings: settings, Generation: a.generationSummary(c.R.Context()), Abuse: abuse}, nil
+	return AdminConfigResult{
+		Settings: settings, Generation: a.generationSummary(c.R.Context()),
+		Abuse: abuse, Runtime: a.runtimeSummary(c.R.Context()),
+	}, nil
 }
 
 // deployOnlySettings 是**部署级**配置的只读视图。
@@ -86,8 +89,9 @@ func (a *App) deployOnlySettings() []cfgstore.Setting {
 			"【部署级】幂等记录保留天数（IDEMPOTENCY_RETENTION_DAYS）"),
 		roNum("deploy_max_job_attempts", a.cfg.MaxJobAttempts,
 			"【部署级】单个生成任务最多重试几次（MAX_JOB_ATTEMPTS）"),
-		roNum("deploy_max_user_storage_bytes", int(a.cfg.MaxUserStorageBytes),
-			"【部署级】每账号存储上限（字节，MAX_USER_STORAGE_BYTES）"),
+		// 注：max_user_storage_bytes 2026-09-12 已从部署级只读行**升级成注册表热键**
+		// （见 cfgstore.Registry），所以这里不再重复列它 —— 同一个键同时出现一个可改行
+		// 和一个只读行，是最容易让运营改错地方的布局。
 		roNum("deploy_shutdown_grace_seconds", a.cfg.ShutdownGraceS,
 			"【部署级】收到 SIGTERM 后的排空窗口（秒，SHUTDOWN_GRACE_SECONDS）"),
 		roNum("deploy_db_pool_max_conns", int(a.cfg.PoolMaxConns),
@@ -156,7 +160,8 @@ func (a *App) hAdminConfigPut(c *Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"ok": true, "settings": res.Settings, "generation": res.Generation, "abuse": res.Abuse}, nil
+	return map[string]any{"ok": true, "settings": res.Settings, "generation": res.Generation,
+		"abuse": res.Abuse, "runtime": res.Runtime}, nil
 }
 
 // AdminProductItem 是 GET /v1/admin/products-admin 的一行。

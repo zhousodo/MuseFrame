@@ -38,13 +38,17 @@ type Config struct {
 	TrustedProxy string
 	TrustCFIP    bool
 
-	SessionTTLDays      int
-	MaxUserStorageBytes int64
-	EventRetentionDays  int
-	IdempotencyDays     int
-	MaxJobAttempts      int
-	RateLimitMaxKeys    int
-	ShutdownGraceS      int
+	SessionTTLDays int
+	// 🔴 MAX_USER_STORAGE_BYTES 不在这里了：它 2026-09-12 变成注册表热键
+	//    （cfgstore.Store.MaxUserStorageBytes）。理由是运营场景 —— 数据盘快满时
+	//    要能立刻把每账号上限压下去，而这里的值启动时读一次就固化，改它要重启容器。
+	//    代价是「解析失败即启动失败」这条对该键不再适用：写错了服务照常起，
+	//    但后台那一行会挂 🔴 warning 说明「源里写的不是数字/越界，实际生效的是 X」。
+	EventRetentionDays int
+	IdempotencyDays    int
+	MaxJobAttempts     int
+	RateLimitMaxKeys   int
+	ShutdownGraceS     int
 
 	// 三个开发逃生口。**旗标为真还要带管理员令牌**才生效（双闸），
 	// 这里只记录旗标本身。
@@ -148,12 +152,6 @@ func Load() (*Config, error) {
 		}
 		*f.dst = v
 	}
-
-	storage, err := strconv.ParseInt(getenv("MAX_USER_STORAGE_BYTES", strconv.Itoa(256*1024*1024)), 10, 64)
-	if err != nil || storage < 1 {
-		return nil, fmt.Errorf("MAX_USER_STORAGE_BYTES 不是合法正整数")
-	}
-	c.MaxUserStorageBytes = storage
 
 	return c, nil
 }
