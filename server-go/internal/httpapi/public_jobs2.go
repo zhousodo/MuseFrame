@@ -162,18 +162,14 @@ func (a *App) hFeedback(c *Ctx) (any, error) {
 				break
 			}
 			s, _ := v.(string)
-			if len(s) > 40 {
-				s = s[:40]
-			}
+			s = truncateRunes(s, 40)
 			codes = append(codes, s)
 		}
 	}
 	var comment *string
 	if raw, ok := c.Body["comment"]; ok && raw != nil {
 		s, _ := raw.(string)
-		if len(s) > MaxFeedbackComment {
-			s = s[:MaxFeedbackComment]
-		}
+		s = truncateRunes(s, MaxFeedbackComment)
 		comment = &s
 	}
 	codesJSON, _ := json.Marshal(codes)
@@ -250,9 +246,7 @@ func (a *App) hEvents(c *Ctx) (any, error) {
 		if name == "" {
 			continue
 		}
-		if len(name) > 64 {
-			name = name[:64]
-		}
+		name = truncateRunes(name, 64)
 		propsRaw := e["props"]
 		if propsRaw == nil {
 			propsRaw = map[string]any{}

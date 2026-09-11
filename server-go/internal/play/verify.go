@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 func stringsReader(s string) io.Reader { return strings.NewReader(s) }
@@ -52,6 +53,12 @@ func (c *Client) Verify(ctx context.Context, productID, purchaseToken, kind stri
 		return nil, ErrUnavailable
 	}
 
+	return parsePurchase(kind, body, c.now())
+}
+
+// parsePurchase 把 Play 的应答解成 Result —— 纯函数，不碰 HTTP / 服务账号，
+// 便于把「什么算有效购买」这条最值钱的判断单独测到。
+func parsePurchase(kind string, body []byte, now time.Time) (*Result, error) {
 	var raw struct {
 		OrderID              string `json:"orderId"`
 		PurchaseState        *int   `json:"purchaseState"`
@@ -67,8 +74,23 @@ func (c *Client) Verify(ctx context.Context, productID, purchaseToken, kind stri
 		res.AcknowledgementState = *raw.AcknowledgementState
 	}
 	if kind == "subscription" {
-		// paymentState 1 = 已付款，2 = 免费试用期。
-		res.Valid = raw.PaymentState != nil && (*raw.PaymentState == 1 || *raw.PaymentState == 2)
+		// paymentState: 0 待付款 · 1 已付款 · 2 免费试用期 · 3 延期升降级待生效。
+		//
+		// 🔴 必须含 3。Node 版（server/verify.js:218-222）的注释写得很清楚：
+		// 「只认 1 会把每一个免费试用用户和每一个改套餐的用户都拒掉 —— 而这些人
+		// 在 Google 看来是完全有权益的」。Go 版第一版只认 {1,2}，等于把那个
+		// 已经修好的 bug 又放回来了，而且后果比 Node 当年更重：
+		// public_purchases.go:136-138 在 !Valid 时会把订单标成 invalid，
+		// 而补偿扫描只重试 status='pending'，所以这一标就是**永久**的 ——
+		// 一个正在改套餐的付费用户会彻底失去权益，只能人工改库救回来。
+		paid := raw.PaymentState != nil &&
+			(*raw.PaymentState == 1 || *raw.PaymentState == 2 || *raw.PaymentState == 3)
+		// 🔴 还必须校验有效期。Node 版是 `valid: expiry > Date.now() && paid`，
+		// Go 版第一版把 expiryTimeMillis 解析出来却从来不比 —— 于是一个早就过期、
+		// Google 已经停止计费的订阅 token 照样验成 valid，finalizePurchase 会
+		// 照着商品的 granted_units 白发一次额度（而 userPlan 认过期时间，
+		// 所以运营那边看不到套餐变化，只有额度莫名其妙多出来）。
+		res.Valid = paid && res.ExpiresAt != nil && res.ExpiresAt.After(now)
 	} else {
 		// purchaseState 0 = 已购买。
 		res.Valid = raw.PurchaseState != nil && *raw.PurchaseState == 0

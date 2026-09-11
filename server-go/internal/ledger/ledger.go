@@ -74,6 +74,11 @@ func Grant(ctx context.Context, q store.Queryer, newID NewID, userID string, uni
 // 🔴 调用方必须把它和「INSERT generation_jobs」「UPDATE projects.status」放进
 // 同一个事务：Node 版曾经分两次提交，留下「行已建、预留失败」的白嫖任务。
 func Reserve(ctx context.Context, q store.Queryer, newID NewID, userID, jobID string, units int, now time.Time) error {
+	// 🔴 先上锁再读余额。不上锁时「读余额 → 判断 → 写扣减」是可交错的，
+	// 两个并发请求会拿同一份余额各扣一次，把桶扣成负数（详见 store.LockUserCredits）。
+	if err := store.LockUserCredits(ctx, q, userID); err != nil {
+		return err
+	}
 	exists, err := store.LedgerRefPrefixExists(ctx, q, userID, "job:"+jobID+":reserve")
 	if err != nil {
 		return err

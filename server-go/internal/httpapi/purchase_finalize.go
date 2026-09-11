@@ -19,7 +19,8 @@ func (a *App) recordPendingPurchase(ctx context.Context, userID string, p *store
 	t := a.now()
 	amount := p.PriceMinor
 	currency := p.Currency
-	return store.InsertPurchase(ctx, a.st.Q(), &store.Purchase{
+	// pending 这条对齐 Node 的 INSERT OR IGNORE：并发下重复是正常的，不是错误。
+	return store.InsertPurchaseIfAbsent(ctx, a.st.Q(), &store.Purchase{
 		ID: a.newID(), UserID: userID, ProductID: p.ID, Platform: platform,
 		ExternalTransactionID: externalTxID, Status: "pending",
 		AmountMinor: &amount, Currency: &currency, PurchasedAt: t, CreatedAt: t,

@@ -195,6 +195,14 @@ func (a *App) hCreateJob(c *Ctx) (any, error) {
 	// 它们曾经分别提交，崩溃卡在中间会留下两种坏状态：一条没有台账的 created 任务
 	// （开机恢复把它重排队，白送一张图），以及一次失败的预留需要补偿性 UPDATE，
 	// 而那条 UPDATE 自己也可能丢。
+	// 🔴 幂等记录必须和建任务/扣额度在**同一个事务**里。
+	// 早先它在事务之后、用连接池单独写：两个带同一个 Idempotency-Key 的并发请求
+	// 会双双在上面第 2 步查不到记录，于是各自建一个任务、各自预留一份额度、
+	// 各自入队 —— 一次用户操作扣两份额度、出两张图；随后慢的那个在写幂等记录时
+	// 撞 PRIMARY KEY (user_id, idempotency_key) 拿到 500，而它那份额度已经花掉了。
+	// 放进同一个事务后，这个主键自己就是串行化点：慢的那个整笔回滚
+	// （任务、预留、项目状态一起没），再去回放快的那个的响应。
+	var body JobCreated
 	err = a.st.InTx(ctx, func(q store.Queryer) error {
 		if err := store.InsertJob(ctx, q, &store.Job{
 			ID: jobID, UserID: u.ID, ProjectID: projectID, SourceAssetID: sourceAssetID,
@@ -207,7 +215,29 @@ func (a *App) hCreateJob(c *Ctx) (any, error) {
 		if err := ledger.Reserve(ctx, q, a.newID, u.ID, jobID, units, t); err != nil {
 			return err
 		}
-		return store.SetProjectStatus(ctx, q, projectID, "generating", t)
+		if err := store.SetProjectStatus(ctx, q, projectID, "generating", t); err != nil {
+			return err
+		}
+		// 余额快照也挪进事务内读：出参里的 availableUnits 必须是扣完这一笔之后的值，
+		// 在事务外读会把并发的其他扣减也算进来，回放出去的字节就不稳定了。
+		after, err := store.AvailableUnits(ctx, q, u.ID, a.now())
+		if err != nil {
+			return err
+		}
+		body = JobCreated{
+			Job: JobBrief{
+				ID: jobID, Status: "queued", Stage: "preparing",
+				EstimatedRangeSeconds: a.generationInfo().EstimatedRangeSeconds,
+				ReservedUnits:         units, CreatedAt: store.ISO(t),
+			},
+			EntitlementSnapshot: EntitlementSnapshot{AvailableUnits: after, Plan: plan},
+		}
+		// 10
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		return store.InsertIdempotency(ctx, q, u.ID, idemKey, reqHash, 200, raw, t)
 	})
 	if err != nil {
 		// 什么都没写：整个事务回滚了，不存在需要清理的孤儿任务行。
@@ -215,29 +245,25 @@ func (a *App) hCreateJob(c *Ctx) (any, error) {
 			return nil, apierr.WithDetails(402, apierr.CodeInsufficientEntitle, ins.Error(),
 				map[string]any{"requiredUnits": ins.RequiredUnits, "availableUnits": ins.AvailableUnits})
 		}
+		// 输掉幂等键竞争：对方已经提交，本次整笔回滚（没扣额度、没建任务）。
+		// 按契约回放对方的响应，而不是把竞态暴露成 500。
+		if store.IsUniqueViolation(err) {
+			prior, perr := store.GetIdempotency(ctx, a.st.Q(), u.ID, idemKey)
+			if perr != nil {
+				return nil, err
+			}
+			if prior.RequestHash != reqHash {
+				return nil, apierr.New(409, apierr.CodeIdempotencyConflict, "Key was used with a different request.")
+			}
+			var replay JobCreated
+			if uerr := json.Unmarshal(prior.ResponseBody, &replay); uerr != nil {
+				return nil, uerr
+			}
+			return replay, nil
+		}
 		return nil, err
 	}
+	// 只有事务真的提交了才入队 —— 回滚的那一笔没有任务行可跑。
 	a.worker.Enqueue(jobID)
-
-	after, err := store.AvailableUnits(ctx, a.st.Q(), u.ID, a.now())
-	if err != nil {
-		return nil, err
-	}
-	body := JobCreated{
-		Job: JobBrief{
-			ID: jobID, Status: "queued", Stage: "preparing",
-			EstimatedRangeSeconds: a.generationInfo().EstimatedRangeSeconds,
-			ReservedUnits:         units, CreatedAt: store.ISO(t),
-		},
-		EntitlementSnapshot: EntitlementSnapshot{AvailableUnits: after, Plan: plan},
-	}
-	// 10
-	raw, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	if err := store.InsertIdempotency(ctx, a.st.Q(), u.ID, idemKey, reqHash, 200, raw, t); err != nil {
-		return nil, err
-	}
 	return body, nil
 }

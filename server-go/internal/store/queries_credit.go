@@ -63,6 +63,30 @@ func GetFreeGrantWindow(ctx context.Context, q Queryer, ipHash *string, now time
 
 // ---- 额度桶与台账 ----------------------------------------------------------
 
+// LockUserCredits 取一把**事务级**的 per-user 排他锁，用于串行化该用户的额度变更。
+//
+// 🔴 为什么必须有它：Node 版是靠「同步 handler + BEGIN IMMEDIATE 的 SQLite 句柄」
+// 白拿的进程内互斥（server/db.js:372、server/api.js:797），
+// 「读余额 → 判断够不够 → 写扣减」不可能被另一个请求插进来。
+// Go 版是并发的，而 BucketBalances 只是一条普通聚合 SELECT，事务是 READ COMMITTED，
+// 全仓没有任何行锁。于是两个并发的 POST /v1/generation-jobs（不同 Idempotency-Key，
+// 双击或客户端超时重试都会产生）会双双读到 balance = 1，各写一条 units = -1：
+// reference_key 分别是 job:<A>:reserve:0 和 job:<B>:reserve:0，
+// credit_ledger 的 UNIQUE (user_id, reference_key) 拦不住，桶掉到 -1，
+// 两个任务都跑、两张图都出，只收了一张的钱。
+// 而且它**看不见**：BucketBalances 的 HAVING ... > 0 会把负数桶直接过滤掉，
+// availableUnits 显示 0 而不是 -1。
+//
+// 用 advisory lock 而不是 SELECT ... FOR UPDATE 的原因有两个：
+// 一是 PG 不允许 FOR UPDATE 和 GROUP BY 同用（余额是聚合出来的）；
+// 二是新用户可能一个桶都还没有，没有行可锁，而发放路径要建桶 —— advisory lock
+// 锁的是「这个用户的额度」这件事本身，空桶也照样串行。
+// 事务级：提交或回滚时自动释放，不会泄漏。
+func LockUserCredits(ctx context.Context, q Queryer, userID string) error {
+	_, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, userID)
+	return err
+}
+
 // BucketBalances 复刻 ledger.js:44 bucketBalances()：
 // 余额 = 按桶聚合的台账 units 之和；过期桶不计；扣减时最早过期的桶先扣。
 //

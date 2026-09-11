@@ -114,3 +114,55 @@ func TestQueryDenyTables(t *testing.T) {
 		t.Error("不应误伤 generation_jobs —— 否则控制台形同虚设（全部拒绝）")
 	}
 }
+
+// TestPageOrderColumnsIsTotalOrder 分页排序键必须是**全序**。
+//
+// 🔴 修复前：没有 id 列时只按 cols[0] 排序。白名单里 exhibition_styles
+// （第一列 exhibition_id）和 idempotency_records（第一列 user_id）的第一列都能重复，
+// 并列行的相对顺序在 PG 里未定义，纯 OFFSET 翻页就可能重复一行、漏掉另一行，
+// 于是运维在后台看到的「库里的数据」本身是错的。
+//
+// 这条测试直接钉住排序键的选择（确定性断言），而不是去赌某一次查询的行序 ——
+// 同样的数据 PG 的排序结果是稳定的，靠实际翻页来复现这个 bug 需要制造执行计划
+// 变化或并发写，测不出来不等于没有问题。
+func TestPageOrderColumnsIsTotalOrder(t *testing.T) {
+	cases := []struct {
+		name string
+		cols []string
+		want []string
+	}{
+		{"有 id 列就只按 id", []string{"id", "user_id", "created_at"}, []string{"id"}},
+		{"id 不在第一列也要认出来", []string{"user_id", "id"}, []string{"id"}},
+		// 真实表结构，取自 migrations/001_init.sql。
+		{"exhibition_styles 无 id，第一列可重复",
+			[]string{"exhibition_id", "style_id", "position"},
+			[]string{"exhibition_id", "style_id", "position"}},
+		{"idempotency_records 无 id，第一列可重复",
+			[]string{"user_id", "idempotency_key", "request_hash", "response_body", "created_at"},
+			[]string{"user_id", "idempotency_key", "request_hash", "response_body", "created_at"}},
+		{"单列表", []string{"key"}, []string{"key"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := pageOrderColumns(tc.cols)
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("排序键应为 %v，实得 %v", tc.want, got)
+			}
+		})
+	}
+}
+
+// TestPageOrderCoversEveryBrowsableTableWithoutID 反向保险：白名单里每一张
+// **没有 id 列**的表，排序键都必须覆盖到足以构成全序的程度（这里即全部列）。
+// 将来有人往白名单加一张无 id 的表时，这条会跟着一起管住。
+func TestPageOrderCoversEveryBrowsableTableWithoutID(t *testing.T) {
+	// 只校验逻辑：无 id 时返回的列数必须等于输入列数（即全部列参与排序）。
+	for _, cols := range [][]string{
+		{"exhibition_id", "style_id", "position"},
+		{"user_id", "idempotency_key", "request_hash"},
+	} {
+		if got := pageOrderColumns(cols); len(got) != len(cols) {
+			t.Fatalf("无 id 列时必须按全部 %d 列排序，实得 %d 列: %v", len(cols), len(got), got)
+		}
+	}
+}

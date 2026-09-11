@@ -25,12 +25,35 @@ func GetPurchaseByExternal(ctx context.Context, q Queryer, platform, externalTxI
 		`SELECT `+purchaseCols+` FROM purchases WHERE platform = $1 AND external_transaction_id = $2`, platform, externalTxID))
 }
 
-// InsertPurchase 写一条订单。
-func InsertPurchase(ctx context.Context, q Queryer, p *Purchase) error {
-	_, err := q.Exec(ctx,
-		`INSERT INTO purchases (id, user_id, product_id, platform, external_transaction_id, status,
+const insertPurchaseSQL = `INSERT INTO purchases (id, user_id, product_id, platform, external_transaction_id, status,
 		   amount_minor, currency, purchased_at, expires_at, created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (platform, external_transaction_id) DO NOTHING`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`
+
+// InsertPurchase 写一条订单，(platform, external_transaction_id) 撞唯一约束就**报错**。
+//
+// 🔴 这里绝不能加 ON CONFLICT DO NOTHING。对齐 Node 版：待核验的那条是
+// `INSERT OR IGNORE`（api.js:1047），已核验的那条是**裸 INSERT**（api.js:1179），
+// 靠唯一约束冲突把整个 tx() 炸掉，从而挡住重复发放。
+//
+// Go 版第一版两处共用了带 DO NOTHING 的同一个函数，于是「防重复发放的地基」
+// 被悄悄拆掉了：/v1/purchases/verify 是 async 的，同一笔订单两个并发请求都能
+// 读到 existing == nil，各自 a.newID() 生成**不同**的 purchaseID，于是
+// grantPurchaseUnits 算出的 reference_key 是 grant:purchase:<uuidA> 和
+// grant:purchase:<uuidB> —— 两个不同的键，credit_ledger 上
+// UNIQUE (user_id, reference_key) 根本不会触发。结果一笔支付发两份额度。
+// 冲突必须抛出来，让事务回滚。
+func InsertPurchase(ctx context.Context, q Queryer, p *Purchase) error {
+	_, err := q.Exec(ctx, insertPurchaseSQL,
+		p.ID, p.UserID, p.ProductID, p.Platform, p.ExternalTransactionID, p.Status,
+		p.AmountMinor, p.Currency, p.PurchasedAt, p.ExpiresAt, p.CreatedAt)
+	return err
+}
+
+// InsertPurchaseIfAbsent 写一条订单，已存在就静默跳过（对齐 Node 的 INSERT OR IGNORE）。
+// 只给「先落一条 pending 再去问 Play」那条路用：那里重复是正常的，不是错误。
+func InsertPurchaseIfAbsent(ctx context.Context, q Queryer, p *Purchase) error {
+	_, err := q.Exec(ctx,
+		insertPurchaseSQL+` ON CONFLICT (platform, external_transaction_id) DO NOTHING`,
 		p.ID, p.UserID, p.ProductID, p.Platform, p.ExternalTransactionID, p.Status,
 		p.AmountMinor, p.Currency, p.PurchasedAt, p.ExpiresAt, p.CreatedAt)
 	return err

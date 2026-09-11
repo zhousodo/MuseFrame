@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -198,6 +199,13 @@ var ErrNoRows = pgx.ErrNoRows
 
 // IsNoRows 判断错误是否为「查不到」。
 func IsNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
+
+// IsUniqueViolation 判断错误是否为唯一约束冲突（PostgreSQL 23505）。
+// 用来把「并发抢同一个幂等键」这种正常竞态与真故障区分开。
+func IsUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
 
 // Wrap 把底层错误包一层但**不带连接串**。
 func Wrap(op string, err error) error {

@@ -315,7 +315,7 @@ async function loadOverview(){
   try {
     const fb = (await api('/v1/admin/feedback')).feedback || [];
     $('feedback').innerHTML = '<tr><th>评价</th><th>原因</th><th>风格</th><th>时间</th></tr>' +
-      (fb.length ? fb.map(f=>{ let reasons=[]; try{ reasons = JSON.parse(f.reason_codes||'[]'); }catch(_){} return `<tr><td>${f.rating==='positive'?'👍':'👎'}</td><td>${escapeHtml(reasons.join(', ')||'—')}</td><td>${escapeHtml(f.style||'—')}</td><td class="muted">${ago(f.created_at)}</td></tr>`; }).join('') : '<tr><td colspan=4 class=muted>暂无反馈</td></tr>');
+      (fb.length ? fb.map(f=>{ const reasons = parseReasonCodes(f.reason_codes); return `<tr><td>${f.rating==='positive'?'👍':'👎'}</td><td>${escapeHtml(reasons.join(', ')||'—')}</td><td>${escapeHtml(f.style||'—')}</td><td class="muted">${ago(f.created_at)}</td></tr>`; }).join('') : '<tr><td colspan=4 class=muted>暂无反馈</td></tr>');
   } catch(e) {
     if (e.status !== 401) $('feedback').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
   }
@@ -562,8 +562,27 @@ async function runSql(){
 /* ---------- 图像生成状态 ---------- */
 /* 没配密钥就不该能生成。这条横幅让「服务器活着但一张图也做不出来」一眼可见，
    而不是让本地像素引擎冒充模型、看上去一切正常。 */
+/* reason_codes 的线上形状变过一次：旧 Node + SQLite 把它存在 TEXT 列里，出参是
+   **JSON 字符串** "[\"blurry\"]"；Go + PostgreSQL 改成 jsonb 列，出参是**真数组**
+   ["blurry"]。老代码写的是 JSON.parse(f.reason_codes||'[]')，喂数组进去等于
+   JSON.parse("blurry") —— 抛 SyntaxError，而那句外面套着空的 catch(_){}，
+   于是「原因」列对每一行都静默显示成「—」，看不出任何报错。
+   这里两种形状都收，顺带兼容 null/缺省。 */
+function parseReasonCodes(v) {
+  if (Array.isArray(v)) return v.filter(x => x != null).map(String);
+  if (v == null || v === '') return [];
+  if (typeof v === 'string') {
+    try { const parsed = JSON.parse(v); return Array.isArray(parsed) ? parsed.filter(x => x != null).map(String) : []; }
+    catch (_) { return []; }
+  }
+  return [];
+}
+
 const GEN_REASONS = {
-  PROVIDER_NOT_CONFIGURED: '图像模型未配置——下面填好接口地址与 API 密钥后立即生效（无需重启）。',
+  /* 密钥这半句已经不成立：Go 版刻意不再保留「从 DB 读密钥」这条路径
+     （旧版运维在后台填一次密钥就明文落进 app_config 并随每日备份落盘）。
+     API 密钥现在只认环境变量 IMAGE_PROVIDER_API_KEY，改完要重启容器。 */
+  PROVIDER_NOT_CONFIGURED: '图像模型未配置——接口地址可在下面改（即时生效）；API 密钥只能改 project.env 的 IMAGE_PROVIDER_API_KEY，改完需重启容器。',
   PROVIDER_UNKNOWN: 'IMAGE_PROVIDER 取值无法识别，只支持 remote 或 local（.env，改后需重启）。',
 };
 function renderGenBar(g){
@@ -622,8 +641,13 @@ function configRowHtml(s){
     const val = s.value === true || s.value === 'true' || s.value === 1;
     control = `<select id="${inputId}" ${s.readOnly?'disabled':''}><option value="true"${val?' selected':''}>开</option><option value="false"${!val?' selected':''}>关</option></select>`;
   } else if (s.secret) {
-    const placeholder = s.value != null && s.value !== '' ? String(s.value) : '未设置';
-    control = `<input id="${inputId}" type="password" placeholder="${escapeHtml(placeholder)}" autocomplete="new-password" ${s.readOnly?'disabled':''}>`;
+    /* 🔴 密钥一律不可写：Go 端 cfgstore 对 Secret 项直接 ErrSecretNotWritable -> 422。
+       原来这里照常渲染 password 输入框 + 保存按钮，点下去唯一可能的结果是
+       「保存失败」，而界面上没有任何地方说明原因。改成只读展示掩码值并说明
+       真正的改法，别给运维一个必然失败的按钮。 */
+    const masked = s.value != null && s.value !== '' ? String(s.value) : '未设置';
+    control = `<input id="${inputId}" type="text" value="${escapeHtml(masked)}" disabled>`
+      + `<div class="muted">密钥只从环境变量读，后台改不了：请改 project.env 后重启容器。</div>`;
   } else if (isNum) {
     control = `<input id="${inputId}" type="number" value="${s.value ?? ''}" ${s.readOnly?'disabled':''}>`;
   } else {
@@ -633,8 +657,9 @@ function configRowHtml(s){
   const restartBadge = s.requiresRestart ? '<span class="badge badge-warn">⚠需重启</span>' : '';
   const roBadge = s.readOnly ? '<span class="badge badge-gray">只读</span>' : '';
   const type = isBool ? 'boolean' : (isNum ? 'number' : 'text');
-  const saveBtn = s.readOnly ? '' : `<button class="small" data-save="${escapeHtml(s.key)}" data-type="${type}" data-secret="${s.secret?'1':'0'}" data-input="${inputId}">保存</button>`;
-  const restoreBtn = (s.rawSet && !s.readOnly) ? `<button class="small ghost" data-restore="${escapeHtml(s.key)}">恢复默认</button>` : '';
+  /* secret 与 readOnly 一样不给保存按钮（Go 端必然 422）。 */
+  const saveBtn = (s.readOnly || s.secret) ? '' : `<button class="small" data-save="${escapeHtml(s.key)}" data-type="${type}" data-secret="${s.secret?'1':'0'}" data-input="${inputId}">保存</button>`;
+  const restoreBtn = (s.rawSet && !s.readOnly && !s.secret) ? `<button class="small ghost" data-restore="${escapeHtml(s.key)}">恢复默认</button>` : '';
   return `<div class="cfgrow">
     <div class="cfgmeta"><b>${key}</b> ${sourceBadge}${restartBadge}${roBadge}<div class="muted">${escapeHtml(s.description||'')}</div></div>
     <div class="cfgctrl">${control}${saveBtn}${restoreBtn}</div>

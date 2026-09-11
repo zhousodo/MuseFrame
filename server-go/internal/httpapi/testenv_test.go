@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,13 +48,17 @@ const errSendFailed = sentinelErr("send failed")
 
 // testEnv 是一套连着真 PostgreSQL 的完整 App。
 type testEnv struct {
-	t      *testing.T
-	app    *App
-	st     *store.Store
-	rt     *cfgstore.Store
-	cfg    *config.Config
-	mail   *fakeMailer
-	now    time.Time
+	t    *testing.T
+	app  *App
+	st   *store.Store
+	rt   *cfgstore.Store
+	cfg  *config.Config
+	mail *fakeMailer
+	now  time.Time
+	// seq 由 nextID 递增，而并发用例里 nextID 会被多个请求 goroutine 同时调用，
+	// 所以必须上锁。生产用的是 NewUUID（crypto/rand，无共享状态），不存在这个问题 ——
+	// 这把锁纯粹是给测试替身用的。
+	seqMu  sync.Mutex
 	seq    int
 	assets string
 }
@@ -83,16 +88,14 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 	t.Cleanup(st.Close)
 
-	sql := "TRUNCATE TABLE "
-	for i, tb := range allTables {
-		if i > 0 {
-			sql += ", "
+	// 🔴 刻意用 DELETE 而不是 TRUNCATE：TRUNCATE 需要表 owner 权限，而生产运行
+	// 角色是 museframe_app（只有 DML）。用 TRUNCATE 会迫使整套集成测试只能以
+	// museframe_owner 连库跑，于是「运行角色缺权限」这类故障在测试里永远照不出来。
+	// 改 DELETE 后测试可以用 museframe_app 跑，等于顺带回归了 002_grants.sql。
+	for _, tb := range allTables {
+		if _, err := st.Pool().Exec(ctx, "DELETE FROM "+tb); err != nil {
+			t.Fatalf("清库失败（表 %s）: %v", tb, err)
 		}
-		sql += tb
-	}
-	sql += " RESTART IDENTITY CASCADE"
-	if _, err := st.Pool().Exec(ctx, sql); err != nil {
-		t.Fatalf("清库失败: %v", err)
 	}
 
 	assetDir := t.TempDir()
@@ -139,8 +142,10 @@ func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 
 func (e *testEnv) clock() time.Time { return e.now }
 
-// nextID 给确定性 id，方便断言。
+// nextID 给确定性 id，方便断言。并发安全（见 seqMu）。
 func (e *testEnv) nextID() string {
+	e.seqMu.Lock()
+	defer e.seqMu.Unlock()
 	e.seq++
 	return "id" + pad8(e.seq)
 }

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -49,15 +50,22 @@ func ReadTablePage(ctx context.Context, q Queryer, table string, limit, offset i
 		return nil, err
 	}
 	// 显式固定行序，否则 PG 的堆表顺序会随 UPDATE 漂，分页会重复/漏行。
-	order := cols[0]
-	for _, c := range cols {
-		if c == "id" {
-			order = "id"
-			break
-		}
+	//
+	// 🔴 排序键必须是**全序**。早先这里是「有 id 就按 id，否则按 cols[0]」，
+	// 而 cols[0] 只有在第一列恰好唯一时才是全序。白名单 23 张表里有两张不满足：
+	// exhibition_styles 第一列是 exhibition_id，idempotency_records 第一列是
+	// user_id —— 两者都能重复。相同键的那一组行在 PG 里顺序是未定义的，于是翻页
+	// （纯 OFFSET 算术）会让同一行在第 N 页和第 N+1 页重复出现，或者整行漏掉。
+	// 没有 id 列时退化成「按全部列排序」：全部列相同的行彼此无法区分，
+	// 谁前谁后不影响分页正确性，所以这就够了。
+	orderCols := pageOrderColumns(cols)
+	quoted := make([]string, len(orderCols))
+	for i, c := range orderCols {
+		quoted[i] = fmt.Sprintf("%q", c)
 	}
 	rows, err := q.Query(ctx,
-		fmt.Sprintf(`SELECT * FROM %q ORDER BY %q LIMIT $1 OFFSET $2`, table, order), limit, offset)
+		fmt.Sprintf(`SELECT * FROM %q ORDER BY %s LIMIT $1 OFFSET $2`,
+			table, strings.Join(quoted, ", ")), limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -138,4 +146,24 @@ func (s *Store) RunReadOnlyQuery(ctx context.Context, sql string) (*QueryResult,
 	}
 	out.RowCount = len(out.Rows)
 	return out, nil
+}
+
+// pageOrderColumns 决定分页的 ORDER BY 列表，要求结果是**全序**。
+//
+// 有 id 列就按 id（唯一，天然全序）。没有 id 列时按**全部列**排序：
+// 全部列都相同的两行彼此无法区分，谁前谁后不影响分页正确性。
+//
+// 🔴 这里以前是「没有 id 就按 cols[0]」，而 cols[0] 只在第一列恰好唯一时才是全序。
+// 白名单 23 张表里有两张不满足：exhibition_styles 第一列是 exhibition_id，
+// idempotency_records 第一列是 user_id，两者都能重复。并列键那一组行的相对顺序
+// 在 PG 里是未定义的 —— 同样的数据换一个执行计划（小 LIMIT 走 top-N heapsort、
+// 大 offset 走 quicksort）或者翻页期间有并发写，就可能让某一行在第 N 页和
+// 第 N+1 页各出现一次、另一行整个漏掉。后台是纯 OFFSET 算术翻页，没有任何补偿。
+func pageOrderColumns(cols []string) []string {
+	for _, c := range cols {
+		if c == "id" {
+			return []string{"id"}
+		}
+	}
+	return cols
 }

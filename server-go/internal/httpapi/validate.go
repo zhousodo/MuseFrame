@@ -97,3 +97,29 @@ func isSpace(c byte) bool {
 
 // notFound 是统一的 404。
 func notFound(msg string) error { return apierr.New(http.StatusNotFound, apierr.CodeNotFound, msg) }
+
+// truncateRunes 按**字符**截断，而不是按字节。
+//
+// 🔴 按字节切会把一个多字节字符切成两半，产出**非法 UTF-8**。
+// Node 版用的是 String(x).slice(0, n)（UTF-16 码元），永远切不出非法字符串；
+// Go 的 s[:n] 会。后果是这串非法字节被原样递给 pgx，PostgreSQL 直接拒：
+// `invalid byte sequence for encoding "UTF8"` —— 于是一条正常的中文长评论
+// 会让 POST /v1/candidates/{id}/feedback 回 500，而 Node 版是收下的。
+// （1000 字节 ≈ 333 个汉字，真实用户很容易写到。）
+//
+// 这里以 rune 为单位截断，limit 仍按「最多多少字节」理解，
+// 以免放宽了列宽限制：逐个 rune 累加字节数，超了就停。
+func truncateRunes(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	n := 0
+	for i, r := range s {
+		size := len(string(r))
+		if n+size > maxBytes {
+			return s[:i]
+		}
+		n += size
+	}
+	return s
+}
