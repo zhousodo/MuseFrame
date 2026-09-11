@@ -32,6 +32,9 @@ func TestCompilerProfilesPresent(t *testing.T) {
 }
 
 func newAdapterWithRT(handler roundTripFunc) *Adapter {
+	// 🔴 注意：这里换掉的是**包级**单例。桩里会调 t.Fatal，所以一旦不还原，
+	// 后面任何用例打到这个桩都会在一个已结束的测试上 Fatal → panic。
+	// 用例自己负责还原（见 restoreHTTPClient）。
 	HTTPClient = &http.Client{Transport: handler}
 	rt := cfgstore.NewForTest(map[string]string{
 		"IMAGE_PROVIDER_BASE_URL": "https://p.invalid",

@@ -53,6 +53,7 @@ type testEnv struct {
 	st   *store.Store
 	rt   *cfgstore.Store
 	cfg  *config.Config
+	prov *provider.Adapter
 	mail *fakeMailer
 	now  time.Time
 	// seq 由 nextID 递增，而并发用例里 nextID 会被多个请求 goroutine 同时调用，
@@ -120,9 +121,13 @@ func newTestEnv(t *testing.T) *testEnv {
 	}
 	lg := logx.NewWith(discardWriter{}, nil)
 	prov := provider.New(rt, cfg.ImageProvider, cfg.ImageProviderAPIKey)
+	// 集成测试的 IMAGE_PROVIDER_BASE_URL 是 provider.invalid：关掉轻量探针，
+	// 测试进程不该真去做 DNS 查询（否则出参随网络环境漂移）。
+	prov.SetProbeEnabled(false)
 	mail := &fakeMailer{configured: true}
-	env := &testEnv{t: t, st: st, rt: rt, cfg: cfg, mail: mail, assets: assetDir,
+	env := &testEnv{t: t, st: st, rt: rt, cfg: cfg, prov: prov, mail: mail, assets: assetDir,
 		now: time.Date(2026, 9, 11, 4, 26, 12, 396e6, time.UTC)}
+	prov.SetNow(env.clock)
 	wk := worker.New(worker.Options{
 		Store: st, Runtime: rt, Provider: prov, Logger: lg, AssetDir: assetDir,
 		MaxAttempts: 3, NewID: NewUUID, Now: env.clock,

@@ -584,23 +584,40 @@ const GEN_REASONS = {
      API 密钥现在只认环境变量 IMAGE_PROVIDER_API_KEY，改完要重启容器。 */
   PROVIDER_NOT_CONFIGURED: '图像模型未配置——接口地址可在下面改（即时生效）；API 密钥只能改 project.env 的 IMAGE_PROVIDER_API_KEY，改完需重启容器。',
   PROVIDER_UNKNOWN: 'IMAGE_PROVIDER 取值无法识别，只支持 remote 或 local（.env，改后需重启）。',
+  /* 2026-09-12 起 available 不再只看「配了密钥 + 配了地址」，而是看最近 20 次真实
+     上游调用有没有成功（+ 轻量探针）。下面三条是「配置齐备但产不出图」的三种样子。 */
+  PROVIDER_UNAVAILABLE: '上游图像服务供给耗尽（它自己回 503「没有可用账号/渠道」）——不是我们的配置问题，需要找上游供应商恢复产能或换 IMAGE_PROVIDER_BASE_URL。期间用户的额度会原额退回。',
+  PROVIDER_TIMEOUT: '最近的上游调用全部超时——查上游可用性与 image_provider_timeout_ms。期间用户的额度会原额退回。',
+  PROVIDER_ERROR: '最近的上游调用全部失败（非超时、非供给类）——看下面的「上游原话」。期间用户的额度会原额退回。',
+  PROVIDER_RECENT_FAILURES: '最近的上游调用全部失败——看下面的「上游原话」。',
+  PROVIDER_PROBE_FAILED: '轻量探针打不通上游（GET {接口地址}/v1/models）——查接口地址、密钥、出网。',
 };
+/* 判据的证据链：为什么判成（不）可用，必须在面板上自证，
+   否则运维只能去 docker logs 里翻 —— 本轮故障就是这么被瞒了一周的。 */
+function genEvidence(g){
+  const bits = [];
+  if (g.recentCalls) bits.push(`最近 24h 上游调用 <b>${g.recentCalls}</b> 次、失败 <b>${g.recentFailures}</b> 次`);
+  if (g.lastSuccessAt) bits.push(`最近一次成功 <code>${escapeHtml(g.lastSuccessAt)}</code>`);
+  else if (g.recentCalls) bits.push('最近 24h <b>没有一次成功</b>');
+  if (g.lastError) bits.push(`上游原话（${escapeHtml(g.lastErrorAt || '')}）：<code>${escapeHtml(g.lastError)}</code>`);
+  return bits.length ? `<br>${bits.join(' · ')}` : '';
+}
 function renderGenBar(g){
   if (!g) return;
   let cls, html;
   if (!g.available) {
     cls = 'genbar down';
     const miss = (g.missing||[]).map(k=>`<code>${escapeHtml(k)}</code>`).join('、') || '—';
-    html = `<b>⛔ 图像生成已停用——用户无法生成，任务会以 GENERATION_UNAVAILABLE 失败并原额退回</b>
-            ${escapeHtml(GEN_REASONS[g.reason] || g.reason || '')}<br>缺少：${miss}`;
+    html = `<b>⛔ 图像生成不可用——用户现在产不出图，任务会失败并原额退回</b>
+            ${escapeHtml(GEN_REASONS[g.reason] || g.reason || '')}<br>缺少：${miss}${genEvidence(g)}`;
   } else if (g.mode === 'local') {
     cls = 'genbar local';
     html = `<b>⚠️ 本地像素引擎模式（IMAGE_PROVIDER=local）</b>
             产出的是本地滤镜结果、不是模型结果，仅供开发/离线自测，不要对外开放。`;
   } else {
     cls = 'genbar';
-    html = `<b>✅ 图像生成正常——远程模型已配置</b>
-            接口 <code>${escapeHtml(g.provider)}</code>${g.localFallback ? ' · <span class="bad">已开启失败回落本地引擎：远程失败时会交付非模型结果并照常扣费</span>' : ' · 远程失败即失败退款，不用本地引擎顶替'}`;
+    html = `<b>✅ 图像生成正常——最近的上游调用有成功</b>
+            接口 <code>${escapeHtml(g.provider)}</code>${g.localFallback ? ' · <span class="bad">已开启失败回落本地引擎：远程失败时会交付非模型结果并照常扣费</span>' : ' · 远程失败即失败退款，不用本地引擎顶替'}${genEvidence(g)}`;
   }
   ['genbarOverview','genbarConfig'].forEach(id => { const el = $(id); if (el) { el.className = cls; el.innerHTML = html; } });
 }

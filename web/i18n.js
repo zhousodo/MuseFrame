@@ -123,6 +123,7 @@ const ZH = {
   'Your artwork is ready — see Projects': '作品已完成——去「作品」查看',
   'This request can’t be created — nothing used': '这个请求无法生成——未扣除额度',
   'Something went wrong — nothing used': '出了点问题——未扣除额度',
+  'Generation service is temporarily unavailable — your credit was refunded': '生成服务暂时不可用，额度已退回',
 
   // progress
   'Preparing your photo': '准备照片',

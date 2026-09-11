@@ -22,6 +22,17 @@ func (w *Worker) runJob(ctx context.Context, job *store.Job) error {
 		w.failJob(ctx, job, "GENERATION_UNAVAILABLE")
 		return nil
 	}
+	// 供给熔断。连着 3 次上游「没有可用账号 / 渠道」之后，冷却期（60s）内的任务
+	// 直接失败退额，**不再打上游、也不再付提示词编译那次 LLM 的钱** ——
+	// 供给耗尽是不可重试的，再打一遍只会拿到同一条 503。
+	// 冷却期一过就放一个任务过去探路，所以上游恢复不需要任何人工动作。
+	if w.prov.SupplyDown(w.now()) {
+		w.lg.Warn("worker: 上游供给熔断中，任务直接失败退额（不打上游）", map[string]any{
+			"jobId": job.ID, "code": provider.CodeProviderUnavailable,
+		})
+		w.failJob(ctx, job, provider.CodeProviderUnavailable)
+		return nil
+	}
 
 	_ = store.SetJobStage(ctx, w.st.Q(), job.ID, "running", "preparing", w.now())
 	time.Sleep(stageDelays["preparing"])
@@ -100,10 +111,18 @@ func (w *Worker) runJob(ctx context.Context, job *store.Job) error {
 	res, err := w.prov.CreateEdit(ctx, provider.EditRequest{
 		SourceJPEG: sendBuf, SourceW: sendW, SourceH: sendH,
 		AspectRatio: aspect, QualityTier: tier, Instruction: instruction,
+		JobID: job.ID,
 	})
 	if err != nil {
 		// 内容策略拒绝直接失败：备份引擎绝不能用来绕过安全闸（spec §14.3）。
-		w.failJob(ctx, job, provider.CodeOf(err))
+		// 上游失败的那一行详细日志（状态码 / 上游原话 / 模型 / 尺寸 / 耗时）
+		// 由 provider.failed 记录；这里只补「任务侧怎么收口的」。
+		code := provider.CodeOf(err)
+		w.lg.Warn("worker: 任务因上游失败收口", map[string]any{
+			"jobId": job.ID, "code": code, "retryable": provider.Retryable(err),
+			"attempt": attempt,
+		})
+		w.failJob(ctx, job, code)
 		return nil
 	}
 

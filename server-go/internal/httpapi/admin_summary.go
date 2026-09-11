@@ -10,20 +10,33 @@ import (
 // GenerationSummary 是面向运维的「这套部署现在能不能生成、用什么生成」。
 // 把缺的设置点名说出来，好让一套没配好的服务器在面板上一眼可见，
 // 而不是看起来健康、却在背地里拒绝每一个任务。
+// available 与 /v1/health 同判据（最近真实上游调用 + 轻量探针），
+// 所以后台横幅不会再在「100% 失败」的一周里显示绿色。
 type GenerationSummary struct {
-	Available     bool     `json:"available"`
-	Mode          string   `json:"mode"`
-	Provider      string   `json:"provider"`
-	Reason        *string  `json:"reason"`
-	Missing       []string `json:"missing"`
-	LocalFallback bool     `json:"localFallback"`
+	Available      bool     `json:"available"`
+	Mode           string   `json:"mode"`
+	Provider       string   `json:"provider"`
+	Reason         *string  `json:"reason"`
+	Missing        []string `json:"missing"`
+	LocalFallback  bool     `json:"localFallback"`
+	LastError      *string  `json:"lastError"`
+	LastErrorAt    *string  `json:"lastErrorAt"`
+	LastSuccessAt  *string  `json:"lastSuccessAt"`
+	RecentCalls    int      `json:"recentCalls"`
+	RecentFailures int      `json:"recentFailures"`
 }
 
-func (a *App) generationSummary() GenerationSummary {
-	g := a.prov.Status()
+func (a *App) generationSummary(ctx context.Context) GenerationSummary {
+	g := a.prov.HealthStatus(ctx)
+	missing := g.Missing
+	if missing == nil {
+		missing = []string{}
+	}
 	return GenerationSummary{
 		Available: g.Available, Mode: g.Mode, Provider: a.prov.ProviderName(),
-		Reason: g.Reason, Missing: g.Missing, LocalFallback: a.rt.Bool("local_engine_fallback"),
+		Reason: g.Reason, Missing: missing, LocalFallback: a.rt.Bool("local_engine_fallback"),
+		LastError: g.LastError, LastErrorAt: g.LastErrorAt, LastSuccessAt: g.LastSuccessAt,
+		RecentCalls: g.RecentCalls, RecentFailures: g.RecentFailures,
 	}
 }
 
