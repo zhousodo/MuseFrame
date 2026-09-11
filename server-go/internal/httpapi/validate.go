@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
+	"unicode/utf8"
 
 	"museframe-api/internal/apierr"
 )
@@ -98,28 +100,36 @@ func isSpace(c byte) bool {
 // notFound 是统一的 404。
 func notFound(msg string) error { return apierr.New(http.StatusNotFound, apierr.CodeNotFound, msg) }
 
-// truncateRunes 按**字符**截断，而不是按字节。
+// truncateRunes 按**字符（rune）**截断，而不是按字节，上限也是**字符数**。
 //
 // 🔴 按字节切会把一个多字节字符切成两半，产出**非法 UTF-8**。
 // Node 版用的是 String(x).slice(0, n)（UTF-16 码元），永远切不出非法字符串；
 // Go 的 s[:n] 会。后果是这串非法字节被原样递给 pgx，PostgreSQL 直接拒：
 // `invalid byte sequence for encoding "UTF8"` —— 于是一条正常的中文长评论
 // 会让 POST /v1/candidates/{id}/feedback 回 500，而 Node 版是收下的。
-// （1000 字节 ≈ 333 个汉字，真实用户很容易写到。）
 //
-// 这里以 rune 为单位截断，limit 仍按「最多多少字节」理解，
-// 以免放宽了列宽限制：逐个 rune 累加字节数，超了就停。
-func truncateRunes(s string, maxBytes int) string {
-	if len(s) <= maxBytes {
-		return s
+// 🔴 上限为什么是字符数而不是字节数：Node 的 slice(0, 1000) 数的是字符，
+// 一条 1000 字的中文评论在 Node 里**整条收下**；按 1000 *字节* 截断只留 333 个字，
+// 同一个请求在两版后端产出不同的数据 —— 而 user_feedback.comment 是无长度约束的
+// text，没有任何列宽理由要按字节收紧。admin 搜索词的 120 同理（server/admin.js:148）。
+// 所以这里按 rune 计数，和 Node 逐字对齐。
+//
+// 返回值保证是合法 UTF-8：截断只在 rune 边界上发生，而输入里万一已经带了非法
+// 字节（不经 encoding/json 的路径），先换成 U+FFFD —— 那串字节原样进 pgx 同样是 500。
+func truncateRunes(s string, maxRunes int) string {
+	if !utf8.ValidString(s) {
+		s = strings.ToValidUTF8(s, "�")
+	}
+	if maxRunes <= 0 {
+		return ""
 	}
 	n := 0
-	for i, r := range s {
-		size := len(string(r))
-		if n+size > maxBytes {
+	// range 的下标 i 总落在 rune 起始字节上，所以 s[:i] 永远是完整的 rune 序列。
+	for i := range s {
+		if n == maxRunes {
 			return s[:i]
 		}
-		n += size
+		n++
 	}
 	return s
 }

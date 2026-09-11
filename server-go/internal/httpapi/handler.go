@@ -165,15 +165,15 @@ var staticMIME = map[string]string{
 // serveFileNoIndexRedirect 发送一个已定位到的静态文件。
 //
 // 🔴 为什么不用 http.ServeFile：net/http 的 serveFile 里有一条**无条件**的
-//    规范化跳转 —— 只要 r.URL.Path 以 "/index.html" 结尾就 301 到 "./"，
-//    与传进来的文件名无关。旧 Node 后端对 /index.html 是 200，Go 一上来就
-//    变成 301，而 museframe.caddy 的 @app 块又恰好把 /app、/app/* 统一
-//    `rewrite * /index.html` 再打后端 —— 于是整个 Web App 入口在切换那一刻
-//    集体 301。2026-09-11 第一次切换就炸在这里，已回滚。
+// 规范化跳转 —— 只要 r.URL.Path 以 "/index.html" 结尾就 301 到 "./"，
+// 与传进来的文件名无关。旧 Node 后端对 /index.html 是 200，Go 一上来就
+// 变成 301，而 museframe.caddy 的 @app 块又恰好把 /app、/app/* 统一
+// `rewrite * /index.html` 再打后端 —— 于是整个 Web App 入口在切换那一刻
+// 集体 301。2026-09-11 第一次切换就炸在这里，已回滚。
 //
-//    http.ServeContent 没有这条跳转，其余语义（Range、If-Modified-Since、
-//    Last-Modified、Content-Length）与 ServeFile 完全一致。路径穿越在调用方
-//    已经用 filepath.Clean + 根前缀校验挡掉了，不依赖 ServeFile 的 containsDotDot。
+// http.ServeContent 没有这条跳转，其余语义（Range、If-Modified-Since、
+// Last-Modified、Content-Length）与 ServeFile 完全一致。路径穿越在调用方
+// 已经用 filepath.Clean + 根前缀校验挡掉了，不依赖 ServeFile 的 containsDotDot。
 func serveFileNoIndexRedirect(w http.ResponseWriter, r *http.Request, abs string, fi os.FileInfo) {
 	f, err := os.Open(abs)
 	if err != nil {

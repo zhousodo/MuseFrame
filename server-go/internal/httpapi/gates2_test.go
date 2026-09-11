@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"testing"
 
 	"museframe-api/internal/ledger"
@@ -145,14 +146,23 @@ func TestCheck07_CommitAndReleaseIdempotent(t *testing.T) {
 	jobID := "job-cr-1"
 	base := e.balance(uid) // 注册送的 3 张 + 手工加的 5 张
 
-	if err := ledger.Reserve(ctx, e.st.Q(), e.nextID, uid, jobID, 1, e.now); err != nil {
+	// 🔴 Reserve 必须在事务里调：它靠 pg_advisory_xact_lock 串行化同一用户的额度变更，
+	// 而 xact 锁在连接池的自动提交模式下一出语句就释放，互斥静默消失
+	// （store.RequireTx 现在会直接拒掉这种调用）。测试也照生产的调法来。
+	reserve := func(job string) error {
+		return e.st.InTx(ctx, func(q store.Queryer) error {
+			return ledger.Reserve(ctx, q, e.nextID, uid, job, 1, e.now)
+		})
+	}
+
+	if err := reserve(jobID); err != nil {
 		t.Fatal(err)
 	}
 	if got := e.balance(uid); got != base-1 {
 		t.Fatalf("预留后余额应为 %d，实际 %d", base-1, got)
 	}
 	// 重复预留是空操作。
-	if err := ledger.Reserve(ctx, e.st.Q(), e.nextID, uid, jobID, 1, e.now); err != nil {
+	if err := reserve(jobID); err != nil {
 		t.Fatal(err)
 	}
 	if got := e.balance(uid); got != base-1 {
@@ -179,7 +189,7 @@ func TestCheck07_CommitAndReleaseIdempotent(t *testing.T) {
 
 	// 另一条路径：预留后直接 release，重复调用只退一次。
 	job2 := "job-cr-2"
-	if err := ledger.Reserve(ctx, e.st.Q(), e.nextID, uid, job2, 1, e.now); err != nil {
+	if err := reserve(job2); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
@@ -189,5 +199,51 @@ func TestCheck07_CommitAndReleaseIdempotent(t *testing.T) {
 	}
 	if got := e.balance(uid); got != base-1 {
 		t.Fatalf("重复释放只应退一次，实际 %d", got)
+	}
+}
+
+// TestReserveRefusesNonTxQueryer 🔴 不在事务里调 Reserve 必须**明确报错**，
+// 而不是静默跑完。
+//
+// 额度串行化全靠 store.LockUserCredits 里的 pg_advisory_xact_lock，而 xact 锁只活到
+// 事务结束：拿连接池（Store.Q()）调时每条语句自成一个隐式事务，锁在 SELECT 返回那刻
+// 就释放了 —— 语句成功、无错误、无日志，互斥却完全不存在。于是「两个并发请求各读到
+// balance=1、各写一条 units=-1、桶变 -1、两张图只收一张钱」那个 P0 无声复活，
+// 而且 BucketBalances 的 HAVING > 0 还会把负数桶过滤掉，连后台都看不出来。
+// 所以宁可在调用点就炸。
+func TestReserveRefusesNonTxQueryer(t *testing.T) {
+	e := newTestEnv(t)
+	ctx := nil2ctx()
+	uid, _ := e.signUp("notx@example.com")
+	e.grantUnits(uid, 5)
+	base := e.balance(uid)
+
+	err := ledger.Reserve(ctx, e.st.Q(), e.nextID, uid, "job-notx-1", 1, e.now)
+	if err == nil {
+		t.Fatal("🔴 在连接池上调 Reserve 居然成功了：advisory xact 锁静默失效，并发双扣的 P0 已复活")
+	}
+	if !errors.Is(err, store.ErrNotInTx) {
+		t.Fatalf("错误应能被 errors.Is(ErrNotInTx) 识别，实际 %v", err)
+	}
+	// 守卫必须在任何写之前就拦下，不能留半条分录。
+	if got := e.balance(uid); got != base {
+		t.Fatalf("被拒的预留不得动余额：%d -> %d", base, got)
+	}
+	var n int
+	if err := e.st.Pool().QueryRow(ctx,
+		`SELECT count(*) FROM credit_ledger WHERE job_id = $1`, "job-notx-1").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("被拒的预留不得留下分录，实际 %d 条", n)
+	}
+	// 换成事务就该通过 —— 证明上面拒的是「没事务」，不是别的东西。
+	if err := e.st.InTx(ctx, func(q store.Queryer) error {
+		return ledger.Reserve(ctx, q, e.nextID, uid, "job-notx-1", 1, e.now)
+	}); err != nil {
+		t.Fatalf("事务内的 Reserve 应当成功：%v", err)
+	}
+	if got := e.balance(uid); got != base-1 {
+		t.Fatalf("事务内预留应扣 1，实际 %d -> %d", base, got)
 	}
 }

@@ -33,13 +33,13 @@ func TestStaticIndexHTMLNeverRedirects(t *testing.T) {
 		wantLen int
 		wantCT  string
 	}{
-		{"/index.html", len(shell), "text/html; charset=utf-8"},        // 边缘 @app rewrite 后的真实形态
-		{"/index.html?x=1", len(shell), "text/html; charset=utf-8"},    // 带 query（Caddy 的 rewrite 保留 query）
-		{"/", len(shell), "text/html; charset=utf-8"},                  // 根
-		{"/app/index.html", len(shell), "text/html; charset=utf-8"},    // 深链也以 /index.html 结尾 → 走兜底分支
+		{"/index.html", len(shell), "text/html; charset=utf-8"},     // 边缘 @app rewrite 后的真实形态
+		{"/index.html?x=1", len(shell), "text/html; charset=utf-8"}, // 带 query（Caddy 的 rewrite 保留 query）
+		{"/", len(shell), "text/html; charset=utf-8"},               // 根
+		{"/app/index.html", len(shell), "text/html; charset=utf-8"}, // 深链也以 /index.html 结尾 → 走兜底分支
 		{"/anything/deep/index.html", len(shell), "text/html; charset=utf-8"},
 		{"/app.js", len("export const x=1;\n"), "text/javascript; charset=utf-8"},
-		{"/no-such-file", len(shell), "text/html; charset=utf-8"},      // SPA 兜底
+		{"/no-such-file", len(shell), "text/html; charset=utf-8"}, // SPA 兜底
 	} {
 		r := httptest.NewRequest(http.MethodGet, tc.path, nil)
 		w := httptest.NewRecorder()

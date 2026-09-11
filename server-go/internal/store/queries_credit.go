@@ -82,7 +82,14 @@ func GetFreeGrantWindow(ctx context.Context, q Queryer, ipHash *string, now time
 // 二是新用户可能一个桶都还没有，没有行可锁，而发放路径要建桶 —— advisory lock
 // 锁的是「这个用户的额度」这件事本身，空桶也照样串行。
 // 事务级：提交或回滚时自动释放，不会泄漏。
+//
+// 🔴 而「事务级」也正是它唯一的危险点：如果 q 是连接池（Store.Q()）而不是事务，
+// 这条 SELECT 走自动提交，语句一结束锁就没了 —— 返回 nil、没有告警、互斥为零。
+// 所以先用 RequireTx 拦住；宁可 500，也不要无声地放回双扣那条路。
 func LockUserCredits(ctx context.Context, q Queryer, userID string) error {
+	if err := RequireTx(q, "store.LockUserCredits"); err != nil {
+		return err
+	}
 	_, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, userID)
 	return err
 }

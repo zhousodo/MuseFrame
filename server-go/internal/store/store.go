@@ -116,6 +116,31 @@ func (q poolQ) Exec(ctx context.Context, sql string, args ...any) (pgconnCommand
 	return q.p.Exec(ctx, sql, args...)
 }
 
+// inTxQueryer 是「这个 Queryer 真的绑在一条事务连接上」的标记接口。
+// 方法不导出，所以只有本包的 txQ 能满足它 —— 外部（含测试替身）无法伪造，
+// 这正是我们要的：守卫不能被绕过。
+type inTxQueryer interface{ inTx() }
+
+func (q txQ) inTx() {}
+
+// ErrNotInTx 是「必须在事务里调用」的守卫错误。
+//
+// 🔴 为什么需要它：额度串行化靠的是 pg_advisory_xact_lock（见 LockUserCredits）。
+// 「xact」锁的生命周期是**事务**；在自动提交模式下（直接拿 Store.Q() 即连接池调用），
+// 每条语句自成一个隐式事务，锁在 SELECT 返回的那一刻就释放了 ——
+// 语句成功、不报错、看起来一切正常，而互斥**完全不存在**。
+// 于是那个「两个并发请求各扣一次把桶扣成负数、两张图只收一张钱」的 P0 悄悄复活，
+// 且无法从日志里看出来。宁可明确报错，也不要静默失效。
+var ErrNotInTx = errors.New("额度写路径必须在事务内调用（pg_advisory_xact_lock 在连接池的自动提交模式下会静默失效）")
+
+// RequireTx 断言 q 来自 InTx/ReadOnlyTx，否则返回 ErrNotInTx（带上调用点名字）。
+func RequireTx(q Queryer, op string) error {
+	if _, ok := q.(inTxQueryer); !ok {
+		return fmt.Errorf("%s: %w", op, ErrNotInTx)
+	}
+	return nil
+}
+
 type txQ struct{ tx pgx.Tx }
 
 func (q txQ) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {

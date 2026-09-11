@@ -10,6 +10,10 @@ import (
 	"museframe-api/internal/store"
 )
 
+// MaxAdminSearch 是 GET /v1/admin/users?q= 的搜索词上限，按**字符数**算，
+// 与 Node 的 .slice(0, 120)（server/admin.js:148）一致。
+const MaxAdminSearch = 120
+
 func clampLimit(raw string, def, max int) int {
 	n, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil || n == 0 {
@@ -110,10 +114,13 @@ func (a *App) hAdminUsers(c *Ctx) (any, error) {
 		return nil, err
 	}
 	limit := clampLimit(c.URL.Query().Get("limit"), 100, 200)
-	search := strings.ToLower(trimSpace(c.URL.Query().Get("q")))
-	if len(search) > 120 {
-		search = search[:120]
-	}
+	// 🔴 必须按 rune 截断。原来是 search[:120]：按**字节**切，第 120 个字节一旦落在
+	// 某个多字节字符中间，就把它切成两半 -> 非法 UTF-8 -> 拼进 LIKE 参数递给 pgx ->
+	// `invalid byte sequence for encoding "UTF8"` -> GET /v1/admin/users?q=… 回 500。
+	// （纯汉字恰好 3 字节对齐、120 整除，看着没事；但只要混进 ASCII ——
+	// 客服最常干的就是拿「中文昵称 + 邮箱片段」一起搜 —— 对齐立刻被打破。）
+	// Node 侧是 .slice(0, 120)（server/admin.js:148），数的是字符，这里也按字符算。
+	search := truncateRunes(strings.ToLower(trimSpace(c.URL.Query().Get("q"))), MaxAdminSearch)
 	rows, err := store.ListAdminUsers(c.R.Context(), a.st.Q(), limit, search)
 	if err != nil {
 		return nil, err
