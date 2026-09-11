@@ -48,7 +48,7 @@ func (a *App) authenticate(r *http.Request, u *url.URL) (*store.User, error) {
 	}
 	// 限到每小时一次，免得轮询把每次读都变成一次写。
 	if now.Sub(s.LastSeenAt) > time.Hour {
-		if err := store.TouchSession(ctx, a.st.Q(), token, now, a.cfg.SessionTTLDays); err != nil {
+		if err := store.TouchSession(ctx, a.st.Q(), token, now, a.rt.SessionTTLDays()); err != nil {
 			return nil, err
 		}
 	}
@@ -58,6 +58,28 @@ func (a *App) authenticate(r *http.Request, u *url.URL) (*store.User, error) {
 			return nil, nil // 合并过的游客账号 deleted_at 非空，自动失效
 		}
 		return nil, err
+	}
+	// 🔴 users.status 的判据（2026-09-12 新增）。
+	//
+	// 这一列从第一版 schema 起就存在（DEFAULT 'active'），但**从来没有任何代码读过它**：
+	// 后台即使把它改成 suspended，被封的账号照样能登录、照样能生成、照样能花额度。
+	// 「禁用用户」这个功能因此在本轮之前是不存在的 —— 不是没入口，是没判据。
+	//
+	// 判据放在这里（而不是每个 handler 里各判一次）是因为这是唯一一个
+	// 所有带令牌的请求都必经的点。放在 requireAccount 里会漏掉游客路径，
+	// 放在各 handler 里则一定会漏掉下一个新加的 handler。
+	//
+	// 非 active 一律当成**没带令牌**，而不是回一个专门的「你被封了」错误码：
+	//   - 客户端对 401 AUTH_REQUIRED 已有成熟处理（清本地会话、回登录页），
+	//     新码会让旧版本 App 撞上一个它不认识的分支；
+	//   - 封禁理由不该回给被封的人（那是给运营看的，在审计里）。
+	//
+	// 会话行刻意不删，所以改回 active 之后原令牌立刻恢复可用（见 SetUserStatus）。
+	if user.Status != UserStatusActive {
+		a.lg.Info("auth: 账号非 active，按未登录处理", map[string]any{
+			"userId": user.ID, "status": user.Status,
+		})
+		return nil, nil
 	}
 	return user, nil
 }

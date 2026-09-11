@@ -105,7 +105,12 @@ func (a *App) MaybeGrantFree(ctx context.Context, q store.Queryer, userID string
 		return OutcomeIPCap, nil
 	}
 
-	if _, err := ledger.Grant(ctx, q, a.newID, userID, freeUnits, "free_grant", &dedupeID, nil, nil, now); err != nil {
+	// 🔴 有效期来自注册表热键 free_credit_expiry_days，默认 0 = nil = 永不过期
+	//    （与此前写死的 nil 完全一致，所以这次改动对现状是零行为变更）。
+	//    它只影响**此后**新发放的桶；已发出去的 credit_buckets 行不会被追溯改写，
+	//    否则一次误操作就能把所有人手里的免费额度一起作废。
+	expiry := a.rt.CreditExpiry("free_credit_expiry_days", now)
+	if _, err := ledger.Grant(ctx, q, a.newID, userID, freeUnits, "free_grant", &dedupeID, expiry, nil, now); err != nil {
 		return "", err
 	}
 	// 每个键各写一行，让**另一个**键再也领不到

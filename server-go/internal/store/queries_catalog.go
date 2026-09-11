@@ -152,30 +152,74 @@ func GetProductByKey(ctx context.Context, q Queryer, key string) (*Product, erro
 	return scanProduct(q.QueryRow(ctx, `SELECT `+productCols+` FROM products WHERE internal_key = $1`, key))
 }
 
-// UpdateProductFields 按后台入参改商品。nil 表示不改该字段。
-// priceCnyMinor 用 (set, value) 二元组表达「改成 null」与「不改」的区别。
-func UpdateProductFields(ctx context.Context, q Queryer, key string, grantedUnits *int, priceMinor *int64, setCny bool, priceCnyMinor *int64, active *bool) error {
-	if grantedUnits != nil {
-		if _, err := q.Exec(ctx, `UPDATE products SET granted_units = $1 WHERE internal_key = $2`, *grantedUnits, key); err != nil {
+// ProductUpdate 是商品可编辑字段的补丁。nil = 这次不改这一项。
+//
+// 🔴 三个「可为 null 的列」用 (SetX bool, X *T) 二元组表达，不能只用指针：
+// 指针的 nil 同时要表达「不改」和「改成 SQL NULL」两件事，而这两件事在
+// price_cny_minor 上的后果差一个数量级 —— 清空人民币价会让这个商品对
+// **所有中文用户彻底消失**（web/app.js 的 offeredProducts() 过滤掉
+// priceCnyMinor == null 的行），清空 SKU 则会让商店内购按钮点下去没反应。
+type ProductUpdate struct {
+	DisplayName   *string
+	GrantedUnits  *int
+	PriceMinor    *int64
+	SetCny        bool
+	PriceCnyMinor *int64
+	Active        *bool
+	SetGoogleSKU  bool
+	GoogleSKU     *string
+	SetAppleSKU   bool
+	AppleSKU      *string
+}
+
+// UpdateProductFields 按后台补丁改商品。
+//
+// 🔴 必须在一个事务里。原来是一串各自独立的 UPDATE：改价成功、改张数失败会留下
+// 「新价格 + 旧张数」的上架商品，而后台那一次保存回的是错误。
+// 对一个正在卖的价目表来说，这个中间态每多存在一秒就可能卖错一单。
+func UpdateProductFields(ctx context.Context, st *Store, key string, u ProductUpdate) error {
+	return st.InTx(ctx, func(q Queryer) error {
+		set := func(col string, val any) error {
+			_, err := q.Exec(ctx, `UPDATE products SET `+col+` = $1 WHERE internal_key = $2`, val, key)
 			return err
 		}
-	}
-	if priceMinor != nil {
-		if _, err := q.Exec(ctx, `UPDATE products SET price_minor = $1 WHERE internal_key = $2`, *priceMinor, key); err != nil {
-			return err
+		if u.DisplayName != nil {
+			if err := set("display_name", *u.DisplayName); err != nil {
+				return err
+			}
 		}
-	}
-	if setCny {
-		if _, err := q.Exec(ctx, `UPDATE products SET price_cny_minor = $1 WHERE internal_key = $2`, priceCnyMinor, key); err != nil {
-			return err
+		if u.GrantedUnits != nil {
+			if err := set("granted_units", *u.GrantedUnits); err != nil {
+				return err
+			}
 		}
-	}
-	if active != nil {
-		if _, err := q.Exec(ctx, `UPDATE products SET active = $1 WHERE internal_key = $2`, *active, key); err != nil {
-			return err
+		if u.PriceMinor != nil {
+			if err := set("price_minor", *u.PriceMinor); err != nil {
+				return err
+			}
 		}
-	}
-	return nil
+		if u.SetCny {
+			if err := set("price_cny_minor", u.PriceCnyMinor); err != nil {
+				return err
+			}
+		}
+		if u.SetGoogleSKU {
+			if err := set("google_product_id", u.GoogleSKU); err != nil {
+				return err
+			}
+		}
+		if u.SetAppleSKU {
+			if err := set("apple_product_id", u.AppleSKU); err != nil {
+				return err
+			}
+		}
+		if u.Active != nil {
+			if err := set("active", *u.Active); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // UserPlan 返回用户当前计划：有效订阅的 internal_key，否则 'free'。

@@ -38,17 +38,21 @@ type Config struct {
 	TrustedProxy string
 	TrustCFIP    bool
 
-	SessionTTLDays int
-	// 🔴 MAX_USER_STORAGE_BYTES 不在这里了：它 2026-09-12 变成注册表热键
-	//    （cfgstore.Store.MaxUserStorageBytes）。理由是运营场景 —— 数据盘快满时
-	//    要能立刻把每账号上限压下去，而这里的值启动时读一次就固化，改它要重启容器。
-	//    代价是「解析失败即启动失败」这条对该键不再适用：写错了服务照常起，
+	// 🔴 这五个键**刻意不在这里**，它们是注册表热键（cfgstore）：
+	//      MAX_USER_STORAGE_BYTES（2026-09-12 第二批）
+	//      SESSION_TTL_DAYS / EVENT_RETENTION_DAYS / IDEMPOTENCY_RETENTION_DAYS /
+	//      MAX_JOB_ATTEMPTS（2026-09-12 第三批）
+	//    共同理由：它们每次使用时都重新读（会话签发、每日清理任务、每个任务的
+	//    重试判定、每次上传的配额判定），没有任何一处要求进程启动时固化，
+	//    而每一项都是运营要当场拧的旋钮（磁盘快满、上游按次计费炸了、
+	//    要把一批会话踢下线）。
+	//
+	//    🔴 同一个键绝不能在这里**和**注册表里各留一份：两份默认值会慢慢漂，
+	//    而「到底哪个在生效」只能靠读代码回答。所以是搬走，不是复制。
+	//    代价是「解析失败即启动失败」这条对它们不再适用：写错了服务照常起，
 	//    但后台那一行会挂 🔴 warning 说明「源里写的不是数字/越界，实际生效的是 X」。
-	EventRetentionDays int
-	IdempotencyDays    int
-	MaxJobAttempts     int
-	RateLimitMaxKeys   int
-	ShutdownGraceS     int
+	RateLimitMaxKeys int
+	ShutdownGraceS   int
 
 	// 三个开发逃生口。**旗标为真还要带管理员令牌**才生效（双闸），
 	// 这里只记录旗标本身。
@@ -136,10 +140,6 @@ func Load() (*Config, error) {
 		env string
 		def string
 	}{
-		{&c.SessionTTLDays, "SESSION_TTL_DAYS", "90"},
-		{&c.EventRetentionDays, "EVENT_RETENTION_DAYS", "90"},
-		{&c.IdempotencyDays, "IDEMPOTENCY_RETENTION_DAYS", "30"},
-		{&c.MaxJobAttempts, "MAX_JOB_ATTEMPTS", "3"},
 		{&c.RateLimitMaxKeys, "RATE_LIMIT_MAX_KEYS", "50000"},
 		{&c.ShutdownGraceS, "SHUTDOWN_GRACE_SECONDS", "25"},
 	} {

@@ -110,7 +110,7 @@ func (a *App) hAuthExchange(c *Ctx) (any, error) {
 	}
 
 	token := randomToken()
-	if err := store.CreateSession(ctx, a.st.Q(), token, userID, deviceID, a.now(), a.cfg.SessionTTLDays); err != nil {
+	if err := store.CreateSession(ctx, a.st.Q(), token, userID, deviceID, a.now(), a.rt.SessionTTLDays()); err != nil {
 		return nil, err
 	}
 	u, err := store.GetUserAny(ctx, a.st.Q(), userID)

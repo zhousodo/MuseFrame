@@ -51,6 +51,12 @@ const (
 	// SupplyBreakerStreak / SupplyBreakerCooldown：连着这么多次供给类失败之后，
 	// 冷却期内的任务直接快速失败、不再打上游，也不再付提示词编译的钱。
 	// 冷却期一过就放一个任务过去探路（半开），所以供给恢复会自动被发现。
+	//
+	// 🔴 2026-09-12 起这两个数字是**注册表热键**（provider_breaker_streak /
+	// provider_breaker_cooldown_seconds），这里的常量退化成「cfg 缺席时的默认值」。
+	// 理由很具体：上游换一家供应商、或者故障形态从「整体 503」变成「偶发 503」时，
+	// 阈值要能当场调 —— 阈值配得过松等于每个任务都去白烧一次上游调用的钱，
+	// 配得过紧等于上游只抖一下就把整条生成链路停 60 秒。两种都等不起一次发版。
 	SupplyBreakerStreak   = 3
 	SupplyBreakerCooldown = 60 * time.Second
 	// MaxUpstreamMsg 是上游错误文本进日志 / 进健康出参时的截断长度（按字符，不是字节）。
@@ -227,10 +233,10 @@ func reasonOf(last *Outcome) string {
 // 冷却期一过自动放行（半开），所以上游恢复不需要任何人工动作。
 func (a *Adapter) SupplyDown(now time.Time) bool {
 	v := a.HealthLedger().View(now)
-	if v.SupplyStreak < SupplyBreakerStreak || v.LastErr == nil {
+	if v.SupplyStreak < a.BreakerStreak() || v.LastErr == nil {
 		return false
 	}
-	return now.Sub(v.LastErr.At) < SupplyBreakerCooldown
+	return now.Sub(v.LastErr.At) < a.BreakerCooldown()
 }
 
 // probeModels 返回**缓存里**的探针结论，并在缓存过期时后台刷新一次。

@@ -59,6 +59,9 @@ type testEnv struct {
 	// seq 由 nextID 递增，而并发用例里 nextID 会被多个请求 goroutine 同时调用，
 	// 所以必须上锁。生产用的是 NewUUID（crypto/rand，无共享状态），不存在这个问题 ——
 	// 这把锁纯粹是给测试替身用的。
+	// wk 是 App 用的那一个 worker（不是另造的）。测试要断言「后台改了
+	// max_job_attempts，worker 下一个任务就按新值走」，断言对象必须是同一个实例。
+	wk     *worker.Worker
 	seqMu  sync.Mutex
 	seq    int
 	assets string
@@ -130,8 +133,9 @@ func newTestEnv(t *testing.T) *testEnv {
 	prov.SetNow(env.clock)
 	wk := worker.New(worker.Options{
 		Store: st, Runtime: rt, Provider: prov, Logger: lg, AssetDir: assetDir,
-		MaxAttempts: 3, NewID: NewUUID, Now: env.clock,
+		NewID: NewUUID, Now: env.clock,
 	})
+	env.wk = wk
 	env.app = New(Options{
 		Config: cfg, Runtime: rt, Store: st, Logger: lg, Provider: prov, Worker: wk,
 		Mailer: mail, Version: "test", ImgTokenKey: []byte("test-img-hmac-key"),

@@ -40,11 +40,8 @@ type Worker struct {
 	prov     *provider.Adapter
 	lg       *logx.Logger
 	assetDir string
-	// maxAttempts 是崩溃循环护栏。一个会把进程搞崩的任务在下次开机会被重新排队，
-	// 于是再崩一次 —— 没有上限就是无限重启循环，而对远程供应商每一圈都是真实计费。
-	maxAttempts int
-	newID       func() string
-	now         func() time.Time
+	newID    func() string
+	now      func() time.Time
 
 	mu       sync.Mutex
 	queue    []string
@@ -57,14 +54,13 @@ type Worker struct {
 
 // Options 是构造参数。
 type Options struct {
-	Store       *store.Store
-	Runtime     *cfgstore.Store
-	Provider    *provider.Adapter
-	Logger      *logx.Logger
-	AssetDir    string
-	MaxAttempts int
-	NewID       func() string
-	Now         func() time.Time
+	Store    *store.Store
+	Runtime  *cfgstore.Store
+	Provider *provider.Adapter
+	Logger   *logx.Logger
+	AssetDir string
+	NewID    func() string
+	Now      func() time.Time
 }
 
 // New 构造 worker。
@@ -73,12 +69,9 @@ func New(o Options) *Worker {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	if o.MaxAttempts <= 0 {
-		o.MaxAttempts = 3
-	}
 	return &Worker{
 		st: o.Store, rt: o.Runtime, prov: o.Provider, lg: o.Logger, assetDir: o.AssetDir,
-		maxAttempts: o.MaxAttempts, newID: o.NewID, now: now,
+		newID: o.NewID, now: now,
 		queuedAt: map[string]time.Time{}, wake: make(chan struct{}, 1), stopped: make(chan struct{}),
 	}
 }
@@ -114,6 +107,17 @@ func (w *Worker) Depth() Queue {
 	}
 	return Queue{Queued: len(w.queue), Active: w.active, OldestQueuedAgeSec: oldest, Draining: w.draining}
 }
+
+// MaxAttempts 是崩溃循环护栏：单个任务最多尝试几次（含首次）。
+//
+// 🔴 它是崩溃循环护栏**也是**钱的闸。一个会把进程搞崩的任务在下次开机会被重新
+// 排队，于是再崩一次 —— 没有上限就是无限重启循环，而对远程供应商每一圈都是
+// 真实计费（设计型风格每圈还额外付一次提示词编译的 LLM 费）。
+//
+// 2026-09-12 起读注册表热键 max_job_attempts（原先是启动时从 MAX_JOB_ATTEMPTS
+// 读一次固化在字段里）：上游按次计费炸掉的时候要能立刻压到 1，而不是等发版。
+// 每次用时重新读，所以后台一改，下一个任务就按新值走。
+func (w *Worker) MaxAttempts() int { return w.rt.MaxJobAttempts() }
 
 // Concurrency 返回当前并发上限。
 //

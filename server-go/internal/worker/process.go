@@ -50,7 +50,7 @@ func (w *Worker) Recover(ctx context.Context) (failed, requeued int, err error) 
 	}
 	for i := range stuck {
 		j := stuck[i]
-		if j.AttemptCount >= w.maxAttempts {
+		if j.AttemptCount >= w.MaxAttempts() {
 			w.lg.Warn("worker: 尝试次数达上限，直接失败（崩溃循环护栏）",
 				map[string]any{"jobId": j.ID, "attempts": j.AttemptCount})
 			w.failJob(ctx, &j, provider.CodeProviderError)
@@ -109,7 +109,7 @@ func (w *Worker) processJob(ctx context.Context, jobID string) error {
 	case "succeeded", "failed", "cancelled":
 		return nil
 	}
-	if job.AttemptCount >= w.maxAttempts {
+	if job.AttemptCount >= w.MaxAttempts() {
 		w.failJob(ctx, job, provider.CodeProviderError)
 		return nil
 	}

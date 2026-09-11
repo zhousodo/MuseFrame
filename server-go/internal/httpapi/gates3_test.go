@@ -44,7 +44,7 @@ func TestCheck08_BootRecovery(t *testing.T) {
 
 	wk := worker.New(worker.Options{
 		Store: e.st, Runtime: e.rt, Provider: nil, Logger: newNopLogger(), AssetDir: e.assets,
-		MaxAttempts: 3, NewID: e.nextID, Now: e.clock,
+		NewID: e.nextID, Now: e.clock,
 	})
 	failed, requeued, err := wk.Recover(ctx)
 	if err != nil {

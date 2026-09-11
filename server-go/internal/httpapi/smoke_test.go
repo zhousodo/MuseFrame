@@ -101,6 +101,12 @@ func TestSmokeAllRoutes(t *testing.T) {
 		{"PATCH", "/v1/admin/products-admin/pack_10", map[string]any{"active": true}, admin, 200},
 		{"GET", "/v1/admin/styles-admin", nil, admin, 200},
 		{"POST", "/v1/admin/styles-admin/style-other/status", map[string]any{"status": "published"}, admin, 200},
+		// 2026-09-12 第三轮新增的 5 条。
+		{"PATCH", "/v1/admin/styles-admin/style-other", map[string]any{"premium": false}, admin, 200},
+		{"POST", "/v1/admin/users/" + uid + "/status", map[string]any{"status": "active"}, admin, 200},
+		{"GET", "/v1/admin/user-facts", nil, admin, 200},
+		{"GET", "/v1/admin/audit", nil, admin, 200},
+		{"GET", "/v1/admin/feedback-reasons", nil, admin, 200},
 	}
 
 	hit := map[string]bool{}
