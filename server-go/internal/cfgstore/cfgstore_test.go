@@ -86,8 +86,21 @@ func TestSecretFromEnvOnly(t *testing.T) {
 			masked, _ = it.Value.(string)
 		}
 	}
-	if masked != "••••1234" {
-		t.Fatalf("掩码应为 4 个圆点 + 末 4 位，实际 %q", masked)
+	// 🔴 掩码里一个原文字符都不能有：末 4 位（旧行为 "••••1234"）足够让人在泄漏库里
+	// 做匹配确认，而后台页面是能被截图的。掩码只回答「配没配」。
+	if masked != MaskedSecret {
+		t.Fatalf("掩码应为固定 8 个圆点，实际 %q", masked)
+	}
+	if strings.Contains(masked, "1234") || strings.Contains(masked, "env-key") {
+		t.Fatalf("掩码泄漏了原文片段：%q", masked)
+	}
+	// 长度也不能泄漏：长短不同的密钥掩码必须一致。
+	short := NewForTest(map[string]string{"IMAGE_PROVIDER_API_KEY": "ab"})
+	if got := MaskSecret(short.String("image_provider_api_key")); got != MaskedSecret {
+		t.Fatalf("短密钥掩码应与长密钥一致，实际 %q", got)
+	}
+	if MaskSecret("") != nil {
+		t.Fatal("空值应为 null（后台显示未配置）")
 	}
 }
 
