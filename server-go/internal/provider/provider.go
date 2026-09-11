@@ -11,25 +11,80 @@ package provider
 import (
 	"errors"
 	"strings"
+	"sync"
+	"time"
 
 	"museframe-api/internal/cfgstore"
+	"museframe-api/internal/logx"
 )
 
 // 稳定错误码（worker 会把它们写进 generation_jobs.error_code）。
 const (
-	CodeProviderTimeout  = "PROVIDER_TIMEOUT"
-	CodeProviderError    = "PROVIDER_ERROR"
-	CodeGenerationReject = "GENERATION_REJECTED"
-	CodeStyleUnavailable = "STYLE_UNAVAILABLE"
+	// CodeProviderTimeout 只用于**真的超时**：本地 deadline 到点、上游 504/408、
+	// 或上游错误文本自述 timeout。2026-09-05 起上游对 gpt-image-* 一律 503
+	// 「No available compatible accounts」，旧映射（>=500 → TIMEOUT）把这种
+	// 供给耗尽误报成超时，排障因此走了一周弯路。
+	CodeProviderTimeout = "PROVIDER_TIMEOUT"
+	// CodeProviderUnavailable 是供给类不可用：上游自己说没有可用账号 / 渠道 /
+	// 容量，或直接回 503/429。对用户的文案是「生成服务暂时不可用，额度已退回」。
+	// 🔴 它**不可重试** —— 再打一遍只是把同一条 503 再换一次，纯烧时间与钱
+	//（每次失败的设计型风格任务都已经付过一次提示词编译的 LLM 费用）。
+	CodeProviderUnavailable = "PROVIDER_UNAVAILABLE"
+	CodeProviderError       = "PROVIDER_ERROR"
+	CodeGenerationReject    = "GENERATION_REJECTED"
+	CodeStyleUnavailable    = "STYLE_UNAVAILABLE"
 )
 
+// UserMessage 把稳定码翻成给用户看的中文短句。
+// 额度在 failJob 里一律 Release（退回），所以文案可以把「已退回」写死。
+func UserMessage(code string) string {
+	switch code {
+	case CodeProviderUnavailable:
+		return "生成服务暂时不可用，额度已退回"
+	case CodeProviderTimeout:
+		return "生成超时了，额度已退回"
+	case CodeGenerationReject:
+		return "这张照片或这条指令无法生成，额度已退回"
+	case CodeStyleUnavailable:
+		return "这个风格暂时不可用，额度已退回"
+	case CodeProviderError:
+		return "生成失败了，额度已退回"
+	}
+	return ""
+}
+
 // Err 是带稳定 code 的上游错误。
+//
+// Status 是上游 HTTP 状态码（0 = 还没拿到响应：DNS / 连接 / 本地超时）。
+// Retry 为假表示**不许重试**（供给耗尽、内容策略拒绝、参数错）。
 type Err struct {
-	Code string
-	Msg  string
+	Code   string
+	Msg    string
+	Status int
+	Retry  bool
 }
 
 func (e *Err) Error() string { return e.Code + ": " + e.Msg }
+
+// Retryable 回答「这个错误再打一次有意义吗」。
+// 非 *Err 一律按可重试处理（未知故障给它一次机会），
+// 但供给类 / 策略类 / 风格缺失一律为假。
+func Retryable(err error) bool {
+	var e *Err
+	if errors.As(err, &e) {
+		return e.Retry
+	}
+	return true
+}
+
+// StatusOf 取上游 HTTP 状态码，拿不到返回 0。
+func StatusOf(err error) int {
+	var e *Err
+	if errors.As(err, &e) {
+		return e.Status
+	}
+	return 0
+}
 
 // CodeOf 取错误的稳定码，非上游错误返回 PROVIDER_ERROR。
 func CodeOf(err error) string {
@@ -60,6 +115,17 @@ type Adapter struct {
 	providerName string
 	// apiKey 只来自环境变量，永不来自数据库。
 	apiKey string
+	// lg 可为 nil（单测里构造的裸 Adapter）；一律走 a.warn / a.info 这两个哨兵。
+	lg *logx.Logger
+	// hl 是上游调用的健康账本（近 N 次结果 + 轻量探针缓存）。
+	hl *Health
+	// nowFn 只给测试注入；生产恒为 time.Now().UTC()。
+	nowFn func() time.Time
+	// probeOff 关掉轻量探针（集成测试里 BASE_URL 是 provider.invalid，
+	// 不该让测试进程真去做 DNS 查询）。
+	probeOff bool
+
+	mu sync.Mutex
 }
 
 // New 构造适配器。
@@ -68,7 +134,70 @@ func New(cfg *cfgstore.Store, providerName, apiKey string) *Adapter {
 	if p == "" {
 		p = "remote"
 	}
-	return &Adapter{cfg: cfg, providerName: p, apiKey: apiKey}
+	return &Adapter{cfg: cfg, providerName: p, apiKey: apiKey, hl: NewHealth()}
+}
+
+// SetLogger 注入日志器（main 在构造完 logx 之后调用一次）。
+func (a *Adapter) SetLogger(lg *logx.Logger) {
+	a.mu.Lock()
+	a.lg = lg
+	a.mu.Unlock()
+}
+
+// SetNow 只给测试用：固定时钟。
+func (a *Adapter) SetNow(f func() time.Time) {
+	a.mu.Lock()
+	a.nowFn = f
+	a.mu.Unlock()
+}
+
+// SetProbeEnabled 开关轻量探针。生产默认开；测试关。
+func (a *Adapter) SetProbeEnabled(on bool) {
+	a.mu.Lock()
+	a.probeOff = !on
+	a.mu.Unlock()
+}
+
+func (a *Adapter) probeEnabled() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return !a.probeOff
+}
+
+// HealthLedger 暴露健康账本（main 用它做开机播种，测试用它断言）。
+func (a *Adapter) HealthLedger() *Health {
+	if a.hl == nil {
+		a.hl = NewHealth()
+	}
+	return a.hl
+}
+
+func (a *Adapter) now() time.Time {
+	a.mu.Lock()
+	f := a.nowFn
+	a.mu.Unlock()
+	if f != nil {
+		return f()
+	}
+	return time.Now().UTC()
+}
+
+func (a *Adapter) logger() *logx.Logger {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lg
+}
+
+func (a *Adapter) warn(msg string, extra map[string]any) {
+	if lg := a.logger(); lg != nil {
+		lg.Warn(msg, extra)
+	}
+}
+
+func (a *Adapter) info(msg string, extra map[string]any) {
+	if lg := a.logger(); lg != nil {
+		lg.Info(msg, extra)
+	}
 }
 
 // ProviderName 返回 env-only 的 IMAGE_PROVIDER。

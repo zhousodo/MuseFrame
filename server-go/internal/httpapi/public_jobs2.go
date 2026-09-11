@@ -5,6 +5,7 @@ import (
 
 	"museframe-api/internal/apierr"
 	"museframe-api/internal/ledger"
+	"museframe-api/internal/provider"
 	"museframe-api/internal/store"
 )
 
@@ -41,8 +42,12 @@ type JobBilling struct {
 }
 
 // JobError 是错误块。
+// message 是给用户看的中文短句（可选键：未知码时整键消失）。
+// 客户端仍然以 code 为准做分支；message 只是兜底文案，
+// 好让一个还没更新的客户端也不会把「生成服务暂时不可用」显示成「出了点问题」。
 type JobError struct {
-	Code string `json:"code"`
+	Code    string `json:"code"`
+	Message string `json:"message,omitempty"`
 }
 
 // hGetJob 轮询任务。纯读，不写库。
@@ -69,7 +74,7 @@ func (a *App) hGetJob(c *Ctx) (any, error) {
 		out.Billing.UnitsCommitted = j.ReservedUnits
 	}
 	if j.ErrorCode != nil && *j.ErrorCode != "" {
-		out.Error = &JobError{Code: *j.ErrorCode}
+		out.Error = &JobError{Code: *j.ErrorCode, Message: provider.UserMessage(*j.ErrorCode)}
 	}
 	if cand, err := store.FirstCandidateOfJob(ctx, a.st.Q(), j.ID); err == nil {
 		jc := &JobCandidate{

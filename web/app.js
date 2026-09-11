@@ -706,6 +706,10 @@ function pollJob(jobId) {
           const code = job.error?.code;
           toast(code === 'GENERATION_REJECTED' ? t('This request can’t be created — nothing used')
             : code === 'GENERATION_UNAVAILABLE' ? t('Generating is paused right now — nothing used')
+            /* 上游图像供给耗尽（HTTP 503「No available compatible accounts」）。
+               它和「出了点问题」是两件事：用户什么都没做错，额度也已经退回，
+               所以文案要说清「服务侧暂时不可用」而不是让人反复重试同一张照片。 */
+            : code === 'PROVIDER_UNAVAILABLE' ? t('Generation service is temporarily unavailable — your credit was refunded')
             : t('Something went wrong — nothing used'), 2600);
           go('configure');
         }

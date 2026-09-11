@@ -66,7 +66,7 @@ func (a *App) hAdminOverview(c *Ctx) (any, error) {
 		return nil, err
 	}
 	return AdminOverviewResult{
-		Generation: a.generationSummary(), Abuse: abuse,
+		Generation: a.generationSummary(ctx), Abuse: abuse,
 		Users: o.Users, UsersToday: o.UsersToday, JobsByStatus: o.JobsByStatus,
 		SucceededAvgSeconds: o.SucceededAvgSeconds, UnitsGranted: o.UnitsGranted,
 		UnitsConsumed: o.UnitsConsumed, RevenueMinor: o.RevenueMinor, Purchases: o.Purchases,

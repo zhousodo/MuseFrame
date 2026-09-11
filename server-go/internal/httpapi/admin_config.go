@@ -25,7 +25,7 @@ func (a *App) adminConfigResult(c *Ctx) (AdminConfigResult, error) {
 			Description: "Google Play 收据校验服务账号是否已配置", RequiresRestart: true, ReadOnly: true,
 		},
 	)
-	return AdminConfigResult{Settings: settings, Generation: a.generationSummary(), Abuse: abuse}, nil
+	return AdminConfigResult{Settings: settings, Generation: a.generationSummary(c.R.Context()), Abuse: abuse}, nil
 }
 
 func (a *App) hAdminConfigGet(c *Ctx) (any, error) {

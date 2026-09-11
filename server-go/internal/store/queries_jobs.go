@@ -139,3 +139,53 @@ func CandidateOwner(ctx context.Context, q Queryer, candidateID string) (candID,
 		Scan(&candID, &userID, &jobID, &projectID, &assetID)
 	return
 }
+
+// ProviderOutcome 是一条「上游到底成不成」的历史证据，用来给健康账本播种。
+// 没有它，容器一重启健康判据就回到「零样本」，于是一个连着失败一周的部署
+// 在重启后照样报绿 —— 本轮故障暴露的正是这个盲区。
+type ProviderOutcome struct {
+	At   time.Time
+	OK   bool
+	Code string
+}
+
+// providerOutcomeCodes 是**与上游供给相关**的失败码白名单。
+// ASSET_NOT_READY / INTERNAL_ERROR / BAD_DIMENSIONS / GENERATION_REJECTED 都不是
+// 「上游能不能产图」的证据（前三个是我们自己的问题，最后一个说明上游正常工作、
+// 只是拒了这一条指令），放进来会把健康判据污染成噪声。
+var providerOutcomeCodes = []string{
+	"PROVIDER_UNAVAILABLE", "PROVIDER_TIMEOUT", "PROVIDER_ERROR",
+}
+
+// ListRecentProviderOutcomes 取最近 limit 条「成功 / 上游类失败」的收口行，**按时间升序**返回
+// （健康账本的环形缓冲要求最新的在最后）。
+func ListRecentProviderOutcomes(ctx context.Context, q Queryer, limit int, since time.Time) ([]ProviderOutcome, error) {
+	rows, err := q.Query(ctx, `
+		SELECT finished_at, status, COALESCE(error_code, '')
+		  FROM (
+			SELECT finished_at, status, error_code
+			  FROM generation_jobs
+			 WHERE finished_at IS NOT NULL
+			   AND finished_at >= $2
+			   AND (status = 'succeeded' OR error_code = ANY($3))
+			 ORDER BY finished_at DESC
+			 LIMIT $1
+		  ) t
+		 ORDER BY finished_at ASC`, limit, since, providerOutcomeCodes)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ProviderOutcome
+	for rows.Next() {
+		var o ProviderOutcome
+		var status, code string
+		if err := rows.Scan(&o.At, &status, &code); err != nil {
+			return nil, err
+		}
+		o.OK = status == "succeeded"
+		o.Code = code
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}

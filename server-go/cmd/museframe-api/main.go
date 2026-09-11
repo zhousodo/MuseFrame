@@ -33,6 +33,23 @@ import (
 // version 由 -ldflags "-X main.version=<tag>" 注入。
 var version = "dev"
 
+// seedProviderHealth 用 generation_jobs 的历史收口行给上游健康账本播种。
+// 失败不致命：播不上只是回到「零样本 + 探针」，不该让进程起不来。
+func seedProviderHealth(ctx context.Context, st *store.Store, prov *provider.Adapter, lg *logx.Logger) {
+	since := time.Now().UTC().Add(-provider.HealthWindow)
+	rows, err := store.ListRecentProviderOutcomes(ctx, st.Q(), provider.HealthRing, since)
+	if err != nil {
+		lg.Warn("开机播种上游健康账本失败（退化为零样本 + 探针判据）", map[string]any{"error": err.Error()})
+		return
+	}
+	out := make([]provider.Outcome, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, provider.Outcome{At: r.At, OK: r.OK, Code: r.Code, Msg: "历史收口行（重启前的任务，上游原话未落库）"})
+	}
+	n := prov.HealthLedger().Seed(out)
+	lg.Info("上游健康账本已播种", map[string]any{"samples": n})
+}
+
 func main() {
 	// `museframe-api healthcheck` 子命令：给 compose healthcheck 用。
 	// 镜像是 scratch，没有 curl / wget / sh —— 探针只能由二进制自己承担。
@@ -80,6 +97,12 @@ func main() {
 	}
 
 	prov := provider.New(rt, cfg.ImageProvider, cfg.ImageProviderAPIKey)
+	// 上游每一次调用（成功与失败）都要有一行日志；密钥永不进日志（logx.Redact 兜底）。
+	prov.SetLogger(lg)
+	// 🔴 健康判据的证据必须活过重启：只看 in-process 环形缓冲的话，一个连着
+	// 失败一周的部署在容器重启后会立刻报绿 —— 这正是本轮故障被瞒了一周的原因。
+	// 这里用 generation_jobs 的历史收口行给账本播种（只取上游类码 + 成功）。
+	seedProviderHealth(rootCtx, st, prov, lg)
 	mail := mailer.New(rt, cfg.SMTPPass)
 	playClient := play.New(cfg.GoogleServiceAccountJSON, rt.String("google_package_name"))
 
