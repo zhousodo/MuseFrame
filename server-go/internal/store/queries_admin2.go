@@ -97,7 +97,7 @@ type AdminUserRow struct {
 
 // ListAdminUsers 用户列表。
 // 🔴 LIKE 必须带 ESCAPE 转义：漏掉就是 SQL 通配注入（一个 % 能把全表拉出来）。
-func ListAdminUsers(ctx context.Context, q Queryer, limit int, search string) ([]AdminUserRow, error) {
+func ListAdminUsers(ctx context.Context, q Queryer, limit int, search string, tr TimeRange) ([]AdminUserRow, error) {
 	base := `
 		SELECT u.id, substr(u.id,1,8), u.display_name, u.is_guest, u.status, u.created_at,
 		       (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=u.id AND ai.email_normalized IS NOT NULL LIMIT 1),
@@ -105,23 +105,22 @@ func ListAdminUsers(ctx context.Context, q Queryer, limit int, search string) ([
 		       (SELECT COALESCE(SUM(l.units),0) FROM credit_ledger l WHERE l.user_id=u.id),
 		       (SELECT count(*) FROM generation_jobs j WHERE j.user_id=u.id)
 		FROM users u WHERE u.deleted_at IS NULL`
-	var rows interface {
-		Next() bool
-		Scan(...any) error
-		Close()
-		Err() error
-	}
-	var err error
+	// 🔴 占位符按 args 的长度顺序拼，不写死 $1/$2：加一个可选筛选条件时，
+	// 写死序号的那种写法会把后面每一个参数都错位一格，而错位的表现是
+	// 「搜索框一填就报 SQL 错」或者更糟 ——「limit 被当成 LIKE 模式」。
+	sql := base
+	args := []any{}
 	if search != "" {
 		esc := strings.NewReplacer(`\`, `\`, `%`, `\%`, `_`, `\_`).Replace(search)
-		like := "%" + esc + "%"
-		rows, err = q.Query(ctx, base+`
-		  AND (u.id LIKE $1 ESCAPE '\' OR lower(u.display_name) LIKE $1 ESCAPE '\'
-		       OR EXISTS (SELECT 1 FROM auth_identities ai WHERE ai.user_id=u.id AND ai.email_normalized LIKE $1 ESCAPE '\'))
-		  ORDER BY u.created_at DESC, u.id ASC LIMIT $2`, like, limit)
-	} else {
-		rows, err = q.Query(ctx, base+` ORDER BY u.created_at DESC, u.id ASC LIMIT $1`, limit)
+		args = append(args, "%"+esc+"%")
+		n := itoa(len(args))
+		sql += `
+		  AND (u.id LIKE $` + n + ` ESCAPE '\' OR lower(u.display_name) LIKE $` + n + ` ESCAPE '\'
+		       OR EXISTS (SELECT 1 FROM auth_identities ai WHERE ai.user_id=u.id AND ai.email_normalized LIKE $` + n + ` ESCAPE '\'))`
 	}
+	sql = tr.apply("u.created_at", sql, &args)
+	sql += ` ORDER BY u.created_at DESC, u.id ASC LIMIT ` + itoa(limit)
+	rows, err := q.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}

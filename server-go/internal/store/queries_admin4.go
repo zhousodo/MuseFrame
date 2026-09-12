@@ -157,7 +157,7 @@ type EventSampleRow struct {
 }
 
 // ListEventSamples 原始埋点样本，倒序。name 为空表示不筛。
-func ListEventSamples(ctx context.Context, q Queryer, since time.Time, name string, limit int) ([]EventSampleRow, error) {
+func ListEventSamples(ctx context.Context, q Queryer, since time.Time, name string, tr TimeRange, limit int) ([]EventSampleRow, error) {
 	sql := `
 		SELECT occurred_at, name, substr(user_id,1,8), props
 		FROM events
@@ -167,6 +167,8 @@ func ListEventSamples(ctx context.Context, q Queryer, since time.Time, name stri
 		args = append(args, name)
 		sql += ` AND name = $` + itoa(len(args))
 	}
+	// from/to 与 days 窗口叠加：days 决定「最多往回看多久」，from/to 在里面切一段。
+	sql = tr.apply("occurred_at", sql, &args)
 	sql += ` ORDER BY occurred_at DESC, id DESC LIMIT ` + itoa(limit)
 	rows, err := q.Query(ctx, sql, args...)
 	if err != nil {
@@ -219,7 +221,9 @@ type AssetFilter struct {
 	Kind   string
 	Status string
 	UserID string
-	Limit  int
+	// Range 按创建时间筛（半开区间）。
+	Range TimeRange
+	Limit int
 }
 
 // ListAdminAssets 资产列表，倒序。
@@ -249,6 +253,7 @@ func ListAdminAssets(ctx context.Context, q Queryer, f AssetFilter) ([]AdminAsse
 		args = append(args, f.UserID+"%")
 		sql += ` AND a.user_id LIKE $` + itoa(len(args)) + ` ESCAPE '\'`
 	}
+	sql = f.Range.apply("a.created_at", sql, &args)
 	sql += ` ORDER BY a.created_at DESC, a.id ASC LIMIT ` + itoa(f.Limit)
 	rows, err := q.Query(ctx, sql, args...)
 	if err != nil {
@@ -312,12 +317,20 @@ type LedgerRow struct {
 	// Source 是这笔额度来自哪个 bucket 的来源类型（free_grant / purchase / promo / manual）。
 	// 没有它，账本上一串 grant 行看不出哪几次是充值、哪几次是白送。
 	Source string `json:"source"`
+	// ExpiresAt 是这笔额度所在 bucket 的到期时间（null = 永不过期）。
+	//
+	// 🔴 客服最常收到的一类投诉是「我买的张数怎么没了」，而真因通常是
+	// pack_credit_expiry_days 到期把 bucket 关了。到期时间不在面板上时，
+	// 这个问题只能靠 SSH 进库查 credit_buckets 才答得出来。
+	ExpiresAt *string `json:"expiresAt"`
+	// Expired 是「按本次请求的时间看，这笔额度已经过期了」。
+	Expired bool `json:"expired"`
 }
 
 // ListUserLedger 某用户的额度账本，倒序。
-func ListUserLedger(ctx context.Context, q Queryer, userID string, limit int) ([]LedgerRow, error) {
+func ListUserLedger(ctx context.Context, q Queryer, userID string, now time.Time, limit int) ([]LedgerRow, error) {
 	rows, err := q.Query(ctx, `
-		SELECT l.created_at, l.entry_type, l.units, l.job_id, b.source_type
+		SELECT l.created_at, l.entry_type, l.units, l.job_id, b.source_type, b.expires_at
 		FROM credit_ledger l JOIN credit_buckets b ON b.id = l.balance_bucket_id
 		WHERE l.user_id = $1 ORDER BY l.created_at DESC, l.id ASC LIMIT $2`, userID, limit)
 	if err != nil {
@@ -328,20 +341,26 @@ func ListUserLedger(ctx context.Context, q Queryer, userID string, limit int) ([
 	for rows.Next() {
 		var r LedgerRow
 		var t time.Time
-		if err := rows.Scan(&t, &r.EntryType, &r.Units, &r.JobID, &r.Source); err != nil {
+		var exp *time.Time
+		if err := rows.Scan(&t, &r.EntryType, &r.Units, &r.JobID, &r.Source, &exp); err != nil {
 			return nil, err
 		}
 		r.At = ISO(t)
+		if exp != nil {
+			s := ISO(*exp)
+			r.ExpiresAt = &s
+			r.Expired = exp.Before(now)
+		}
 		out = append(out, r)
 	}
 	return out, rows.Err()
 }
 
-// SessionRow 是一个会话。token 绝不出现在出参里。
+// SessionRow 是一个会话。token 绝不出现在出参里 —— 一个字节都不出。
+//
+// 🔴 2026-09-12 去掉了此前回的「令牌后 6 位」：密钥类的东西不该露出任何片段，
+// 而「对上具体哪一个设备」本来就该看 device_id 与最近活跃时间，那两列一直都在。
 type SessionRow struct {
-	// TokenTail 是令牌的**后 6 位**，用来让运营在「用户说他被踢了」时
-	// 对上具体哪一个设备 —— 但拿到这 6 位无法重建令牌。
-	TokenTail  string  `json:"tokenTail"`
 	DeviceID   *string `json:"deviceId"`
 	CreatedAt  string  `json:"createdAt"`
 	LastSeenAt string  `json:"lastSeenAt"`
@@ -352,7 +371,7 @@ type SessionRow struct {
 // ListUserSessions 某用户的会话，按最近活跃倒序。
 func ListUserSessions(ctx context.Context, q Queryer, userID string, now time.Time, limit int) ([]SessionRow, error) {
 	rows, err := q.Query(ctx, `
-		SELECT right(token, 6), device_id, created_at, last_seen_at, expires_at
+		SELECT device_id, created_at, last_seen_at, expires_at
 		FROM sessions WHERE user_id = $1 ORDER BY last_seen_at DESC LIMIT $2`, userID, limit)
 	if err != nil {
 		return nil, err
@@ -363,7 +382,7 @@ func ListUserSessions(ctx context.Context, q Queryer, userID string, now time.Ti
 		var r SessionRow
 		var created, seen time.Time
 		var exp *time.Time
-		if err := rows.Scan(&r.TokenTail, &r.DeviceID, &created, &seen, &exp); err != nil {
+		if err := rows.Scan(&r.DeviceID, &created, &seen, &exp); err != nil {
 			return nil, err
 		}
 		r.CreatedAt, r.LastSeenAt = ISO(created), ISO(seen)

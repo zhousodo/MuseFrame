@@ -36,7 +36,9 @@ type FeedbackFilter struct {
 	Rating string
 	// Handled: "" 不筛、"yes" 只看已处理、"no" 只看未处理。
 	Handled string
-	Limit   int
+	// Range 按提交时间筛（半开区间）。页面与 CSV 用同一个字段，口径才会一致。
+	Range TimeRange
+	Limit int
 }
 
 // ListAdminFeedbackFull 反馈列表（带正文与处理状态），倒序。
@@ -62,6 +64,7 @@ func ListAdminFeedbackFull(ctx context.Context, q Queryer, f FeedbackFilter) ([]
 	case "no":
 		sql += ` AND f.handled_at IS NULL`
 	}
+	sql = f.Range.apply("f.created_at", sql, &args)
 	sql += ` ORDER BY f.created_at DESC, f.id ASC LIMIT ` + itoa(f.Limit)
 	rows, err := q.Query(ctx, sql, args...)
 	if err != nil {
@@ -125,10 +128,12 @@ func SetFeedbackHandled(ctx context.Context, q Queryer, id string, handled bool,
 // JobFilter 是任务列表的筛选条件。
 type JobFilter struct {
 	Status string
-	// SinceHours > 0 表示只看最近这么多小时。
+	// SinceHours > 0 表示只看最近这么多小时（相对窗，和 Range 可以叠加）。
 	SinceHours int
 	UserID     string
-	Limit      int
+	// Range 按创建时间筛（半开区间的绝对时刻）。
+	Range TimeRange
+	Limit int
 }
 
 // AdminJobFullRow 是带上游摘要的任务行。
@@ -156,7 +161,7 @@ func ListAdminJobsFiltered(ctx context.Context, q Queryer, f JobFilter, now time
 		       substr(j.user_id,1,8),
 		       (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=j.user_id AND ai.email_normalized IS NOT NULL LIMIT 1),
 		       s.public_name, j.source_asset_id,
-		       (SELECT c.asset_id FROM generation_candidates c WHERE c.job_id=j.id LIMIT 1),
+		       (SELECT c.asset_id FROM generation_candidates c WHERE c.job_id=j.id ORDER BY c.candidate_index ASC, c.created_at ASC LIMIT 1),
 		       j.project_id, s.id, j.controls, j.output,
 		       (SELECT e.props FROM events e
 		          WHERE e.name LIKE 'provider.%' AND e.props->>'jobId' = j.id
@@ -179,6 +184,7 @@ func ListAdminJobsFiltered(ctx context.Context, q Queryer, f JobFilter, now time
 		args = append(args, f.UserID+"%")
 		sql += ` AND j.user_id LIKE $` + itoa(len(args)) + ` ESCAPE '\'`
 	}
+	sql = f.Range.apply("j.created_at", sql, &args)
 	sql += ` ORDER BY j.created_at DESC, j.id ASC LIMIT ` + itoa(f.Limit)
 	rows, err := q.Query(ctx, sql, args...)
 	if err != nil {
@@ -253,7 +259,9 @@ type AdminPurchaseFullRow struct {
 type PurchaseFilter struct {
 	Status   string
 	Platform string
-	Limit    int
+	// Range 按购买时间筛（半开区间）。
+	Range TimeRange
+	Limit int
 }
 
 // ListAdminPurchasesFull 购买列表（完整列），倒序。
@@ -275,6 +283,7 @@ func ListAdminPurchasesFull(ctx context.Context, q Queryer, f PurchaseFilter) ([
 		args = append(args, f.Platform)
 		sql += ` AND pu.platform = $` + itoa(len(args))
 	}
+	sql = f.Range.apply("pu.purchased_at", sql, &args)
 	sql += ` ORDER BY pu.purchased_at DESC, pu.id ASC LIMIT ` + itoa(f.Limit)
 	rows, err := q.Query(ctx, sql, args...)
 	if err != nil {
