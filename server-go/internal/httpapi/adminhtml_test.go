@@ -284,3 +284,103 @@ func TestAdminHTMLHasRetryAndReverifyEntries(t *testing.T) {
 		t.Fatal("购买表里出现了 active 状态判据，但 purchases.status 只有 pending / verified")
 	}
 }
+
+// ---- 2026-09-12 第五轮：后台验收的两个小瑕疵 ----------------------------
+
+// 🔴 占位文字不许直接写在 <table> 里。HTML 解析器对 table 内的裸文本做
+// foster parenting：把它挪到 <table> **前面**（成了外层 .wrap 的子节点），
+// 而渲染函数只改 table.innerHTML —— 于是「加载中…」永久钉在表头上方。
+// 2026-09-12 的验收在资产表 / 健康表 / 发信记录 / 验证码台账 4 张表上都看到了它。
+// 正确写法是包进 <tbody><tr><td colspan=N>，这样它是表的子节点，第一次渲染就被换掉。
+func TestAdminHTMLHasNoFosterParentedLoadingText(t *testing.T) {
+	code := adminCode(t)
+
+	// 静态标记与 JS 模板串里都不许有。`[^>]*` 故意不跨 `>`，所以只会命中
+	// 「开标签紧跟文字」这一种形态 —— 正是会被 foster-parent 的那一种。
+	fostered := regexp.MustCompile(`(?s)<table[^>]*>\s*加载中`)
+	if m := fostered.FindAllString(code, -1); len(m) != 0 {
+		t.Fatalf("有 %d 处把「加载中…」直接写在 <table> 里（会被 foster-parent 到表外）：%q", len(m), m)
+	}
+	// 同一个坑的 JS 版：table.innerHTML = '加载中…' 也是表里的裸文本。
+	for _, id := range []string{"usersTable", "assetsTable", "healthTable", "emailSends", "emailCodes", "jobs", "purchases", "feedback"} {
+		if strings.Contains(code, `$('`+id+`').innerHTML = '加载中…'`) {
+			t.Errorf("#%s 的加载占位是表里的裸文本，必须包进 <tbody><tr><td>", id)
+		}
+	}
+	// 四张表的占位必须带上和表头一样宽的 colspan，否则占位行只占第一列。
+	for _, want := range []struct {
+		id   string
+		cols string
+	}{
+		{"assetsTable", "9"}, {"healthTable", "7"}, {"emailSends", "5"}, {"emailCodes", "5"},
+	} {
+		ph := `<table id="` + want.id + `"><tbody><tr><td colspan="` + want.cols + `" class="muted">加载中…</td></tr></tbody></table>`
+		if !strings.Contains(code, ph) {
+			t.Errorf("#%s 缺少 colspan=%s 的 tbody 占位行", want.id, want.cols)
+		}
+	}
+	// email-log 的两张表共用一个 catch：只给 emailSends 落错误，
+	// emailCodes 就会永久停在「加载中…」。
+	if !strings.Contains(code, "$('emailCodes').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`") {
+		t.Error("email-log 出错时 emailCodes 也必须落错误，不能停在「加载中…」")
+	}
+}
+
+// 🔴 自由文本筛选框只绑 Enter，而「导出 CSV」读输入框的**当前值** ——
+// 「填了用户 ID 但没按回车就点导出」会得到一份和表里不一致的 CSV（表是全量、CSV 被筛过）。
+// 修法两头都要：输入框补 change/blur，导出前再强制同步一次。
+func TestAdminHTMLFilterInputsApplyOnBlurAndSyncBeforeExport(t *testing.T) {
+	code := adminCode(t)
+
+	if !strings.Contains(code, "function bindFilterInput(id, reload){") {
+		t.Fatal("缺少 bindFilterInput()：自由文本筛选框必须走统一绑定")
+	}
+	for _, ev := range []string{
+		`el.addEventListener('keydown', e => { if (e.key === 'Enter') apply(); });`,
+		`el.addEventListener('change', apply);`,
+		`el.addEventListener('blur', apply);`,
+	} {
+		if !strings.Contains(code, ev) {
+			t.Errorf("bindFilterInput() 少绑了事件：%s", ev)
+		}
+	}
+	// 去重是必需的：Enter 之后浏览器自己还会补一个 change，不去重就发两次请求。
+	if !strings.Contains(code, "if (v === applied) return false;") {
+		t.Error("bindFilterInput() 必须在值没变时不重新拉数据（Enter 会再触发一次 change）")
+	}
+	// 四个自由文本筛选框全部走它；任何一个漏掉就又回到「只有回车生效」。
+	for _, b := range []string{
+		"bindFilterInput('eventNameFilter', loadEvents);",
+		"bindFilterInput('assetUser', loadAssets);",
+		"bindFilterInput('jobUser', loadJobsTable);",
+		"bindFilterInput('userSearch', loadUsers);",
+	} {
+		if !strings.Contains(code, b) {
+			t.Errorf("缺少筛选框绑定：%s", b)
+		}
+	}
+	// 不许再用内联 onkeydown 偷偷绕过统一绑定。
+	if strings.Contains(code, "onkeydown=\"if(event.key==='Enter')loadUsers()\"") {
+		t.Error("#userSearch 还在用内联 onkeydown，没走 bindFilterInput()")
+	}
+	// 导出前同步；且导出参数必须惰性求值，否则同步发生在求值之后、改不了已取到的值。
+	if !strings.Contains(code, "function syncFilterInputs(){ filterApplies.forEach(f => f()); }") {
+		t.Fatal("缺少 syncFilterInputs()")
+	}
+	if !strings.Contains(code, "async function exportCsv(kind, params){\n  syncFilterInputs();") {
+		t.Fatal("exportCsv() 第一件事必须是 syncFilterInputs()")
+	}
+	if !strings.Contains(code, "const qs = new URLSearchParams((typeof params === 'function' ? params() : params) || {});") {
+		t.Fatal("exportCsv() 必须支持惰性参数（函数），否则同步前就已经把输入框的旧值读走了")
+	}
+	for _, lazy := range []string{
+		"exportCsv('assets', assetFilterParams)",
+		"exportCsv('jobs', jobFilterParams)",
+		"exportCsv('purchases', purchaseFilterParams)",
+		"exportCsv('feedback', fbFilterParams)",
+	} {
+		if !strings.Contains(code, lazy) {
+			t.Errorf("导出按钮必须传惰性参数取值函数：%s", lazy)
+		}
+	}
+}
