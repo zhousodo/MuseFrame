@@ -13,7 +13,7 @@ import (
 // 🔴 为什么用 Go 测试去断言一份 HTML：这个文件是生产里**逐字节同步**到
 // /srv/platform/apps/museframe/data/web/ 的唯一后台界面，仓库里没有任何 JS
 // 测试运行器能跑它（package.json 的 test 只跑旧 Node 后端的 server/test）。
-// 下面四条都是 2026-09-12 浏览器验收实际扫出来的缺陷，不是风格偏好 ——
+// 下面每一条都是浏览器验收实际扫出来的缺陷，不是风格偏好 ——
 // 回归成本是「下一次验收又要人去点一遍」，所以钉在 `go test` 里。
 func adminHTML(t *testing.T) string {
 	t.Helper()
@@ -41,7 +41,14 @@ func adminCode(t *testing.T) string {
 	return blockComment.ReplaceAllString(s, "")
 }
 
-// 缺陷 ③：总览上有 1 个空图元素。真凶是大图查看器里那个常驻的 <img id="viewerImg">
+// adminViews 是左侧导航的 15 个视图。每加一个视图，这里、导航、section、
+// loadTabByName 分支必须同时加 —— 漏掉任何一环的表现都是「点了导航没反应」。
+var adminViews = []string{
+	"overview", "stats", "users", "purchases", "jobs", "assets", "styles",
+	"products", "feedback", "events", "email", "config", "health", "audit", "db",
+}
+
+// 缺陷 ③：总览上有 1 个空图元素。真凶是大图查看器里那个常驻的 <img>
 // —— 它在每个标签页都存在且没有 src，浏览器按空图处理（还会发一次指向当前页的请求）。
 // 断言静态标记里**一个没有 src 的 <img> 都不许有**，且不许出现 src=""。
 func TestAdminHTMLHasNoEmptyImg(t *testing.T) {
@@ -66,9 +73,9 @@ func TestAdminHTMLHasNoEmptyImg(t *testing.T) {
 	if !strings.Contains(html, "function closeViewer(") {
 		t.Fatal("少了 closeViewer()：查看器关掉后必须把 img 从 DOM 里拆掉")
 	}
-	// 缩略图 / 封面为空时渲染「—」或「无封面」，不渲染 img。
-	if !strings.Contains(html, `if (!aid) return '<span class="muted">—</span>';`) {
-		t.Fatal("thumb() 必须在资产 id 为空时渲染「—」而不是 <img>")
+	// 缩略图 / 封面为空时渲染占位方块或「无封面」，不渲染 img。
+	if !strings.Contains(html, `if (!aid) return '<div class="nothumb"`) {
+		t.Fatal("thumb() 必须在资产 id 为空时渲染占位方块而不是 <img>")
 	}
 	if !strings.Contains(html, `const cover = (s.coverUrl && String(s.coverUrl).trim())`) {
 		t.Fatal("封面必须在 coverUrl 为空/空白串时走 nocover 分支，不渲染 <img>")
@@ -107,7 +114,7 @@ func TestAdminHTMLShowsBeijingTimeWithLabel(t *testing.T) {
 	}
 	// 每一个「时间」列头都要有时区标注，否则看的人无从判断。
 	if n := strings.Count(code, "<th>时间 (UTC+8)</th>"); n < 4 {
-		t.Fatalf("带 (UTC+8) 标注的「时间」列头应有 4 个（任务/购买/反馈/审计），实际 %d", n)
+		t.Fatalf("带 (UTC+8) 标注的「时间」列头至少 4 个（任务/购买/反馈/审计），实际 %d", n)
 	}
 	if !strings.Contains(html, "<th>注册时间 (UTC+8)</th>") {
 		t.Fatal("用户表「注册时间」列头少了 (UTC+8) 标注")
@@ -115,9 +122,9 @@ func TestAdminHTMLShowsBeijingTimeWithLabel(t *testing.T) {
 	if strings.Contains(code, "<th>时间</th>") || strings.Contains(code, "<th>注册时间</th>") {
 		t.Fatal("还有没带时区标注的时间列头")
 	}
-	// 页头那行「数据时间」也必须是北京时间 + 标注（它就是验收里那个 04:41）。
+	// 顶栏那行「数据时间」也必须是北京时间 + 标注（它就是验收里那个 04:41）。
 	if !strings.Contains(html, "`数据时间 ${nowBJ()} ${TZ_LABEL}`") {
-		t.Fatal("页头「数据时间」必须显示带 (UTC+8) 标注的北京时间")
+		t.Fatal("顶栏「数据时间」必须显示带 (UTC+8) 标注的北京时间")
 	}
 	// 运行状态里的启动时间 / 服务器时间同样换算。
 	if strings.Contains(code, "服务器时间 ${escapeHtml(rt.serverTime||'—')}（UTC）") {
@@ -126,8 +133,6 @@ func TestAdminHTMLShowsBeijingTimeWithLabel(t *testing.T) {
 }
 
 // 缺陷 ④：写操作之后审计列表要手动刷新才看得到刚刚那一行。
-// 后端会留痕的动作共 5 类（config.set / product.update / style.update /
-// style.status / user.status），前端对应 7 个写入口都必须调 refreshAudit()。
 func TestAdminHTMLRefreshesAuditAfterWrites(t *testing.T) {
 	html := adminHTML(t)
 	code := adminCode(t)
@@ -135,13 +140,12 @@ func TestAdminHTMLRefreshesAuditAfterWrites(t *testing.T) {
 	if !strings.Contains(html, "async function refreshAudit(){") {
 		t.Fatal("缺少 refreshAudit()")
 	}
-	// 还没打开过运营页就不发请求（showTab 第一次切过去时会 loadOps）。
-	if !strings.Contains(html, "if (!tabState.ops) return;") {
-		t.Fatal("refreshAudit() 必须在运营页未加载时直接返回，不为看不见的面板发请求")
+	// 还没打开过审计视图就不发请求（showTab 第一次切过去时会 loadAudit）。
+	if !strings.Contains(html, "if (!tabState.audit) return;") {
+		t.Fatal("refreshAudit() 必须在审计视图未加载时直接返回，不为看不见的面板发请求")
 	}
 	// 10 个写入口：用户禁用/启用、配置保存、配置恢复默认、风格保存、
-	// 风格上下架、商品保存、商品上下架，外加 2026-09-12 第四轮新增的
-	// 任务重试、购买重验、反馈标记已处理。
+	// 风格上下架、商品保存、商品上下架、任务重试、购买重验、反馈标记已处理。
 	//
 	// 🔴 这个数字必须跟着后端的「留痕动作」一起涨。新加一个会写审计的后台动作
 	// 却忘了刷新审计表，现象是运营点完之后去审计页看不到自己那一行 ——
@@ -167,36 +171,35 @@ func TestAdminHTMLRefreshesAuditAfterWrites(t *testing.T) {
 	}
 }
 
-// ---- 2026-09-12 第四轮：全链路可见性的前端侧回归 --------------------------
-
-// 三个新标签页必须完整存在：按钮、TABS 数组、section、路由分支、加载函数。
-// 漏掉任何一环的表现都是「点了标签页没反应」或「空白页」，而那只有人工点才发现。
-func TestAdminHTMLHasVisibilityTabs(t *testing.T) {
+// 15 个视图必须完整存在：导航项、TABS 数组、section、路由分支。
+// 漏掉任何一环的表现都是「点了导航没反应」或「空白页」，而那只有人工点才发现。
+func TestAdminHTMLHasAllViews(t *testing.T) {
 	html := adminHTML(t)
-	for _, tab := range []string{"events", "assets", "health"} {
-		if !strings.Contains(html, `data-tab="`+tab+`"`) {
-			t.Errorf("缺少 %s 标签按钮", tab)
+	for _, v := range adminViews {
+		if !strings.Contains(html, `data-view="`+v+`"`) {
+			t.Errorf("左侧导航缺少 %s", v)
 		}
-		if !strings.Contains(html, `id="tab-`+tab+`"`) {
-			t.Errorf("缺少 %s 的 section", tab)
+		if !strings.Contains(html, `id="view-`+v+`"`) {
+			t.Errorf("缺少 %s 的 section", v)
 		}
-		if !strings.Contains(html, `'`+tab+`'`) {
-			t.Errorf("TABS 数组里缺少 %q", tab)
+		if !strings.Contains(html, `'`+v+`'`) {
+			t.Errorf("TABS 数组里缺少 %q", v)
+		}
+		if !strings.Contains(html, `if (name === '`+v+`')`) {
+			t.Errorf("loadTabByName 缺少路由分支：%s", v)
 		}
 	}
-	for _, fn := range []string{"loadEvents", "loadAssets", "loadHealth", "openUserDetail", "exportCsv"} {
+	for _, fn := range []string{
+		"loadEvents", "loadAssets", "loadHealth", "loadEmailLog", "loadAudit",
+		"openUserDetail", "exportCsv", "loadJobsTable", "loadPurchasesTable", "loadFeedbackTable",
+	} {
 		if !strings.Contains(html, "function "+fn+"(") {
 			t.Errorf("缺少 %s()", fn)
 		}
 	}
-	for _, branch := range []string{
-		`if (name === 'events') return loadEvents();`,
-		`if (name === 'assets') return loadAssets();`,
-		`if (name === 'health') return loadHealth();`,
-	} {
-		if !strings.Contains(html, branch) {
-			t.Errorf("loadTabByName 缺少路由分支：%s", branch)
-		}
+	// 旧书签（#ops 这类）必须还能落到某个视图，不能白屏。
+	if !strings.Contains(html, "const TAB_ALIASES") {
+		t.Error("缺少旧 hash 的兼容表 TAB_ALIASES")
 	}
 }
 
@@ -245,7 +248,7 @@ func TestAdminHTMLExportsCSVViaFetchNotNavigation(t *testing.T) {
 	}
 }
 
-// 反馈表必须显示**用户写的正文**。这是这一轮审计抓到的黑洞：
+// 反馈表必须显示**用户写的正文**。这是审计抓到过的黑洞：
 // comment 从建库起就在落库，后台此前从来没显示过它。
 func TestAdminHTMLShowsFeedbackCommentAndHandledToggle(t *testing.T) {
 	code := adminCode(t)
@@ -285,12 +288,9 @@ func TestAdminHTMLHasRetryAndReverifyEntries(t *testing.T) {
 	}
 }
 
-// ---- 2026-09-12 第五轮：后台验收的两个小瑕疵 ----------------------------
-
 // 🔴 占位文字不许直接写在 <table> 里。HTML 解析器对 table 内的裸文本做
-// foster parenting：把它挪到 <table> **前面**（成了外层 .wrap 的子节点），
+// foster parenting：把它挪到 <table> **前面**（成了外层容器的子节点），
 // 而渲染函数只改 table.innerHTML —— 于是「加载中…」永久钉在表头上方。
-// 2026-09-12 的验收在资产表 / 健康表 / 发信记录 / 验证码台账 4 张表上都看到了它。
 // 正确写法是包进 <tbody><tr><td colspan=N>，这样它是表的子节点，第一次渲染就被换掉。
 func TestAdminHTMLHasNoFosterParentedLoadingText(t *testing.T) {
 	code := adminCode(t)
@@ -307,28 +307,29 @@ func TestAdminHTMLHasNoFosterParentedLoadingText(t *testing.T) {
 			t.Errorf("#%s 的加载占位是表里的裸文本，必须包进 <tbody><tr><td>", id)
 		}
 	}
-	// 四张表的占位必须带上和表头一样宽的 colspan，否则占位行只占第一列。
+	// 每张表的占位必须带上和表头一样宽的 colspan，否则占位行只占第一列。
 	for _, want := range []struct {
 		id   string
 		cols string
 	}{
-		{"assetsTable", "9"}, {"healthTable", "7"}, {"emailSends", "5"}, {"emailCodes", "5"},
+		{"recentJobs", "6"}, {"jobs", "11"}, {"purchases", "9"}, {"feedback", "9"},
+		{"usersTable", "10"}, {"assetsTable", "10"}, {"stylesRank", "9"},
+		{"healthTable", "7"}, {"emailSends", "5"}, {"emailCodes", "5"},
 	} {
-		ph := `<table id="` + want.id + `"><tbody><tr><td colspan="` + want.cols + `" class="muted">加载中…</td></tr></tbody></table>`
+		ph := `<table id="` + want.id + `"><tbody><tr><td colspan="` + want.cols + `" class="loading">加载中…</td></tr></tbody></table>`
 		if !strings.Contains(code, ph) {
 			t.Errorf("#%s 缺少 colspan=%s 的 tbody 占位行", want.id, want.cols)
 		}
 	}
 	// email-log 的两张表共用一个 catch：只给 emailSends 落错误，
 	// emailCodes 就会永久停在「加载中…」。
-	if !strings.Contains(code, "$('emailCodes').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`") {
+	if !strings.Contains(code, "$('emailCodes').innerHTML = errRow(5, e.message);") {
 		t.Error("email-log 出错时 emailCodes 也必须落错误，不能停在「加载中…」")
 	}
 }
 
 // 🔴 自由文本筛选框只绑 Enter，而「导出 CSV」读输入框的**当前值** ——
-// 「填了用户 ID 但没按回车就点导出」会得到一份和表里不一致的 CSV（表是全量、CSV 被筛过）。
-// 修法两头都要：输入框补 change/blur，导出前再强制同步一次。
+// 「填了用户 ID 但没按回车就点导出」会得到一份和表里不一致的 CSV。
 func TestAdminHTMLFilterInputsApplyOnBlurAndSyncBeforeExport(t *testing.T) {
 	code := adminCode(t)
 
@@ -382,5 +383,198 @@ func TestAdminHTMLFilterInputsApplyOnBlurAndSyncBeforeExport(t *testing.T) {
 		if !strings.Contains(code, lazy) {
 			t.Errorf("导出按钮必须传惰性参数取值函数：%s", lazy)
 		}
+	}
+}
+
+// ---- 2026-09-12 第六轮：四个后台统一视觉规范 ------------------------------
+
+// 🔴 原生 confirm()/prompt()/alert() 一律不许再用：
+//  1. 自动化（验收脚本、浏览器代理）点不到它，于是每一个危险动作都只能靠人手点；
+//  2. 部分内嵌浏览器直接禁用原生弹窗，prompt() 返回 null —— 表现是
+//     「点了禁用没反应」，而禁用必须填原因这条规则就这么被静默跳过了；
+//  3. 样式与后台完全脱节，红色二次确认根本做不出来。
+func TestAdminHTMLUsesInPageDialogsNotNativePrompts(t *testing.T) {
+	code := adminCode(t)
+	for _, bad := range []string{"confirm(", "prompt(", "alert("} {
+		// confirmBox( / promptBox( 是页面内对话框，要排除掉再找原生调用。
+		cleaned := strings.ReplaceAll(code, "confirmBox(", "")
+		cleaned = strings.ReplaceAll(cleaned, "promptBox(", "")
+		if strings.Contains(cleaned, bad) {
+			t.Errorf("admin.html 仍在用原生 %s)：危险动作必须走页面内对话框", strings.TrimSuffix(bad, "("))
+		}
+	}
+	for _, want := range []string{
+		"function openModal(opts)",
+		"function confirmBox(title, bodyHtml, opts)",
+		"function promptBox(title, bodyHtml, input, opts)",
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("缺少页面内对话框：%s", want)
+		}
+	}
+	// 危险动作用红色确认按钮（danger:true 或对话框默认 danger）。
+	if !strings.Contains(code, `danger:true`) {
+		t.Error("危险操作必须有红色二次确认（danger:true）")
+	}
+	// 禁用账号那条：原因必填，且必填是在对话框里挡住的。
+	if !strings.Contains(code, "required:true") {
+		t.Error("禁用账号的原因必须在对话框里就挡住（required:true）")
+	}
+}
+
+// 缩略图必须按显示尺寸取图。后端支持 ?w=，前端 36×45 的格子请求 96px。
+//
+// 🔴 线上原图 400KB–1MB，一屏任务表 22 张 ≈ 12MB —— 这就是验收里
+// 「缩略图加载慢」的全部原因。大图查看器仍然取原图（data-full）。
+func TestAdminHTMLRequestsDownscaledThumbnails(t *testing.T) {
+	code := adminCode(t)
+	if !strings.Contains(code, "const THUMB_W = 96;") {
+		t.Fatal("缺少缩略图请求宽度常量 THUMB_W")
+	}
+	if !strings.Contains(code, "`&w=${w}`") {
+		t.Fatal("assetUrl() 必须把 w= 拼进缩略图 URL")
+	}
+	if !strings.Contains(code, "assetUrl(aid, THUMB_W)") {
+		t.Fatal("thumb() 必须请求下采样后的缩略图，而不是原图")
+	}
+	if !strings.Contains(code, `data-full="${assetUrl(aid, 0)}"`) {
+		t.Fatal("缩略图必须带 data-full（大图查看器用它取原图）")
+	}
+	if !strings.Contains(code, `loading="lazy"`) {
+		t.Error("缩略图应当 loading=\"lazy\"")
+	}
+}
+
+// 统一视觉规范的骨架：左侧固定导航 220px、顶部栏（产品名 + 环境 + 登出）、
+// 内容区 ≤1280px、≤768px 抽屉式导航。
+func TestAdminHTMLFollowsSharedLayoutSpec(t *testing.T) {
+	code := adminCode(t)
+	for _, want := range []string{
+		"--nav-w:220px",
+		"--content:1280px",
+		"--primary:#2563eb",
+		"--ok:#16a34a",
+		"--warn:#d97706",
+		"--err:#dc2626",
+		"--muted:#6b7280",
+		"--line:#e5e7eb",
+		`-apple-system,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","Segoe UI",sans-serif`,
+		"@media (max-width:768px)",
+		"body.navopen .nav",
+		`id="logoutBtn"`,
+		`id="envBadge"`,
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("不符合统一视觉规范，缺少：%s", want)
+		}
+	}
+	// 🔴 表头吸顶必须让 .tw 自己成为纵向滚动容器。只写 overflow-x:auto 时
+	// overflow-y 会被规范提升成 auto，sticky 于是相对这个不滚动的盒子定位 ——
+	// 表现是表头被往下推、压住第一行数据（验收当场看到过）。
+	if !strings.Contains(code, ".tw{overflow:auto;max-height:") {
+		t.Error(".tw 必须是纵向可滚动容器（否则 sticky 表头会压住第一行）")
+	}
+	if !strings.Contains(code, "th{position:sticky;top:0;") {
+		t.Error("表头必须吸顶（position:sticky; top:0）")
+	}
+	// 数字列右对齐 + 等宽。
+	if !strings.Contains(code, "td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;") {
+		t.Error("数字列必须右对齐且等宽")
+	}
+	// 斑马纹。
+	if !strings.Contains(code, "tbody tr:nth-child(even) td") {
+		t.Error("表格必须有斑马纹")
+	}
+}
+
+// 🔴 页面上绝不允许出现「—」「undefined」「NaN」这类占位：
+// 「—」既可能是「这里本来就没有」也可能是「取数取挂了」，而这两件事的
+// 处理方式完全相反。空值一律换成一句人话（「无」「未记录」「游客（无邮箱）」）。
+func TestAdminHTMLHasNoDashPlaceholders(t *testing.T) {
+	code := adminCode(t)
+	if strings.Contains(code, "'—'") || strings.Contains(code, `"—"`) ||
+		strings.Contains(code, ">—<") || strings.Contains(code, "|| '—'") {
+		t.Error("页面上仍有「—」占位，必须换成说明性的空态文案")
+	}
+	// isNaN(...) 是**防止**渲染出 NaN 的那段代码本身，摘掉再找裸 NaN。
+	noGuards := strings.ReplaceAll(code, "isNaN(", "")
+	for _, bad := range []string{"${undefined}", "NaN"} {
+		if strings.Contains(noGuards, bad) {
+			t.Errorf("页面上可能渲染出 %s", bad)
+		}
+	}
+	// 空态统一走这三个辅助件，避免每处各写各的。
+	for _, want := range []string{
+		"function none(word)", "function txt(v, word)", "function numCell(v, suffix, word)",
+		"function emptyRow(cols, word)", "function errRow(cols, msg)",
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("缺少统一空态辅助件：%s", want)
+		}
+	}
+}
+
+// 长 id 必须「截断 + 悬停看全 + 一键复制」：验收里运维要把用户 id 粘到
+// 数据库查询台，而页面上只有前 8 位、还不能选中复制。
+func TestAdminHTMLLongIDsAreCopyable(t *testing.T) {
+	code := adminCode(t)
+	for _, want := range []string{
+		"function idCell(id, word)", "function userCell(userId, email)",
+		`data-copy="${escapeHtml(s)}"`, "navigator.clipboard.writeText(v)",
+		".idc code{max-width:13ch;overflow:hidden;text-overflow:ellipsis;",
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("长 id 的截断/复制没做全，缺少：%s", want)
+		}
+	}
+}
+
+// 配置页有 50+ 项，一条长滚动没法用：必须有搜索、分组锚点、就地保存提示。
+func TestAdminHTMLConfigIsNavigable(t *testing.T) {
+	code := adminCode(t)
+	for _, want := range []string{
+		`id="cfgSearch"`, `id="cfgJump"`, "function filterConfig()", "function cfgSaved(key, msg, isErr)",
+		"合法区间 ", "（越界会被拒绝保存，不会悄悄夹一下）",
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("配置页缺少：%s", want)
+		}
+	}
+	// 风格 30 个，同样要能搜、能按状态筛。
+	for _, want := range []string{`id="styleSearch"`, `id="styleStatusFilter"`, "function styleMatches(s, kw, status)"} {
+		if !strings.Contains(code, want) {
+			t.Errorf("风格页缺少：%s", want)
+		}
+	}
+}
+
+// 🔴 AI 生成内容标识那一列 / 那一组配置是合规要求（《人工智能生成合成内容标识办法》），
+// 不是装饰。后台重构时最容易悄悄丢掉的就是这种「别人刚加进来的一列」——
+// 丢了之后没有任何报错，只是再也没人能逐行核对哪张成品标了什么。
+func TestAdminHTMLKeepsAIGCLabelSurface(t *testing.T) {
+	code := adminCode(t)
+	for _, want := range []string{
+		"function aigcCell(a){", "a.aigcLabel", "'visible+meta'", "<th>AI 标识</th>",
+		"['aigc', 'AI 生成内容标识（合规）'",
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("AI 标识功能被弄丢了，缺少：%s", want)
+		}
+	}
+}
+
+// 后台不引任何外部资源：引一个 CDN 就等于给后台加一个我们不控制的单点。
+func TestAdminHTMLHasNoExternalResources(t *testing.T) {
+	code := adminCode(t)
+	for _, bad := range []string{"http://", "https://"} {
+		// 允许 SVG 命名空间那一处（不是网络请求）。
+		cleaned := strings.ReplaceAll(code, `xmlns="http://www.w3.org/2000/svg"`, "")
+		if strings.Contains(cleaned, bad+"cdn") || strings.Contains(cleaned, bad+"unpkg") ||
+			strings.Contains(cleaned, bad+"fonts.googleapis") {
+			t.Errorf("admin.html 引了外部资源（%s…）", bad)
+		}
+	}
+	if strings.Contains(code, "<script src=") || strings.Contains(code, "<link rel=\"stylesheet\"") {
+		t.Error("admin.html 必须是单文件：不许有 <script src> / 外链样式表")
 	}
 }

@@ -223,10 +223,16 @@ func (a *App) hAdminAssetFile(c *Ctx) (any, error) {
 	if err != nil {
 		return nil, notFound("File missing.")
 	}
-	c.W.Header().Set("Content-Type", asset.ContentType)
+	// ?w=96 这样的请求来自后台表格里的 36×45 缩略图：按最长边缩完再发，
+	// 省掉「为了画几十个像素推一张 1MB 原图」。不带 w= 的（大图查看器）走原图。
+	body, ct := a.thumbnail(asset.ID, parseThumbWidth(c.URL.Query().Get("w")), raw)
+	if ct == "" {
+		ct = asset.ContentType
+	}
+	c.W.Header().Set("Content-Type", ct)
 	c.W.Header().Set("Cache-Control", "private, max-age=300")
 	c.W.WriteHeader(http.StatusOK)
-	_, _ = c.W.Write(raw)
+	_, _ = c.W.Write(body)
 	c.Handled = true
 	return nil, nil
 }
