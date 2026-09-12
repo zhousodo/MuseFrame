@@ -87,7 +87,11 @@ func (a *App) hEmailRequest(c *Ctx) (any, error) {
 	if a.mailer == nil || !a.mailer.Configured() {
 		return nil, apierr.New(501, apierr.CodeProviderNotConfigured, "邮件服务未配置。")
 	}
-	if err := a.mailer.SendLoginCode(email, code); err != nil {
+	sendErr := a.mailer.SendLoginCode(email, code)
+	// 每一次尝试都落一条记录（成功和失败都落）—— 后台的「邮件」页就是靠它
+	// 回答「用户说收不到验证码」。此前唯一的痕迹是一行进不了后台的 warn 日志。
+	a.recordEmailSend(ctx, "login_code", email, sendErr)
+	if err := sendErr; err != nil {
 		a.lg.Warn("email: 验证码发送失败", nil)
 		// 非测试模式下**在 upsert 之前**退出：发送失败还去覆盖存储的哈希，
 		// 会把用户手上那个还能用的验证码作废掉。

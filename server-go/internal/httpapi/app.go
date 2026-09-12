@@ -18,6 +18,7 @@ import (
 	"museframe-api/internal/cfgstore"
 	"museframe-api/internal/config"
 	"museframe-api/internal/logx"
+	"museframe-api/internal/metrics"
 	"museframe-api/internal/netx"
 	"museframe-api/internal/oidc"
 	"museframe-api/internal/play"
@@ -73,6 +74,10 @@ type App struct {
 	ipSalt     string
 	version    string
 	adminTok   []byte
+	// mx 是进程内的每接口请求计数器，喂后台的「接口健康」视图。
+	// 它是**进程内**的：重启清零、多副本各算各的。后台那一节明写了这两条 ——
+	// 把它说成「全站 24h 统计」会让运维在扩副本之后拿一个副本的数字做判断。
+	mx *metrics.Registry
 	// startedAt 是进程起来的时刻（用注入的时钟取，测试里是确定值）。
 	// 后台据此显示「跑了多久」—— 「改完配置到底有没有重启」此前在面板上无从得知。
 	startedAt time.Time
@@ -129,6 +134,7 @@ func New(o Options) *App {
 		adminTok: []byte(o.Config.AdminToken),
 		limiter:  ratelimit.New(o.Config.RateLimitMaxKeys, func() time.Time { return now() }),
 		ipr:      netx.NewIPResolver(o.Config.TrustedProxy, o.Config.TrustCFIP),
+		mx:       metrics.New(func() time.Time { return now() }),
 	}
 	a.startedAt = now()
 	a.registerPublicRoutes()

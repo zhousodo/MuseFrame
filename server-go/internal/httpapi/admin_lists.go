@@ -75,38 +75,102 @@ func (a *App) hAdminOverview(c *Ctx) (any, error) {
 	}, nil
 }
 
+// jobsNote 是任务视图的口径说明。
+const jobsNote = "App 通过 POST /v1/generation-jobs 创建、GET /v1/generation-jobs/{id} 轮询的生成任务。" +
+	"可按状态与时间窗筛选；失败原因码、上游返回摘要、生成参数、被重试次数都在行里。" +
+	"「重试」新建一条带 parent_job_id 的任务并重新预留额度（失败时已退过，净额不变）。"
+
 func (a *App) hAdminJobs(c *Ctx) (any, error) {
 	if err := a.requireAdmin(c); err != nil {
 		return nil, err
 	}
-	limit := clampLimit(c.URL.Query().Get("limit"), 60, 200)
-	rows, err := store.ListAdminJobs(c.R.Context(), a.st.Q(), limit)
+	ctx := c.R.Context()
+	q := c.URL.Query()
+	f := store.JobFilter{
+		Status:     pickEnum(q.Get("status"), "created", "queued", "running", "quality_check", "succeeded", "failed", "cancelled"),
+		SinceHours: clampOptionalHours(q.Get("sinceHours")),
+		UserID:     truncateRunes(trimSpace(q.Get("userId")), 64),
+		Limit:      clampLimit(q.Get("limit"), 60, 500),
+	}
+	rows, err := store.ListAdminJobsFiltered(ctx, a.st.Q(), f, a.now())
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"jobs": rows}, nil
+	counts, err := store.CountJobsByStatus(ctx, a.st.Q())
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"note": jobsNote, "jobs": rows, "statusCounts": counts,
+		"filter": map[string]any{"status": f.Status, "sinceHours": f.SinceHours, "userId": f.UserID},
+		// 上限是热键：达到它的任务会被 worker 判死，运营据此判断「还会不会自己重试」。
+		"maxAttempts": a.worker.MaxAttempts(),
+	}, nil
 }
+
+// feedbackNote 是反馈视图的口径说明。
+const feedbackNote = "App 通过 POST /v1/candidates/{id}/feedback 提交的评价。" +
+	"🔴 2026-09-12 起这张表才显示**用户写的正文**（comment 从建库起就在落库，此前后台从未 SELECT 它）。" +
+	"「标记已处理」会记一条审计；取消标记会把备注一起清掉。"
 
 func (a *App) hAdminFeedback(c *Ctx) (any, error) {
 	if err := a.requireAdmin(c); err != nil {
 		return nil, err
 	}
-	rows, err := store.ListAdminFeedback(c.R.Context(), a.st.Q())
+	ctx := c.R.Context()
+	q := c.URL.Query()
+	f := store.FeedbackFilter{
+		Rating:  pickEnum(q.Get("rating"), "positive", "negative"),
+		Handled: pickEnum(q.Get("handled"), "yes", "no"),
+		Limit:   clampLimit(q.Get("limit"), 100, 500),
+	}
+	rows, err := store.ListAdminFeedbackFull(ctx, a.st.Q(), f)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"feedback": rows}, nil
+	unhandled, err := store.CountFeedbackUnhandled(ctx, a.st.Q())
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"note": feedbackNote, "feedback": rows, "unhandled": unhandled,
+		"filter": map[string]any{"rating": f.Rating, "handled": f.Handled},
+	}, nil
 }
+
+// purchaseStatuses 是 purchases.status 的**实际**词汇表。
+//
+// 🔴 只有这两个值。别按直觉补上 active / refunded / expired ——
+// 那会让筛选下拉里出现三个永远筛出 0 行的选项，而运营会据此以为
+// 「没有退款单」（真相是退款这件事在这套后端里根本没有状态位）。
+var purchaseStatuses = []string{"pending", "verified"}
+
+// purchasesNote 是购买视图的口径说明。
+const purchasesNote = "App 通过 POST /v1/purchases/verify 报上来的购买。" +
+	"平台 / 交易号 / 金额 / 状态齐全，「入账额度」是这笔钱实际发出去的份数 —— " +
+	"status=verified 而入账额度为 0 就是一笔漏入账的事故。" +
+	"「重验」只补发缺失的额度（幂等，重复点不会多发），只对 verified 的单子生效；" +
+	"它**不会**重新向商店要收据 —— 购买令牌只存在于 App 那一次请求里，从不落库。" +
+	"状态只有 pending / verified 两个值。"
 
 func (a *App) hAdminPurchases(c *Ctx) (any, error) {
 	if err := a.requireAdmin(c); err != nil {
 		return nil, err
 	}
-	rows, err := store.ListAdminPurchases(c.R.Context(), a.st.Q())
+	q := c.URL.Query()
+	f := store.PurchaseFilter{
+		Status:   pickEnum(q.Get("status"), purchaseStatuses...),
+		Platform: pickEnum(q.Get("platform"), "google", "apple", "web"),
+		Limit:    clampLimit(q.Get("limit"), 100, 500),
+	}
+	rows, err := store.ListAdminPurchasesFull(c.R.Context(), a.st.Q(), f)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"purchases": rows}, nil
+	return map[string]any{
+		"note": purchasesNote, "purchases": rows,
+		"filter": map[string]any{"status": f.Status, "platform": f.Platform},
+	}, nil
 }
 
 func (a *App) hAdminUsers(c *Ctx) (any, error) {
@@ -125,8 +189,13 @@ func (a *App) hAdminUsers(c *Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"users": rows}, nil
+	return map[string]any{"note": usersNote, "users": rows}, nil
 }
+
+// usersNote 是用户视图的口径说明。
+const usersNote = "注册 / 登录（/v1/auth/exchange、/v1/auth/email/verify）产生的账号。" +
+	"可按 id 前缀、昵称、邮箱搜索。点一行进详情：额度账本、项目、任务、资产、购买、会话、反馈。" +
+	"列表里的 id 只有前 8 位（脱敏），完整 id 在详情页。"
 
 func (a *App) hAdminImgToken(c *Ctx) (any, error) {
 	if err := a.requireAdmin(c); err != nil {

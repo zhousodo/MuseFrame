@@ -139,9 +139,14 @@ func TestAdminHTMLRefreshesAuditAfterWrites(t *testing.T) {
 	if !strings.Contains(html, "if (!tabState.ops) return;") {
 		t.Fatal("refreshAudit() 必须在运营页未加载时直接返回，不为看不见的面板发请求")
 	}
-	// 7 个写入口：用户禁用/启用、配置保存、配置恢复默认、风格保存、
-	// 风格上下架、商品保存、商品上下架。
-	const wantCalls = 7
+	// 10 个写入口：用户禁用/启用、配置保存、配置恢复默认、风格保存、
+	// 风格上下架、商品保存、商品上下架，外加 2026-09-12 第四轮新增的
+	// 任务重试、购买重验、反馈标记已处理。
+	//
+	// 🔴 这个数字必须跟着后端的「留痕动作」一起涨。新加一个会写审计的后台动作
+	// 却忘了刷新审计表，现象是运营点完之后去审计页看不到自己那一行 ——
+	// 然后他会以为「这次没留痕」，再点一次。
+	const wantCalls = 10
 	if n := strings.Count(code, "refreshAudit();"); n != wantCalls {
 		t.Fatalf("refreshAudit() 调用点应为 %d 个（每个留痕写入口一个），实际 %d", wantCalls, n)
 	}
@@ -152,9 +157,130 @@ func TestAdminHTMLRefreshesAuditAfterWrites(t *testing.T) {
 		"    toast('已恢复默认');\n    refreshAudit();",
 		"    loadOpsStyles();\n    refreshAudit();",
 		"    loadOpsProducts();\n    refreshAudit();",
+		"    loadJobsTable();\n    refreshAudit();",
+		"    loadPurchasesTable();\n    refreshAudit();",
+		"    loadFeedbackTable();\n    refreshAudit();",
 	} {
 		if !strings.Contains(html, anchor) {
 			t.Fatalf("写操作成功后没有接上 refreshAudit()：%q", anchor)
 		}
+	}
+}
+
+// ---- 2026-09-12 第四轮：全链路可见性的前端侧回归 --------------------------
+
+// 三个新标签页必须完整存在：按钮、TABS 数组、section、路由分支、加载函数。
+// 漏掉任何一环的表现都是「点了标签页没反应」或「空白页」，而那只有人工点才发现。
+func TestAdminHTMLHasVisibilityTabs(t *testing.T) {
+	html := adminHTML(t)
+	for _, tab := range []string{"events", "assets", "health"} {
+		if !strings.Contains(html, `data-tab="`+tab+`"`) {
+			t.Errorf("缺少 %s 标签按钮", tab)
+		}
+		if !strings.Contains(html, `id="tab-`+tab+`"`) {
+			t.Errorf("缺少 %s 的 section", tab)
+		}
+		if !strings.Contains(html, `'`+tab+`'`) {
+			t.Errorf("TABS 数组里缺少 %q", tab)
+		}
+	}
+	for _, fn := range []string{"loadEvents", "loadAssets", "loadHealth", "openUserDetail", "exportCsv"} {
+		if !strings.Contains(html, "function "+fn+"(") {
+			t.Errorf("缺少 %s()", fn)
+		}
+	}
+	for _, branch := range []string{
+		`if (name === 'events') return loadEvents();`,
+		`if (name === 'assets') return loadAssets();`,
+		`if (name === 'health') return loadHealth();`,
+	} {
+		if !strings.Contains(html, branch) {
+			t.Errorf("loadTabByName 缺少路由分支：%s", branch)
+		}
+	}
+}
+
+// 每个视图顶部那句说明必须来自**后端**（note 字段），不能在前端硬编码。
+// 说明里写的是口径（窗口多长、按什么时区切、哪些行被排除、进程内还是全站），
+// 而口径是后端决定的 —— 前端抄一份等于留一份一定会过期的副本。
+func TestAdminHTMLRendersBackendSuppliedNotes(t *testing.T) {
+	html := adminHTML(t)
+	for _, id := range []string{
+		"eventsNote", "assetsNote", "healthNote", "emailLogNote",
+		"jobsNote", "purchasesNote", "feedbackNote", "usersNote",
+	} {
+		if !strings.Contains(html, `id="`+id+`"`) {
+			t.Errorf("缺少说明占位元素 #%s", id)
+		}
+		if !strings.Contains(html, `$('`+id+`').textContent`) {
+			t.Errorf("#%s 没有从后端的 note 字段赋值", id)
+		}
+	}
+}
+
+// 🔴 CSV 导出必须走 fetch + blob，绝不能用 <a href download> 或 window.open：
+// 管理员令牌走请求头，浏览器发起的导航带不上头 —— 那样的链接一律回 401，
+// 而运维看到的是「点了导出，下载了一个 5 字节的文件」。
+func TestAdminHTMLExportsCSVViaFetchNotNavigation(t *testing.T) {
+	code := adminCode(t)
+	if !strings.Contains(code, `fetch(url, { headers: { 'x-admin-token': TOK } })`) {
+		t.Fatal("CSV 导出必须用 fetch 并把令牌放在请求头里")
+	}
+	if strings.Contains(code, "window.open('/v1/admin/export") ||
+		strings.Contains(code, `href="/v1/admin/export`) {
+		t.Fatal("CSV 导出不能用导航（window.open / <a href>）—— 带不上 x-admin-token 头")
+	}
+	// 六个导出按钮，和后端的 exportKinds 一一对应。
+	for _, id := range []string{
+		"eventsExport", "assetsExport", "jobsExport", "purchasesExport", "feedbackExport", "usersExport",
+	} {
+		if !strings.Contains(code, `id="`+id+`"`) {
+			t.Errorf("缺少导出按钮 #%s", id)
+		}
+	}
+	for _, kind := range exportKinds {
+		if !strings.Contains(code, `exportCsv('`+kind+`'`) {
+			t.Errorf("没有调用 exportCsv(%q)", kind)
+		}
+	}
+}
+
+// 反馈表必须显示**用户写的正文**。这是这一轮审计抓到的黑洞：
+// comment 从建库起就在落库，后台此前从来没显示过它。
+func TestAdminHTMLShowsFeedbackCommentAndHandledToggle(t *testing.T) {
+	code := adminCode(t)
+	if !strings.Contains(code, "f.comment") {
+		t.Fatal("反馈表没有显示用户写的正文（f.comment）")
+	}
+	// 字段名是 camelCase 的 reasonCodes（不是旧的 reason_codes）——
+	// 用错的那个在页面上的表现是原因码一列永远空。
+	if !strings.Contains(code, "parseReasonCodes(f.reasonCodes)") {
+		t.Fatal("反馈表的原因码应当读 f.reasonCodes")
+	}
+	if !strings.Contains(code, "markFeedback(") {
+		t.Fatal("缺少「标为已处理」入口")
+	}
+	if !strings.Contains(code, "f.handledAt") || !strings.Contains(code, "f.handledNote") {
+		t.Fatal("反馈表必须显示处理时间与处理备注")
+	}
+}
+
+// 任务表要有重试入口与上游返回摘要；购买表要有平台 / 交易号 / 入账额度与重验入口。
+func TestAdminHTMLHasRetryAndReverifyEntries(t *testing.T) {
+	code := adminCode(t)
+	for _, want := range []string{
+		"retryJob(", "x.upstreamSummary", "x.retryCount",
+		"reverifyPurchase(", "p.txId", "p.unitsGranted", "p.platform",
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("admin.html 缺少 %q", want)
+		}
+	}
+	// 「漏入账」的判据必须和后端的状态词汇表一致：verified（不是 active）。
+	if !strings.Contains(code, `p.status === 'verified'`) {
+		t.Fatal("购买表的状态判据必须用 verified —— purchases.status 里没有 active 这个值")
+	}
+	if strings.Contains(code, `p.status === 'active'`) {
+		t.Fatal("购买表里出现了 active 状态判据，但 purchases.status 只有 pending / verified")
 	}
 }

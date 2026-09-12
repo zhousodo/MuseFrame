@@ -155,6 +155,7 @@ func (a *App) hAdminEmailTest(c *Ctx) (any, error) {
 	}
 	accepted, err := a.mailer.Send(to, "MuseFrame 邮件配置测试",
 		"这是一封来自 MuseFrame 管理后台的测试邮件，收到即说明 SMTP 配置正常。", "")
+	a.recordEmailSend(c.R.Context(), "admin_test", to, err)
 	if err != nil {
 		return nil, apierr.New(502, apierr.CodeEmailSendFailed, "发送失败。")
 	}

@@ -45,7 +45,11 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status, err := a.route(w, r, requestID)
+	// matched 由 route() 回填成**静态路由名**（`GET /v1/projects/([\w-]+)`）。
+	// 接口健康计数器必须按它分组，绝不能按 r.URL.Path —— 原始路径带 id
+	// （每个用户一个 key，表会无上界地涨）也带图片令牌（等于把令牌写进内存统计）。
+	var matched string
+	status, err := a.route(w, r, requestID, &matched)
 	if err != nil {
 		e := asAPIError(err)
 		status = e.Status
@@ -58,7 +62,13 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 			}})
 		}
 	}
-	a.lg.LogRequest(r.Method, logPath(r.URL), status, a.now().Sub(start).Milliseconds(), requestID)
+	ms := a.now().Sub(start).Milliseconds()
+	a.lg.LogRequest(r.Method, logPath(r.URL), status, ms, requestID)
+	// 只统计匹配到路由表的请求。没匹配上的（扫描器乱打的路径、静态文件）
+	// 既不是「App 的接口」，也会把行数变成攻击者可控的 —— 一律不进计数器。
+	if matched != "" {
+		a.mx.Observe(r.Method, matched, status, ms)
+	}
 }
 
 // logPath 只记 pathname，绝不记 query —— 图片令牌与旧版会话令牌都可能在 query 里。
@@ -73,7 +83,7 @@ func logPath(u *url.URL) string {
 // 出错路径不会走到这里。保留函数是为了让意图显式。
 func headersWritten(http.ResponseWriter) bool { return false }
 
-func (a *App) route(w http.ResponseWriter, r *http.Request, requestID string) (int, error) {
+func (a *App) route(w http.ResponseWriter, r *http.Request, requestID string, matched *string) (int, error) {
 	// 绝不用不可信的 Host 头当 URL 输入。`Host: [` 曾经在 catch 之外抛
 	// ERR_INVALID_URL，一个未鉴权 TCP 请求就能杀掉整个进程。
 	if host := r.Host; host != "" {
@@ -116,6 +126,9 @@ func (a *App) route(w http.ResponseWriter, r *http.Request, requestID string) (i
 		if m == nil {
 			continue
 		}
+		// 路由一匹配上就回填名字：后面每一条 return（鉴权 401、体积 413、
+		// handler 的 422/500）都要被计入**这个**接口，而不是掉进「未匹配」。
+		*matched = rt.name
 		ctx := &Ctx{W: w, R: r, URL: u, Params: m[1:], ClientIP: clientIP, RequestID: requestID}
 		user, err := a.authenticate(r, u)
 		if err != nil {

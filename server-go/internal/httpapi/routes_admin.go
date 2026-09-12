@@ -34,4 +34,22 @@ func (a *App) registerAdminRoutes() {
 	a.add(http.MethodGet, `/v1/admin/user-facts`, a.hAdminUserFacts)               // 53
 	a.add(http.MethodGet, `/v1/admin/audit`, a.hAdminAudit)                        // 54
 	a.add(http.MethodGet, `/v1/admin/feedback-reasons`, a.hAdminReasonCodes)       // 55
+
+	// ---- 2026-09-12 第四轮：App↔后端↔后台全链路可见性 ----------------------
+	// 审计判据：App 上报到后端的每一类数据，后台都要能看（列表 / 详情 / 搜索 / 导出）。
+	// 这 8 条补的是四个黑洞（埋点 / 资产 / 反馈正文 / 发信记录）、一个纵向视图、
+	// 三个写入口、一个自观测视图，以及六类数据的 CSV 导出。
+	a.add(http.MethodGet, `/v1/admin/events`, a.hAdminEvents)          // 56
+	a.add(http.MethodGet, `/v1/admin/assets`, a.hAdminAssets)          // 57
+	a.add(http.MethodGet, `/v1/admin/user-detail`, a.hAdminUserDetail) // 58
+	a.add(http.MethodGet, `/v1/admin/email-log`, a.hAdminEmailLog)     // 59
+	a.add(http.MethodGet, `/v1/admin/api-health`, a.hAdminAPIHealth)   // 60
+	// 🔴 这条必须排在 /v1/admin/assets/([\w-]+)/file（第 39 条）**之后**才安全吗？
+	//    不需要 —— add() 把 pattern 锚成 ^…$，`/v1/admin/export/users.csv` 与
+	//    任何 assets 路由都不可能同时匹配。顺序只影响 404 归因，不影响正确性。
+	a.add(http.MethodGet, `/v1/admin/export/([a-z]+)\.csv`, a.hAdminExportCSV) // 61
+
+	a.add(http.MethodPost, `/v1/admin/feedback/([\w-]+)/handled`, a.hAdminFeedbackHandled)    // 62
+	a.add(http.MethodPost, `/v1/admin/jobs/([\w-]+)/retry`, a.hAdminJobRetry)                 // 63
+	a.add(http.MethodPost, `/v1/admin/purchases/([\w-]+)/reverify`, a.hAdminPurchaseReverify) // 64
 }

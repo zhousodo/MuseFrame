@@ -153,14 +153,22 @@ func TestAdminConfigSecretWriteRejected(t *testing.T) {
 	}
 }
 
-// 路由总数：公开 30 + 管理 25 = 55（另加一条不在公开契约里的 /v1/ready）。
-// 管理路由 2026-09-12 从 20 加到 25：PATCH styles-admin/{id}、
-// POST users/{id}/status、GET user-facts、GET audit、GET feedback-reasons。
+// 路由总数：公开 30 + 管理 34 = 64（另加一条不在公开契约里的 /v1/ready）。
+// 管理路由 2026-09-12 两轮加到 34：
+//
+//	第三轮 +5 PATCH styles-admin/{id}、POST users/{id}/status、GET user-facts、
+//	        GET audit、GET feedback-reasons
+//	第四轮 +9 GET events / assets / user-detail / email-log / api-health、
+//	        GET export/{kind}.csv、POST feedback/{id}/handled、
+//	        POST jobs/{id}/retry、POST purchases/{id}/reverify
+//
+// 🔴 公开路由数必须**不变**。这一轮的判据是「后台看得见 App 已经在上报的东西」，
+// 不是「给 App 加接口」—— 公开侧一旦变了就说明改到了契约，而 App 不在这次发版里。
 func TestRouteCount(t *testing.T) {
 	e := newTestEnv(t)
 	pub, adm := e.app.RouteCount()
-	if adm != 25 {
-		t.Fatalf("管理路由应为 25 条，实际 %d", adm)
+	if adm != 34 {
+		t.Fatalf("管理路由应为 34 条，实际 %d", adm)
 	}
 	if pub != 31 {
 		t.Fatalf("公开路由应为 30 条契约路由 + 1 条内部 /v1/ready = 31，实际 %d", pub)

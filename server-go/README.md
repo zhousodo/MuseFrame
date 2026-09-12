@@ -82,7 +82,8 @@ go test ./... -count=1
 
 # MuseFrame（留影）后端 —— Go + PostgreSQL
 
-替换原 Node.js（零框架 `node:http`）+ SQLite 实现。**50 条路由**（公开 30 + 管理 20）
+替换原 Node.js（零框架 `node:http`）+ SQLite 实现。**64 条路由**（公开 30 + 管理 34；
+另加一条不在公开契约里的 `/v1/ready`）
 逐条复刻，外加一条不在公开契约里的内部只读探针 `/v1/ready`。
 
 - 地面事实来源：`/opt/museframe/server/*.js` 只读副本（源码是行为真本）
@@ -105,9 +106,11 @@ internal/oidc           Google / Apple ID Token（RS256 + JWKS）
 internal/play           Google Play 收据校验
 internal/provider       上游图像模型适配器
 internal/ratelimit      滑动窗口限流
+internal/metrics        进程内每接口请求计数器（后台「接口健康」视图）
 internal/store          PostgreSQL 持久层 + 管理后台只读数据浏览
 internal/worker         生成队列
-migrations/             001_init.sql（24 表 / 58 索引）、002_grants.sql（角色授权）
+migrations/             001_init.sql（24 表 / 58 索引）、002_grants.sql（角色授权）、
+                        003_feedback_handled.sql（反馈「已处理」两列 + 部分索引）
 deploy/                 Dockerfile、docker-compose.yml、project.env.example
 ```
 
@@ -221,6 +224,126 @@ Go 版改成**表白名单 + 显式列级脱敏清单**：
 | I-8 | `PATCH /v1/projects/{id}` 只处理 `title` | **与源码一致**：契约里写的 `selectedCandidateId` 在 Node 版根本没实现（契约有误） |
 | I-9 | `POST /v1/purchases/verify` 入参是 `{productKey, purchaseToken?, transactionId?, platform?}`，出参是 `{purchaseId, status, entitlements}` | **与源码一致**；契约第三章写的 `{productId, externalTransactionId}` / `{purchase, entitlements}` **与源码不符**，已按源码实现并在报告里标出 |
 | I-10 | `POST /v1/events` 入参是 `{events:[…]}`，出参 `{accepted:int}`，且需要任意令牌（含游客） | **与源码一致**；契约写的 `{name, props}` / `{ok:true}` / 「公开」与源码不符 |
+
+## App 出站调用 ↔ 后端路由 ↔ 后台可见处（2026-09-12 全链路审计）
+
+审计判据一句话：**App 上报到后端的每一类数据，后台都要能看（列表 / 详情 / 搜索 / 导出）。**
+下表逐条对照 `web/app.js` + `web/native.js` 的**全部**出站调用。
+「App 不调用」的行刻意留着——它们是后端有而客户端没用的能力，别因为后台看得见就以为 App 在用。
+
+| App 调用（文件:行） | 方法 + 路径 | 后台看得见的地方 |
+|---|---|---|
+| `native.js` 社交登录 | `POST /v1/auth/exchange` | 用户列表（登录方式列）、用户详情 · 会话 |
+| `native.js emailRequestCode` | `POST /v1/auth/email/request` | **健康 · 邮件发送记录**＋验证码签发台账 |
+| `native.js emailVerifyCode` | `POST /v1/auth/email/verify` | 同上；成功后进用户列表 |
+| `native.js getAuthConfig` | `GET /v1/auth/config` | 配置页（各开关的生效值） |
+| `app.js:1067` 退出登录 | `DELETE /v1/auth/session` | 用户详情 · 会话（行消失） |
+| `app.js:155` 首页 | `GET /v1/discover` | 运营 · 风格管理（App 可见性列） |
+| `app.js:496` 选图 | `POST /v1/assets/upload-intents` | **资产**（status=pending 的行） |
+| `app.js:497` 上传 | `PUT /v1/assets/{id}/upload` | **资产**（字节数 / 宽高 / sha256） |
+| `app.js:498` | `POST /v1/assets/{id}/complete` | **资产**（status→ready） |
+| `app.js:513` | `GET /v1/assets/{id}/analysis` | 数据库 · `photo_analyses` |
+| `api.js ensureAssetToken` | `GET /v1/assets/img-token` | 健康 · 接口健康 |
+| `api.js assetUrl` | `GET /v1/assets/{id}/file` | 健康 · 接口健康 |
+| `app.js:499/870/914` | `POST/GET /v1/projects`、`GET /v1/projects/{id}` | **用户详情 · 项目**（含软删行） |
+| `app.js:663` 提交生成 | `POST /v1/generation-jobs` | **任务**（可筛状态 / 时间窗 / 用户；带生成参数与上游返回摘要） |
+| `app.js:693/918` 轮询 | `GET /v1/generation-jobs/{id}` | 同上 |
+| `app.js:821/826` | `POST /v1/candidates/{id}/feedback` | **反馈**（含**用户写的正文**＋已处理标记） |
+| `app.js:833` 导出成品 | `POST /v1/candidates/{id}/export` | **资产**（kind=export） |
+| `api.js ensureSession`、`app.js:169/936` | `GET /v1/entitlements/me` | 用户详情 · 额度账本 + 可用额度 |
+| `app.js:155` | `GET /v1/products` | 运营 · 商品与价格 |
+| `app.js:1266` 内购 | `POST /v1/purchases/verify` | **购买**（平台 / 交易号 / 金额 / 入账额度 + 重验入口） |
+| `app.js:936` | `GET /v1/purchases` | 同上；用户详情 · 购买 |
+| `api.js track()`（16 个调用点） | `POST /v1/events` | **埋点**（按事件名 / 天 / App 版本聚合 + 原始样本 + 导出） |
+| App 不调用 | `GET /v1/styles`、`GET /v1/styles/{slug}` | 运营 · 风格管理 |
+| App 不调用 | `POST /v1/generation-jobs/{id}/cancel` | 任务（status=cancelled 可重试） |
+| App 不调用 | `PATCH`/`DELETE /v1/projects/{id}` | 用户详情 · 项目 |
+| App 不调用 | `GET /v1/health`、`GET /v1/ready` | 健康 · 接口健康 |
+
+**App 还没做、后台据此也看不到的两件事**（不要在面板上假装有）：
+
+- **崩溃 / 日志上报**：`web/app.js` 里没有任何崩溃上报调用，后端也没有对应路由。
+  后台没有这一页，因为做一页空表会让运维以为「没崩过」。
+- **版本检查 / App 版本号上报**：`track()` 的 props 里不带版本字段，
+  所以「埋点 · 按 App 版本」的正常结果是一行 `(未上报)`。这一行就是这件事的唯一可见处。
+  后端已兼容 `appVersion` / `app_version` / `version` 三种键，App 哪天开始报哪一个都会自动分开。
+
+### 管理后台的 34 条路由
+
+| 路径 | 用途 |
+|---|---|
+| `GET /v1/admin/overview` | 概览卡片（生成链路 / 反白嫖闸 / 累计数） |
+| `GET /v1/admin/jobs` | 任务列表。`?status=`、`?sinceHours=`、`?userId=`（8 位前缀）、`?limit=` |
+| `POST /v1/admin/jobs/{id}/retry` | 重试失败 / 取消的任务。**新建一条**带 `parent_job_id` 的任务并重新预留额度 |
+| `GET /v1/admin/feedback` | 反馈列表（含正文）。`?rating=`、`?handled=yes\|no` |
+| `POST /v1/admin/feedback/{id}/handled` | 标记 / 撤销「已处理」，带备注，落审计 |
+| `GET /v1/admin/feedback-reasons` | 原因码观测（不是配置） |
+| `GET /v1/admin/purchases` | 购买列表（平台 / 交易号 / 入账额度）。`?status=`、`?platform=` |
+| `POST /v1/admin/purchases/{id}/reverify` | 补发漏入账的额度（幂等）。只对 `verified` 生效 |
+| `GET /v1/admin/users` | 用户列表。`?q=`（邮箱 / 昵称 / id，按字符截到 120） |
+| `GET /v1/admin/user-detail` | **单用户纵向详情**。`?userId=`（8 位前缀即可；撞前缀回 409 `AMBIGUOUS`） |
+| `POST /v1/admin/users/grant` | 手动发额度 |
+| `POST /v1/admin/users/{id}/status` | 禁用 / 启用 |
+| `GET /v1/admin/user-facts` | 状态分布 + 禁用语义说明 |
+| `GET /v1/admin/events` | **埋点**。`?days=`（≤90）、`?name=`（只筛样本）、`?limit=` |
+| `GET /v1/admin/assets` | **资产**。`?kind=`、`?status=`、`?userId=`、`?limit=` |
+| `GET /v1/admin/email-log` | **发信记录 + 验证码签发台账**（地址打码，不回哈希） |
+| `GET /v1/admin/api-health` | **接口健康**。`?hours=`（≤24） |
+| `GET /v1/admin/export/{kind}.csv` | CSV 导出，`kind` ∈ users / jobs / purchases / feedback / events / assets |
+| `GET /v1/admin/img-token` | 短时图片令牌（管理员令牌不进 URL） |
+| `GET /v1/admin/assets/{id}/file` | 取资产文件（接受图片令牌或管理员令牌） |
+| `GET /v1/admin/stats/daily`、`/stats/styles` | 按天趋势、风格排行 |
+| `GET /v1/admin/db/tables`、`/db/table/{name}`、`POST /db/query` | 只读数据浏览（脱敏见上文） |
+| `GET`/`PUT /v1/admin/config` | 运行时热键（密钥只读） |
+| `GET /v1/admin/products-admin`、`PATCH .../{key}` | 商品与价格 |
+| `GET /v1/admin/styles-admin`、`PATCH .../{id}`、`POST .../{id}/status` | 风格完整编辑 |
+| `GET /v1/admin/audit` | 操作审计 |
+| `POST /v1/admin/email/test` | 发测试邮件 |
+
+### 三个后台写入口的语义（容易踩错的地方都在这）
+
+**任务重试**必须**新建**一条任务，绝不能把原任务改回 `queued` 再入队。
+原因在额度台账：任务失败时 `ledger.Release` 写的是**补偿分录**，原来的 `reserve` 行还留在表里。
+于是重排原任务时 `ledger.Reserve` 看到 `job:<id>:reserve` 前缀已存在就直接 `return nil`（不扣），
+而 `LedgerHasReserve` 看到 reserve 行还在就放行执行——两个守卫都通过，
+钱在失败那一刻已经退给用户了，净结果是**一张免费的图**，且额度对账表上看不出任何异常。
+用户不会被重复扣钱：失败退过一次、重试扣回来，净额仍是「成功一张扣一份」。
+余额不足回 **409 `INSUFFICIENT_ENTITLEMENT`** 并提示先发额度——悄悄跳过扣减就等于回到那张免费图。
+
+**购买重验**只补发缺失的额度，**不会**重新向商店要收据：`purchaseToken` 只存在于
+App 那一次请求里，从不落库，所以「重新找 Google/Apple 验一次」在服务端做不到。
+它刻意**不**复用 `finalizePurchase`——那条路径对一个已 `verified` 的购买只在「到期时间变新了」
+时才发额度（自动续订的每个计费周期），对没有到期时间的点数包（`expires` 恒为 nil）会直接早退，
+也就是一个点了必然回 200 且什么都不做的按钮。这里直接对着幂等键
+`grant:purchase:<purchaseId>` 先查再发。
+**`purchases.status` 的词汇表只有 `pending` / `verified` 两个值**——没有 `active`，
+判据写成 `active` 会让每一笔真实购买都被拒成 409。
+
+**反馈标记已处理**落在 `user_feedback.handled_at` / `handled_note`（003 迁移）。
+撤销标记会把备注**一起清掉**：留着上一次的备注会让下一个人看到「未处理」却带着
+一条「已退额度」的备注，而这两件事里只有一件是真的。
+
+### 两个必须说清楚的口径限制
+
+**接口健康是进程内的**：重启清零、多副本各算各的，不是全站统计。
+P95 从固定延迟直方图算（5/10/25/50/100/250/500/1000/2500/5000/10000ms），
+精度到桶边界，标 `>` 的表示落在最后一个开口桶里。
+限流的 **429 在路由循环之前返回，不进计数器**；未匹配到路由表的请求（扫描器、静态文件）一律不计——
+后者是刻意的：按 `r.URL.Path` 分组会让表的行数变成请求方可控的。
+
+**审计、发信记录都住在 `events` 表里**（换来现成的索引 / 备份 / 数据库浏览器可查），
+所以它们**会随 `event_retention_days` 到期被清**。埋点视图把这两类行都排掉了——
+不排的话运营自己改一次配置、系统发一封验证码，都会在「用户行为」里多一行。
+
+### CSV 导出
+
+导出一律**脱敏**（邮箱打码、id 只给前 8 位），脱敏点只有一处：`store.CSVMaskEmail` / `store.CSVText`。
+理由：导出文件会离开这台机器（下载目录、微信、某个表格），页面上显示完整邮箱还能靠
+「只有持令牌的人打得开」兜住，一个躺在下载目录里的 CSV 兜不住。
+自由文本里的换行压成空格（不依赖下游正确处理多行 CSV 字段），文件带 UTF-8 BOM（否则中文列在 Excel 里全是乱码）。
+响应头 `X-Row-Count` 给出数据行数，便于不解析 CSV 就核对。
+前端走 **fetch + blob**，不能用 `<a href download>` / `window.open`——
+管理员令牌走请求头，浏览器发起的导航带不上头，那样的链接一律回 401。
 
 ## 切换 runbook
 
