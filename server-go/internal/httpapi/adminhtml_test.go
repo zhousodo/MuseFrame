@@ -605,8 +605,13 @@ func TestAdminHTMLShowsNoTokenFragment(t *testing.T) {
 		}
 	}
 	// 额度到期要在用户详情里看得见：「我买的张数怎么没了」最常见的真因就是 bucket 到期。
-	if !strings.Contains(code, "额度到期 (UTC+8)") || !strings.Contains(code, "l.expiresAt") {
+	if !strings.Contains(code, "额度到期 (UTC+8)") || !strings.Contains(code, "function ledgerExpiry(l){") {
 		t.Error("用户详情的额度账本必须显示 bucket 到期时间")
+	}
+	// 🔴 字段缺失（后端镜像比这份页面旧）不能被显示成「永不过期」——
+	// 那是一个会被客服直接转述给用户的错误答案。
+	if !strings.Contains(code, "if (!('expiresAt' in l)) return") {
+		t.Error("额度到期必须区分「没有到期时间」与「后端不回这个字段」")
 	}
 }
 

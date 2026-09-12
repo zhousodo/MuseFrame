@@ -2463,7 +2463,7 @@ async function openUserDetail(userId){
       <td class="nowrap">${timeCell(l.at)}</td><td>${txt(l.entryType, '未记录')}</td>
       <td class="num ${l.units > 0 ? 'okt' : l.units < 0 ? 'err' : ''}">${l.units > 0 ? '+' : ''}${intOr0(l.units)}</td>
       <td>${txt(l.source, '未记录')}</td>
-      <td class="nowrap">${l.expiresAt ? timeCell(l.expiresAt) + (l.expired ? ' <span class="b warn">已过期</span>' : '') : '<span class="empty">永不过期</span>'}</td>
+      <td class="nowrap">${ledgerExpiry(l)}</td>
       <td>${l.jobId ? idCell(l.jobId) : none('非生成扣减')}</td></tr>`), '没有任何额度流水')}
     <h3>购买（${(r.purchases || []).length}）</h3>
     ${tbl(['时间 (UTC+8)','商品','平台','交易号','状态','金额'], (r.purchases || []).map(p => `<tr>
@@ -2494,6 +2494,16 @@ async function openUserDetail(userId){
   </div>`;
   $('closeDrawer').addEventListener('click', closeViewer);
   box.querySelector('.drawer').addEventListener('click', (e) => e.stopPropagation());
+}
+
+/* 🔴 「没有到期时间」和「这个后端还不回到期时间」必须分开显示：
+   前者是 null（永不过期），后者是字段根本不在出参里（镜像比本页旧）。
+   混成一个「永不过期」会让客服拿着一个错误的答案去回复用户 ——
+   而「我买的张数怎么没了」十次有九次真因就是额度到期。 */
+function ledgerExpiry(l){
+  if (!('expiresAt' in l)) return '<span class="empty" title="当前后端版本不回这个字段，升级后自动出现">未知（后端偏旧）</span>';
+  if (!l.expiresAt) return '<span class="empty">永不过期</span>';
+  return timeCell(l.expiresAt) + (l.expired ? ' <span class="b warn">已过期</span>' : '');
 }
 
 /* ================= 路由 / 启动 ================= */
