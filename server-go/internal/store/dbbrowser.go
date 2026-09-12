@@ -13,6 +13,9 @@
 // Go 版改成：**表白名单 + 显式的列级脱敏清单**，不是黑名单。
 // 白名单之外的表一律 404；清单里的列一律脱敏。每一条都有对应的
 // 「不应出现在响应里」测试。
+//
+// 🔴 2026-09-12 第七轮：清单收窄到**只挡凭据与密钥**。
+// 邮箱、交易号、设备/IP 哈希这些**用户资料**改为完整显示 —— 见 redactColumns 的说明。
 package store
 
 import (
@@ -100,39 +103,36 @@ const (
 	RedactPrefix6
 	// RedactFull 整体替换为固定掩码，一个字符都不回。
 	RedactFull
-	// RedactEmail 只留首字母与域名末段。
-	RedactEmail
 	// RedactSecretByKey 是 app_config.value：该行的 key 属于密钥项时整体掩码。
 	RedactSecretByKey
 )
 
 // redactColumns 是显式的列级脱敏清单（逐表逐列）。
 // 每一条都对应一个「不应出现在响应里」的测试。
+//
+// 🔴 2026-09-12 第七轮收窄：这张清单现在**只挡凭据与密钥**，不再挡用户资料。
+// 此前被挡住的 auth_identities.email_normalized / provider_subject、
+// purchases.external_transaction_id、free_grants.device_hash / ip_hash、
+// sessions.device_id、manual_grants.idempotency_key 一律改为**完整显示** ——
+// 这是一个只有管理员令牌打得开的自家后台，客服要拿邮箱联系用户、
+// 拿交易号去商店后台对账、拿设备/IP 判断是不是同一个人在刷免费额度。
+// 把这些打码的代价是「后台看不到，只能 SSH 上去 psql」，而那等于没有后台。
+//
+// 仍然一个字节都不回的只有这几类（改它们需要同时改 AUDIT 与 README）：
+// 会话令牌、验证码哈希、幂等响应体（里面可能嵌着刚签发的令牌）、
+// app_config 里的密钥项、server_secrets 整表。
 var redactColumns = map[string]map[string]RedactKind{
 	"sessions": {
-		"token":     RedactPrefix6, // 会话令牌就是凭据本身
-		"device_id": RedactFull,    // 设备指纹，Node 版明文返回
-	},
-	"auth_identities": {
-		"email_normalized": RedactEmail, // Node 版明文（/db/query 拦得住，/db/table 拦不住）
-		"provider_subject": RedactFull,  // 含 "email:<完整邮箱>"
+		"token": RedactPrefix6, // 会话令牌就是凭据本身
 	},
 	"email_codes": {
-		"code_hash": RedactFull, // 一次性验证码的哈希
-	},
-	"purchases": {
-		"external_transaction_id": RedactFull, // Play / Apple 交易号
+		"code_hash": RedactFull, // 一次性验证码的哈希 = 一个完整的账号凭据
 	},
 	"idempotency_records": {
-		"response_body": RedactFull, // Node 版只受 300 字符截断保护
+		// 响应体是**整条接口出参的快照**：/v1/auth/exchange 那一条里嵌着刚签发的
+		// 会话令牌。它不是用户资料，是凭据，所以继续整体掩码。
+		"response_body": RedactFull,
 		"request_hash":  RedactFull,
-	},
-	"free_grants": {
-		"device_hash": RedactFull,
-		"ip_hash":     RedactFull,
-	},
-	"manual_grants": {
-		"idempotency_key": RedactFull,
 	},
 	"app_config": {
 		"value": RedactSecretByKey,
@@ -159,20 +159,6 @@ const MaskedValue = "••••(masked)"
 // MaskedSecret 是 app_config 密钥项的掩码文本（与 Node 版逐字一致）。
 const MaskedSecret = "••••(secret)"
 
-func maskEmail(s string) string {
-	at := strings.Index(s, "@")
-	if at <= 0 {
-		return MaskedValue
-	}
-	domain := s[at+1:]
-	if dot := strings.LastIndex(domain, "."); dot > 0 {
-		domain = "***" + domain[dot:]
-	} else {
-		domain = "***"
-	}
-	return s[:1] + "***@" + domain
-}
-
 // MaskCell 对一个单元格做脱敏。isSecretKey 由调用方按该行的 key 列判断。
 //
 // 🔴 时区：pgx 把 timestamptz 扫成 time.Time，直接交给 encoding/json 会按
@@ -195,11 +181,6 @@ func MaskCell(table, column string, v any, isSecretKey bool) any {
 		}
 		return MaskedValue
 	case RedactFull:
-		return MaskedValue
-	case RedactEmail:
-		if s, ok := v.(string); ok {
-			return maskEmail(s)
-		}
 		return MaskedValue
 	case RedactSecretByKey:
 		if isSecretKey {

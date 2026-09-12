@@ -45,7 +45,7 @@ type FeedbackFilter struct {
 func ListAdminFeedbackFull(ctx context.Context, q Queryer, f FeedbackFilter) ([]AdminFeedbackFullRow, error) {
 	sql := `
 		SELECT f.id, f.rating, f.reason_codes, f.comment, f.created_at, s.public_name,
-		       substr(f.user_id,1,8),
+		       f.user_id,
 		       (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=f.user_id AND ai.email_normalized IS NOT NULL LIMIT 1),
 		       f.candidate_id, c.asset_id, f.handled_at, f.handled_note
 		FROM user_feedback f
@@ -131,6 +131,12 @@ type JobFilter struct {
 	// SinceHours > 0 表示只看最近这么多小时（相对窗，和 Range 可以叠加）。
 	SinceHours int
 	UserID     string
+	// JobID 精确匹配一条任务（任务详情用）。
+	//
+	// 🔴 刻意复用列表查询而不是再写一条 SELECT：详情页显示的每一个字段
+	// 都必须和列表里那一行**同源**，否则两处会慢慢漂成两套口径
+	// （「列表说失败、详情说成功」这种 bug 没人能在评审里看出来）。
+	JobID string
 	// Range 按创建时间筛（半开区间的绝对时刻）。
 	Range TimeRange
 	Limit int
@@ -158,7 +164,7 @@ func ListAdminJobsFiltered(ctx context.Context, q Queryer, f JobFilter, now time
 	sql := `
 		SELECT j.id, j.status, j.stage, j.error_code, j.attempt_count, j.cost_minor, j.created_at,
 		       ` + adminJobSecondsExpr + `,
-		       substr(j.user_id,1,8),
+		       j.user_id,
 		       (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=j.user_id AND ai.email_normalized IS NOT NULL LIMIT 1),
 		       s.public_name, j.source_asset_id,
 		       (SELECT c.asset_id FROM generation_candidates c WHERE c.job_id=j.id ORDER BY c.candidate_index ASC, c.created_at ASC LIMIT 1),
@@ -183,6 +189,10 @@ func ListAdminJobsFiltered(ctx context.Context, q Queryer, f JobFilter, now time
 	if f.UserID != "" {
 		args = append(args, f.UserID+"%")
 		sql += ` AND j.user_id LIKE $` + itoa(len(args)) + ` ESCAPE '\'`
+	}
+	if f.JobID != "" {
+		args = append(args, f.JobID)
+		sql += ` AND j.id = $` + itoa(len(args))
 	}
 	sql = f.Range.apply("j.created_at", sql, &args)
 	sql += ` ORDER BY j.created_at DESC, j.id ASC LIMIT ` + itoa(f.Limit)
@@ -269,7 +279,8 @@ func ListAdminPurchasesFull(ctx context.Context, q Queryer, f PurchaseFilter) ([
 	sql := `
 		SELECT pu.id, pu.platform, pu.external_transaction_id, pu.status,
 		       p.display_name, p.internal_key, pu.amount_minor, pu.currency,
-		       pu.purchased_at, pu.expires_at, substr(pu.user_id,1,8), pu.user_id,
+		       -- user 与 userId 两列都回完整 id（2026-09-12 起 user 不再是 8 位前缀）。
+		       pu.purchased_at, pu.expires_at, pu.user_id, pu.user_id,
 		       (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=pu.user_id AND ai.email_normalized IS NOT NULL LIMIT 1),
 		       (SELECT COALESCE(sum(l.units),0) FROM credit_ledger l WHERE l.purchase_id = pu.id AND l.entry_type = 'grant')
 		FROM purchases pu JOIN products p ON p.id=pu.product_id
@@ -318,19 +329,13 @@ func GetPurchaseForReverify(ctx context.Context, q Queryer, id string) (userID, 
 	return
 }
 
-// ---- CSV 脱敏 --------------------------------------------------------------
+// ---- CSV 文本 --------------------------------------------------------------
 
-// CSVMaskEmail 是导出 CSV 用的邮箱打码。
-//
-// 🔴 导出文件会离开这台机器（进运营的下载目录、微信、表格）。
-// 页面上显示完整邮箱还能靠「只有持令牌的人看得见」兜住，一个 CSV 文件兜不住。
-// 所以导出一律打码，而且这是导出路径上唯一的打码点 —— 各个 handler 不自己实现。
-func CSVMaskEmail(e *string) string {
-	if e == nil {
-		return ""
-	}
-	return MaskEmail(*e)
-}
+// 🔴 2026-09-12 第七轮：这里曾有一个 CSVMaskEmail，把导出里的邮箱打成
+// a***@example.com。它被删掉了，不是忘了接 —— 导出的唯一用途是把后台里看到的
+// 那张表拿去做对账、群发、挨个联系用户，而打了码的邮箱做不了这三件事里的任何一件，
+// 于是实际发生的事是有人绕过导出、直接去数据库抄。
+// 邮箱现在走 CSVText（只负责压平换行），和昵称、反馈正文同一个口径。
 
 // CSVText 把一个可能含换行/逗号/引号的自由文本压成 CSV 安全的单行。
 //

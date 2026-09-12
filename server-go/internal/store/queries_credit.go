@@ -31,11 +31,65 @@ func LedgerReferenceExists(ctx context.Context, q Queryer, referenceKey string) 
 // InsertFreeGrant 写一行去重台账。
 // 一次发放对 dedupeId / deviceHash / userId 每个键各写一行，
 // 只有主键行带 units，其余 units=0 —— 修的是「游客登录后去重键切换导致再领一张」的真 bug。
-func InsertFreeGrant(ctx context.Context, q Queryer, id, userID, dedupeKey string, deviceHash, ipHash *string, units int, t time.Time) error {
+//
+// ip 是**明文**客户端地址（可空，见 migrations/005_free_grant_ip.sql）：
+// 哈希够用来限流，但运营要判断「这一批是不是同一个人」「要不要把这个地址报给 CDN 拦」
+// 的时候，哈希什么也答不了。
+//
+// 🔴 列不存在时自动退回旧 INSERT：迁移先于发版执行是正常顺序，但反过来
+// （新镜像先上、迁移还没跑）不能让**发免费额度**这件用户可见的事直接失败 ——
+// 那是新用户注册完一张额度都没有。退回之后 ip 不记，其余行为完全一致。
+func InsertFreeGrant(ctx context.Context, q Queryer, id, userID, dedupeKey string, deviceHash, ipHash, ip *string, units int, t time.Time) error {
 	_, err := q.Exec(ctx,
-		`INSERT INTO free_grants (id, user_id, dedupe_key, device_hash, ip_hash, units, created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7)`, id, userID, dedupeKey, deviceHash, ipHash, units, t)
+		`INSERT INTO free_grants (id, user_id, dedupe_key, device_hash, ip_hash, ip, units, created_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, id, userID, dedupeKey, deviceHash, ipHash, ip, units, t)
+	if err != nil && IsUndefinedColumn(err) {
+		_, err = q.Exec(ctx,
+			`INSERT INTO free_grants (id, user_id, dedupe_key, device_hash, ip_hash, units, created_at)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7)`, id, userID, dedupeKey, deviceHash, ipHash, units, t)
+	}
 	return err
+}
+
+// FreeGrantRow 是一行免费额度发放台账（后台用户详情里的「免费额度」小节）。
+type FreeGrantRow struct {
+	ID        string `json:"id"`
+	DedupeKey string `json:"dedupeKey"`
+	Units     int    `json:"units"`
+	CreatedAt string `json:"createdAt"`
+	// IP 是明文客户端地址。nil = 这一行落库时还没有这一列（历史行），
+	// 或者当时取不到客户端地址。
+	IP         *string `json:"ip"`
+	IPHash     *string `json:"ipHash"`
+	DeviceHash *string `json:"deviceHash"`
+}
+
+// ListUserFreeGrants 一个用户的免费额度发放台账（含占位行，倒序）。
+//
+// 🔴 ip 用 to_jsonb(fg)->>'ip' 取，不写成裸列名：裸列名在没跑过
+// 005_free_grant_ip.sql 的库上会让整条查询报 42703（= 用户详情页整页打不开），
+// 而 to_jsonb 在键不存在时安静地回 NULL。读路径上这个代价是零（一行的 jsonb 化）。
+func ListUserFreeGrants(ctx context.Context, q Queryer, userID string, limit int) ([]FreeGrantRow, error) {
+	rows, err := q.Query(ctx, `
+		SELECT fg.id, fg.dedupe_key, fg.units, fg.created_at,
+		       to_jsonb(fg)->>'ip', fg.ip_hash, fg.device_hash
+		FROM free_grants fg WHERE fg.user_id = $1
+		ORDER BY fg.created_at DESC, fg.id ASC LIMIT $2`, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []FreeGrantRow{}
+	for rows.Next() {
+		var r FreeGrantRow
+		var created time.Time
+		if err := rows.Scan(&r.ID, &r.DedupeKey, &r.Units, &created, &r.IP, &r.IPHash, &r.DeviceHash); err != nil {
+			return nil, err
+		}
+		r.CreatedAt = ISO(created)
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // GetFreeGrantWindow 统计滚动 24 小时的发放次数。

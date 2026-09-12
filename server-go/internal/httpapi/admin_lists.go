@@ -78,6 +78,7 @@ func (a *App) hAdminOverview(c *Ctx) (any, error) {
 // jobsNote 是任务视图的口径说明。
 const jobsNote = "App 通过 POST /v1/generation-jobs 创建、GET /v1/generation-jobs/{id} 轮询的生成任务。" +
 	"可按状态与时间窗筛选；失败原因码、上游返回摘要、生成参数、被重试次数都在行里。" +
+	"点「详情」看这条任务的**全部候选**（按产出时间排序）与源图的画面分析 —— 列表里只显示第一张。" +
 	"「重试」新建一条带 parent_job_id 的任务并重新预留额度（失败时已退过，净额不变）。"
 
 func (a *App) hAdminJobs(c *Ctx) (any, error) {
@@ -216,8 +217,9 @@ func (a *App) hAdminUsers(c *Ctx) (any, error) {
 
 // usersNote 是用户视图的口径说明。
 const usersNote = "注册 / 登录（/v1/auth/exchange、/v1/auth/email/verify）产生的账号。" +
-	"可按 id 前缀、昵称、邮箱搜索。点一行进详情：额度账本、项目、任务、资产、购买、会话、反馈。" +
-	"列表里的 id 只有前 8 位（脱敏），完整 id 在详情页。"
+	"可按 id 前缀、昵称、邮箱搜索。点一行进详情：登录身份、额度账本、免费额度发放、项目、任务、" +
+	"资产、购买、会话、反馈。邮箱与用户 id 都是**完整值**（2026-09-12 起 id 不再只给前 8 位）—— " +
+	"这是只有管理员令牌打得开的后台，客服要拿邮箱联系用户、拿完整 id 发额度。"
 
 func (a *App) hAdminImgToken(c *Ctx) (any, error) {
 	if err := a.requireAdmin(c); err != nil {

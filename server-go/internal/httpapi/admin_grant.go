@@ -153,9 +153,11 @@ func (a *App) hAdminEmailTest(c *Ctx) (any, error) {
 	if a.mailer == nil || !a.mailer.Configured() {
 		return nil, apierr.New(400, apierr.CodeSMTPNotConfigured, "SMTP 未配置。")
 	}
-	accepted, err := a.mailer.Send(to, "MuseFrame 邮件配置测试",
+	const subject = "MuseFrame 邮件配置测试"
+	accepted, err := a.mailer.Send(to, subject,
 		"这是一封来自 MuseFrame 管理后台的测试邮件，收到即说明 SMTP 配置正常。", "")
-	a.recordEmailSend(c.R.Context(), "admin_test", to, err)
+	// 测试邮件的主题里没有任何凭据，原样落库。
+	a.recordEmailSend(c.R.Context(), "admin_test", to, subject, err)
 	if err != nil {
 		return nil, apierr.New(502, apierr.CodeEmailSendFailed, "发送失败。")
 	}

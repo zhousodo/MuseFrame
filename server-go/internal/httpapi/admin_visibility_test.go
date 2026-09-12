@@ -16,7 +16,7 @@ import (
 // 而这张表正是用来判断 App 功能有没有人用的。
 func TestAdminEventsExcludesAuditRows(t *testing.T) {
 	e := newTestEnv(t)
-	_, tok := e.signUp("events@example.com")
+	uid, tok := e.signUp("events@example.com")
 
 	// 用户埋点两条。
 	if r := e.do("POST", "/v1/events", map[string]any{"events": []any{
@@ -81,10 +81,11 @@ func TestAdminEventsExcludesAuditRows(t *testing.T) {
 	if len(out.Samples) != 2 {
 		t.Errorf("原始样本应当 2 条，实际 %d", len(out.Samples))
 	}
-	// 用户 id 只回前 8 位。
+	// 🔴 用户 id 必须是**完整** id（2026-09-12 第七轮：后台不再截断）。
+	// 变异验证：把 ListEventSamples 的 user_id 换回 substr(user_id,1,8)，这行红。
 	for _, s := range out.Samples {
-		if s.User != nil && len(*s.User) != 8 {
-			t.Errorf("样本里的用户 id 应当只有 8 位，实际 %q", *s.User)
+		if s.User != nil && *s.User != uid {
+			t.Errorf("样本里的用户 id 应当是完整 id %q，实际 %q", uid, *s.User)
 		}
 	}
 	// 当前 App 不报版本号，所以唯一那一行是「(未上报)」。
@@ -162,9 +163,10 @@ func TestAdminAssetsListsAndFilters(t *testing.T) {
 	if len(out.Assets) != 2 {
 		t.Fatalf("应当有 2 条资产（source + candidate），实际 %d", len(out.Assets))
 	}
+	// 归属必须是**完整** id + **完整**邮箱：资产页是「这张图是谁的」的唯一读法。
 	for _, a := range out.Assets {
-		if len(a.User) != 8 {
-			t.Errorf("资产行的用户 id 应当只有 8 位，实际 %q", a.User)
+		if a.User != uid {
+			t.Errorf("资产行的用户 id 应当是完整 id %q，实际 %q", uid, a.User)
 		}
 	}
 	// 🔴 storage_key 绝不能出现在响应里（磁盘布局不外传）。
@@ -552,14 +554,16 @@ func (e *testEnv) seedFeedback(comment string) (candID, userID string) {
 
 // ---- CSV 导出 --------------------------------------------------------------
 
-// 导出的邮箱必须打码，行数必须等于列表条数。
-func TestExportCSVMasksEmailAndMatchesRowCount(t *testing.T) {
+// 导出的邮箱与用户 id 必须**完整**，行数必须等于列表条数。
+func TestExportCSVKeepsFullEmailAndMatchesRowCount(t *testing.T) {
 	e := newTestEnv(t)
-	e.signUp("exportme@example.com")
+	uid, _ := e.signUp("exportme@example.com")
 
 	var list struct {
 		Users []struct {
-			Email *string `json:"email"`
+			Email  *string `json:"email"`
+			UserID string  `json:"userId"`
+			ID     string  `json:"id"`
 		} `json:"users"`
 	}
 	e.do("GET", "/v1/admin/users", nil, e.admin()).JSON(t, &list)
@@ -569,6 +573,12 @@ func TestExportCSVMasksEmailAndMatchesRowCount(t *testing.T) {
 	// 页面上是完整邮箱（只有持令牌的人看得见）。
 	if list.Users[0].Email == nil || *list.Users[0].Email != "exportme@example.com" {
 		t.Fatalf("列表里应当是完整邮箱，实际 %v", list.Users[0].Email)
+	}
+	// 🔴 列表里的 id 也必须是完整 id —— userId 与 id 两个字段都是。
+	// 变异验证：把 ListAdminUsers 的第二列换回 substr(u.id,1,8)，这两行红。
+	if list.Users[0].UserID != uid || list.Users[0].ID != uid {
+		t.Errorf("列表里的 userId/id 都应当是完整 id %q，实际 %q / %q",
+			uid, list.Users[0].UserID, list.Users[0].ID)
 	}
 
 	r := e.do("GET", "/v1/admin/export/users.csv", nil, e.admin())
@@ -582,14 +592,23 @@ func TestExportCSVMasksEmailAndMatchesRowCount(t *testing.T) {
 		t.Errorf("应当是 attachment 下载，实际 %q", cd)
 	}
 	body := string(r.Body)
-	// 🔴 变异验证：把 exportUsers 里的 store.CSVMaskEmail(r.Email) 换成
-	// derefStr(r.Email)，这行红 —— 导出文件会离开这台机器，页面的
-	// 「只有持令牌的人看得见」兜不住一个躺在下载目录里的 CSV。
-	if strings.Contains(body, "exportme@example.com") {
-		t.Errorf("导出里出现了完整邮箱：%s", body)
+	// 🔴 2026-09-12 第七轮：导出里的邮箱与用户 id 必须**完整**。
+	// 这条断言是反过来的（此前要求打码成 e***@example.com）：导出的全部用处
+	// 就是拿它去对账、群发、挨个联系用户，打了码一件也做不了 ——
+	// 实际发生的事是有人绕开导出直接去抄数据库。
+	// 变异验证：把 exportUsers 里的 store.CSVText(r.Email) 换回打码，这行红。
+	if !strings.Contains(body, "exportme@example.com") {
+		t.Errorf("导出里应当是完整邮箱，实际 %s", body)
 	}
-	if !strings.Contains(body, "e***@example.com") {
-		t.Errorf("导出里应当是打码邮箱，实际 %s", body)
+	if strings.Contains(body, "e***@example.com") {
+		t.Errorf("导出里的邮箱又被打码了：%s", body)
+	}
+	// 表头也必须跟着改：「邮箱(已打码)」会被当成事实去跟运营解释。
+	if strings.Contains(body, "已打码") || strings.Contains(body, "前8位") {
+		t.Errorf("CSV 表头还在宣称打码 / 只给前 8 位：%s", body)
+	}
+	if len(list.Users) > 0 && !strings.Contains(body, uid) {
+		t.Errorf("导出里应当是完整用户 id %q，实际 %s", uid, body)
 	}
 	// BOM：不带它中文列在 Excel 里全是乱码。
 	if !strings.HasPrefix(body, "\ufeff") {
@@ -753,7 +772,7 @@ func TestAPIHealthIgnoresUnmatchedPaths(t *testing.T) {
 
 // ---- 邮件发送记录 ----------------------------------------------------------
 
-func TestAdminEmailLogRecordsSendsAndMasksAddresses(t *testing.T) {
+func TestAdminEmailLogRecordsFullAddressesAndSubjects(t *testing.T) {
 	e := newTestEnv(t)
 	// 后台测试邮件（走 Mailer.Send）。
 	if r := e.do("POST", "/v1/admin/email/test", map[string]any{"to": "ops@example.com"}, e.admin()); r.Code != 200 {
@@ -768,10 +787,11 @@ func TestAdminEmailLogRecordsSendsAndMasksAddresses(t *testing.T) {
 		Note       string `json:"note"`
 		Configured bool   `json:"configured"`
 		Sends      []struct {
-			Kind  string  `json:"kind"`
-			To    string  `json:"to"`
-			OK    bool    `json:"ok"`
-			Error *string `json:"error"`
+			Kind    string  `json:"kind"`
+			To      string  `json:"to"`
+			Subject string  `json:"subject"`
+			OK      bool    `json:"ok"`
+			Error   *string `json:"error"`
 		} `json:"sends"`
 		Codes []struct {
 			Email      string `json:"email"`
@@ -789,29 +809,48 @@ func TestAdminEmailLogRecordsSendsAndMasksAddresses(t *testing.T) {
 	if len(out.Sends) != 2 {
 		t.Fatalf("应当有 2 条发信记录（admin_test + login_code），实际 %d: %+v", len(out.Sends), out.Sends)
 	}
-	kinds := map[string]bool{}
+	kinds := map[string]string{}
 	for _, s := range out.Sends {
-		kinds[s.Kind] = true
+		kinds[s.Kind] = s.To
 		if !s.OK {
 			t.Errorf("两次发送都该成功，实际 %+v", s)
 		}
-		// 🔴 收件地址必须打码。MaskEmail 保留域名（判断是否被某个服务商拒收）。
-		if strings.Contains(s.To, "ops@") || strings.Contains(s.To, "code@") {
-			t.Errorf("发信记录里出现了未打码地址：%q", s.To)
+		// 🔴 收件地址必须**完整**（2026-09-12 第七轮，与此前的断言相反）：
+		// 这张表回答的是「用户说他没收到验证码」，而 a***@example.com
+		// 对不上任何一个具体的人 —— 客服还是得去 SSH 查库。
+		if strings.Contains(s.To, "***") {
+			t.Errorf("发信记录里的地址又被打码了：%q", s.To)
 		}
-		if !strings.HasSuffix(s.To, "@example.com") {
-			t.Errorf("打码后应当保留域名，实际 %q", s.To)
+		if s.Subject == "" {
+			t.Errorf("发信记录必须记主题，实际 %+v", s)
 		}
 	}
-	if !kinds["admin_test"] || !kinds["login_code"] {
-		t.Errorf("两类发信都该有记录，实际 %+v", kinds)
+	if kinds["admin_test"] != "ops@example.com" {
+		t.Errorf("后台测试邮件应记完整地址，实际 %q", kinds["admin_test"])
 	}
-	// 验证码台账：邮箱打码、绝不含哈希。
+	if kinds["login_code"] != "code@example.com" {
+		t.Errorf("验证码信应记完整地址，实际 %q", kinds["login_code"])
+	}
+	// 🔴 但验证码**本体**绝不能进这张表。真实主题以明文验证码开头，
+	// 所以验证码信记的主题必须是那个不含码的常量。
+	code := e.mail.lastCode
+	if code == "" {
+		t.Fatal("测试替身应当记下刚发出的验证码，否则下面的反向断言是假绿")
+	}
+	if strings.Contains(string(r.Body), code) {
+		t.Fatalf("🔴 发信记录里出现了明文验证码（%d 字节的那个）", len(code))
+	}
+	for _, s := range out.Sends {
+		if s.Kind == "login_code" && s.Subject != loginCodeLogSubject {
+			t.Errorf("验证码信的主题必须是不含码的常量，实际 %q", s.Subject)
+		}
+	}
+	// 验证码台账：邮箱完整、绝不含哈希。
 	if len(out.Codes) != 1 {
 		t.Fatalf("应当有 1 条验证码台账，实际 %d", len(out.Codes))
 	}
-	if strings.Contains(out.Codes[0].Email, "code@") {
-		t.Errorf("台账里的邮箱应当打码，实际 %q", out.Codes[0].Email)
+	if out.Codes[0].Email != "code@example.com" {
+		t.Errorf("台账里的邮箱应当完整，实际 %q", out.Codes[0].Email)
 	}
 	if strings.Contains(string(r.Body), "code_hash") || strings.Contains(string(r.Body), "codeHash") {
 		t.Errorf("响应里绝不能出现验证码哈希：%s", r.Body)
@@ -845,6 +884,9 @@ func TestNewAdminRoutesRequireAdminToken(t *testing.T) {
 		{"POST", "/v1/admin/feedback/x/handled"},
 		{"POST", "/v1/admin/jobs/x/retry"},
 		{"POST", "/v1/admin/purchases/x/reverify"},
+		{"GET", "/v1/admin/job-detail?jobId=x"},
+		{"GET", "/v1/admin/photo-analyses"},
+		{"GET", "/v1/admin/style-versions"},
 	}
 	for _, p := range probes {
 		if r := e.do(p.method, p.path, map[string]any{"handled": true}, nil); r.Code != 401 {

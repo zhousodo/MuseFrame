@@ -4,7 +4,7 @@
 // 对照 web/app.js + web/native.js 的全部出站调用，这一批补的是四个黑洞
 // （埋点 / 资产 / 反馈正文 / 发信记录）、一个纵向视图（按用户把六张表拉到一起）、
 // 三个写入口（反馈标已处理 / 任务重试 / 购买重验）、一个自观测视图（接口健康），
-// 以及六类数据的 CSV 导出（一律脱敏）。
+// 以及六类数据的 CSV 导出（2026-09-12 第七轮起**完整显示**，不再打码）。
 //
 // 🔴 每个视图的「一句说明」不在前端硬编码，而是由后端随数据一起回（note 字段）。
 // 理由：说明里写的是**口径**（窗口多长、按什么时区切、哪些行被排除、
@@ -139,8 +139,9 @@ func (a *App) hAdminAssets(c *Ctx) (any, error) {
 
 // ---- 用户纵向详情 ----------------------------------------------------------
 
-const userDetailNote = "一个用户的全部足迹：额度账本、项目、任务、资产、购买、会话、反馈。" +
-	"userId 可以只填列表里显示的 8 位前缀。会话只回令牌后 6 位（足够对上设备，无法重建令牌）。"
+const userDetailNote = "一个用户的全部足迹：登录身份（完整邮箱）、额度账本、免费额度发放（含明文 IP）、" +
+	"项目、任务、资产、购买、会话、反馈。userId 填完整 id 或任意长度的前缀都行。" +
+	"会话**一个字节的令牌都不回**（设备、最近活跃、到期足够对上一台设备）。"
 
 func (a *App) hAdminUserDetail(c *Ctx) (any, error) {
 	if err := a.requireAdmin(c); err != nil {
@@ -203,27 +204,143 @@ func (a *App) hAdminUserDetail(c *Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 🔴 登录身份（= 完整邮箱）。此前详情页一个邮箱都不显示，于是客服确认完
+	// 「就是这个人」之后还得回列表页去抄邮箱才能回信 —— 而详情页本来就是
+	// 「发额度 / 封号」之前的那张确认页，联系方式必须在这一页上。
+	identities, err := store.ListUserIdentities(ctx, a.st.Q(), userID)
+	if err != nil {
+		return nil, err
+	}
+	// 免费额度发放台账：带**明文 IP**（见 migrations/005_free_grant_ip.sql）。
+	// 「这一批账号是不是同一个人在刷」只有这一列能答。
+	freeGrants, err := store.ListUserFreeGrants(ctx, a.st.Q(), userID, 50)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"note": userDetailNote,
 		"user": map[string]any{
-			// 完整 id 在详情页是必要的：发额度 / 封号的接口要它，
-			// 而运营只能从这里复制。列表页仍然只给 8 位。
+			// 完整 id 与完整邮箱：发额度 / 封号的接口要 id，回信要邮箱，
+			// 两样都只能从这一页复制。
 			"id": user.ID, "displayName": user.DisplayName, "status": user.Status,
 			"isGuest": user.IsGuest, "locale": user.Locale, "timezone": user.Timezone,
 			"createdAt": store.ISO(user.CreatedAt),
 			"deletedAt": store.ISOPtr(user.DeletedAt),
+			"email":     store.PrimaryEmail(identities),
 		},
 		"availableUnits": bal,
+		"identities":     identities,
+		"freeGrants":     freeGrants,
 		"ledger":         ledger, "projects": projects, "jobs": jobs,
 		"assets": assets, "purchases": purchases, "sessions": sessions,
 	}, nil
 }
 
+// ---- 任务详情（全部候选） --------------------------------------------------
+
+const jobDetailNote = "一条任务的全部事实：参数、上游返回、以及**全部候选**（按产出时间 created_at 升序）。" +
+	"任务列表那一行只显示第一张候选，所以「后面几张是不是也这样」此前只能去数据库浏览器翻 " +
+	"generation_candidates。质检未通过的候选同样列出来 —— 它们是「为什么用户只拿到 1 张」的答案。"
+
+func (a *App) hAdminJobDetail(c *Ctx) (any, error) {
+	if err := a.requireAdmin(c); err != nil {
+		return nil, err
+	}
+	ctx := c.R.Context()
+	jobID := truncateRunes(trimSpace(c.URL.Query().Get("jobId")), 64)
+	if jobID == "" {
+		return nil, apierr.New(422, apierr.CodeValidation, "jobId 必填。")
+	}
+	// 复用列表查询（同一个 store 函数）：详情页的每个字段都和列表里那一行同源。
+	jobs, err := store.ListAdminJobsFiltered(ctx, a.st.Q(), store.JobFilter{JobID: jobID, Limit: 1}, a.now())
+	if err != nil {
+		return nil, err
+	}
+	if len(jobs) == 0 {
+		return nil, notFound("Unknown job.")
+	}
+	candidates, err := store.ListJobCandidates(ctx, a.st.Q(), jobID)
+	if err != nil {
+		return nil, err
+	}
+	analyses, err := store.ListAdminPhotoAnalyses(ctx, a.st.Q(),
+		store.PhotoAnalysisFilter{AssetID: jobs[0].SourceAssetID, Limit: 1})
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{"note": jobDetailNote, "job": jobs[0], "candidates": candidates}
+	// 源图的画面分析就挂在这里：失败任务里「上游说图太糊」的旁证。
+	if len(analyses) > 0 {
+		out["sourceAnalysis"] = analyses[0]
+	}
+	return out, nil
+}
+
+// ---- 画面分析 photo_analyses -----------------------------------------------
+
+const photoAnalysesNote = "App 上传源图后服务端做的画面分析（photo_analyses 表）：主体类型、人数、" +
+	"清晰度、曝光，以及给用户的提示与建议原文。此前后台对这张表只有数据库浏览器一条读法，" +
+	"看不到归属用户。status=failed 的行意味着分析本身挂了（不影响生成，但会让 App 少给一条建议）。"
+
+func (a *App) hAdminPhotoAnalyses(c *Ctx) (any, error) {
+	if err := a.requireAdmin(c); err != nil {
+		return nil, err
+	}
+	ctx := c.R.Context()
+	q := c.URL.Query()
+	tr, err := parseTimeRange(q)
+	if err != nil {
+		return nil, err
+	}
+	f := store.PhotoAnalysisFilter{
+		Status:  pickEnum(q.Get("status"), "pending", "ready", "failed"),
+		UserID:  truncateRunes(trimSpace(q.Get("userId")), 64),
+		AssetID: truncateRunes(trimSpace(q.Get("assetId")), 64),
+		Range:   tr,
+		Limit:   clampLimit(q.Get("limit"), 100, 500),
+	}
+	rows, err := store.ListAdminPhotoAnalyses(ctx, a.st.Q(), f)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := store.CountPhotoAnalysesByStatus(ctx, a.st.Q())
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"note": photoAnalysesNote + timeRangeNote(tr), "analyses": rows, "statusCounts": counts,
+		"filter": map[string]any{"status": f.Status, "userId": f.UserID, "assetId": f.AssetID,
+			"from": q.Get("from"), "to": q.Get("to")},
+	}, nil
+}
+
+// ---- 风格版本与 spec -------------------------------------------------------
+
+const styleVersionsNote = "一个风格的全部版本与**完整 spec**（style_versions.spec，不可变的 StyleSpec）。" +
+	"spec 里是提示词模板、控件取值域、负面词、后处理参数 —— 它是「这个风格到底怎么生成的」" +
+	"唯一的答案，也是「为什么这个风格出图变了」的对照物。只读：spec 改一个字就该是一个新版本。" +
+	"「任务数」是用这个版本跑过的任务数，0 表示这个版本从没服役过。"
+
+func (a *App) hAdminStyleVersions(c *Ctx) (any, error) {
+	if err := a.requireAdmin(c); err != nil {
+		return nil, err
+	}
+	styleID := truncateRunes(trimSpace(c.URL.Query().Get("styleId")), 64)
+	limit := clampLimit(c.URL.Query().Get("limit"), 50, 200)
+	rows, err := store.ListStyleVersions(c.R.Context(), a.st.Q(), styleID, limit)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"note": styleVersionsNote, "versions": rows, "styleId": styleID}, nil
+}
+
 // ---- 邮件发送记录 ----------------------------------------------------------
 
-const emailLogNote = "验证码与后台测试邮件的发送记录，收件地址已打码（保留域名，判断是否被某个服务商拒收）。" +
-	"记录落在 events 表里（复用审计那套），所以会随 event_retention_days 到期被清。" +
-	"下半部分是验证码签发台账（email_codes），只回元数据 —— 验证码哈希一个字节都不出库。"
+const emailLogNote = "验证码与后台测试邮件的发送记录：**完整收件地址 + 主题**（2026-09-12 起不再打码）。" +
+	"验证码信记的主题是一个不含验证码的常量 —— 真实主题以明文验证码开头，它一个字节都不入库。" +
+	"记录落在 events 表里（复用审计那套），所以会随 event_retention_days 到期被清；" +
+	"本版之前落的行没有主题，显示为「未记录」。" +
+	"下半部分是验证码签发台账（email_codes），邮箱完整、只回元数据 —— 验证码哈希一个字节都不出库。"
 
 func (a *App) hAdminEmailLog(c *Ctx) (any, error) {
 	if err := a.requireAdmin(c); err != nil {

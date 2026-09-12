@@ -114,6 +114,10 @@ func TestSmokeAllRoutes(t *testing.T) {
 		{"GET", "/v1/admin/user-detail?userId=" + uid, nil, admin, 200},
 		{"GET", "/v1/admin/email-log", nil, admin, 200},
 		{"GET", "/v1/admin/api-health?hours=24", nil, admin, 200},
+		// 第七轮的三条只读视图。job-detail 打的是上面那条真任务（cand-smoke 挂在它下面）。
+		{"GET", "/v1/admin/job-detail?jobId=" + jobID, nil, admin, 200},
+		{"GET", "/v1/admin/photo-analyses", nil, admin, 200},
+		{"GET", "/v1/admin/style-versions?styleId=style-free", nil, admin, 200},
 		{"GET", "/v1/admin/export/users.csv", nil, admin, 200},
 		// 反馈行是上面 POST /v1/candidates/{id}/feedback 刚建的，id 由 nextID 决定，
 		// 所以这里用一个**不存在**的 id 打 404 —— 冒烟只负责「路由活着且不 5xx」，

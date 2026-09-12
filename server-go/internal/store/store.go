@@ -263,6 +263,16 @@ func IsUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
+// IsUndefinedColumn 判断错误是否为「这一列不存在」（PostgreSQL 42703）。
+//
+// 🔴 只用于**新加的可空列**的写入退路：新镜像可能先于迁移上线（或者回滚之后
+// 又被推上来），而一列运营字段不该让它所在的那次业务写入整条失败。
+// 绝不能用它去掩盖拼错的列名 —— 所以每个调用点都必须在注释里说明退路是什么。
+func IsUndefinedColumn(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "42703"
+}
+
 // Wrap 把底层错误包一层但**不带连接串**。
 func Wrap(op string, err error) error {
 	if err == nil {

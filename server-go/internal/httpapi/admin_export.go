@@ -1,9 +1,13 @@
 // 后台 CSV 导出。一个路由覆盖六类数据：GET /v1/admin/export/{kind}.csv
 //
-// 🔴 一律脱敏，而且脱敏点只有一处（store.CSVMaskEmail / store.CSVText）。
-// 理由：导出文件会离开这台机器 —— 进运营的下载目录、微信、某个表格。
-// 页面上显示完整邮箱还能靠「只有持令牌的人打得开」兜住，一个躺在下载目录里的
-// CSV 兜不住。把打码散在六个 handler 里写六遍，等于保证总有一个会漏。
+// 🔴 2026-09-12 第七轮：导出**不打码**。邮箱、用户 id、交易号一律完整。
+// 此前这里把邮箱打成 a***@example.com、用户 id 只给前 8 位，理由是「文件会离开
+// 这台机器」。但导出的全部用处就是拿它去对账、去群发、去挨个联系用户 ——
+// 打了码的邮箱做不了其中任何一件，于是实际发生的事是有人绕开导出直接去抄数据库。
+// 这是自家后台的自家用户资料，导出它的人就是那个本来就能在页面上看到它的人。
+//
+// 仍然不进 CSV 的是**凭据**：会话令牌、验证码哈希、密钥 —— 它们根本不在这六类
+// 数据的任何一列里，所以这件事是靠「只导出这些列」保证的，不是靠打码。
 //
 // 🔴 导出的行数与口径必须和页面上那张表**完全一致**（同一个 store 函数、
 // 同一套筛选参数）。一个「导出比页面多几行」的 CSV 会被当成页面漏了数据，
@@ -108,13 +112,13 @@ func (a *App) exportUsers(ctx context.Context, q urlValues, limit int) ([]string
 	out := make([][]string, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, []string{
-			// id 只导前 8 位 —— 和页面同一个脱敏口径。
-			r.ID, store.CSVText(r.DisplayName), store.CSVMaskEmail(r.Email),
+			// 完整用户 id + 完整邮箱 —— 和页面同一个口径（都来自同一个 store 函数）。
+			r.UserID, store.CSVText(r.DisplayName), store.CSVText(r.Email),
 			store.CSVText(r.Providers), r.Status, csvBoolStr(r.IsGuest),
 			itoa(r.Units), itoa(r.Jobs), r.CreatedAt,
 		})
 	}
-	return []string{"用户id前8位", "昵称", "邮箱(已打码)", "登录方式", "状态", "是否游客", "额度净额", "任务数", "注册时间UTC"}, out, nil
+	return []string{"用户id", "昵称", "邮箱", "登录方式", "状态", "是否游客", "额度净额", "任务数", "注册时间UTC"}, out, nil
 }
 
 func (a *App) exportJobs(ctx context.Context, q urlValues, limit int) ([]string, [][]string, error) {
@@ -137,12 +141,12 @@ func (a *App) exportJobs(ctx context.Context, q urlValues, limit int) ([]string,
 	for _, r := range rows {
 		out = append(out, []string{
 			r.ID, r.Status, r.Stage, derefStr(r.ErrorCode), itoa(r.AttemptCount), itoa(r.RetryCount),
-			r.Style, r.User, store.CSVMaskEmail(r.Email), intPtrStr(r.Seconds),
+			r.Style, r.User, store.CSVText(r.Email), intPtrStr(r.Seconds),
 			itoa(r.ReservedUnits), itoa64(r.CostMinor), r.CreatedAt, rawJSONStr(r.UpstreamSummary),
 		})
 	}
-	return []string{"任务id", "状态", "阶段", "失败原因码", "尝试次数", "被重试次数", "风格", "用户id前8位",
-		"邮箱(已打码)", "耗时秒", "预留额度", "成本(分)", "创建时间UTC", "上游返回摘要"}, out, nil
+	return []string{"任务id", "状态", "阶段", "失败原因码", "尝试次数", "被重试次数", "风格", "用户id",
+		"邮箱", "耗时秒", "预留额度", "成本(分)", "创建时间UTC", "上游返回摘要"}, out, nil
 }
 
 func (a *App) exportPurchases(ctx context.Context, q urlValues, limit int) ([]string, [][]string, error) {
@@ -165,11 +169,11 @@ func (a *App) exportPurchases(ctx context.Context, q urlValues, limit int) ([]st
 		out = append(out, []string{
 			r.ID, r.Platform, r.TxID, r.Status, r.Product, r.ProductKey,
 			int64PtrStr(r.AmountMinor), derefStr(r.Currency), itoa(r.UnitsGranted),
-			r.User, store.CSVMaskEmail(r.Email), r.PurchasedAt, derefStr(r.ExpiresAt),
+			r.User, store.CSVText(r.Email), r.PurchasedAt, derefStr(r.ExpiresAt),
 		})
 	}
 	return []string{"购买id", "平台", "交易号", "状态", "商品", "商品key", "金额(分)", "币种",
-		"入账额度", "用户id前8位", "邮箱(已打码)", "购买时间UTC", "到期时间UTC"}, out, nil
+		"入账额度", "用户id", "邮箱", "购买时间UTC", "到期时间UTC"}, out, nil
 }
 
 func (a *App) exportFeedback(ctx context.Context, q urlValues, limit int) ([]string, [][]string, error) {
@@ -191,11 +195,11 @@ func (a *App) exportFeedback(ctx context.Context, q urlValues, limit int) ([]str
 	for _, r := range rows {
 		out = append(out, []string{
 			r.ID, r.Rating, rawJSONStr(r.ReasonCodes), store.CSVText(r.Comment),
-			store.CSVText(r.Style), r.User, store.CSVMaskEmail(r.Email),
+			store.CSVText(r.Style), r.User, store.CSVText(r.Email),
 			r.CreatedAt, derefStr(r.HandledAt), store.CSVText(r.HandledNote),
 		})
 	}
-	return []string{"反馈id", "评价", "原因码", "用户正文", "风格", "用户id前8位", "邮箱(已打码)",
+	return []string{"反馈id", "评价", "原因码", "用户正文", "风格", "用户id", "邮箱",
 		"提交时间UTC", "处理时间UTC", "处理备注"}, out, nil
 }
 
@@ -215,7 +219,7 @@ func (a *App) exportEvents(ctx context.Context, q urlValues, limit int) ([]strin
 	for _, r := range rows {
 		out = append(out, []string{r.At, r.Name, derefStr(r.User), rawJSONStr(r.Props)})
 	}
-	return []string{"时间UTC", "事件名", "用户id前8位", "props"}, out, nil
+	return []string{"时间UTC", "事件名", "用户id", "props"}, out, nil
 }
 
 func (a *App) exportAssets(ctx context.Context, q urlValues, limit int) ([]string, [][]string, error) {
@@ -239,14 +243,14 @@ func (a *App) exportAssets(ctx context.Context, q urlValues, limit int) ([]strin
 		out = append(out, []string{
 			r.ID, r.Kind, r.Status, r.ContentType, int64PtrStr(r.ByteSize),
 			intPtrStr(r.Width), intPtrStr(r.Height), derefStr(r.SHA256),
-			r.User, store.CSVMaskEmail(r.Email), derefStr(r.ProjectID),
+			r.User, store.CSVText(r.Email), derefStr(r.ProjectID),
 			derefStr(r.AIGCLabel), r.CreatedAt, derefStr(r.DeletedAt),
 		})
 	}
 	// 「AI标识」列同样进 CSV：合规盘点（「线上还有多少张成品没标识」）是个
 	// 离线统计动作，做在表格里，不该逼着人去后台一页一页翻。
 	return []string{"资产id", "类型", "状态", "内容类型", "字节数", "宽", "高", "sha256",
-		"用户id前8位", "邮箱(已打码)", "项目id", "AI标识", "创建时间UTC", "删除时间UTC"}, out, nil
+		"用户id", "邮箱", "项目id", "AI标识", "创建时间UTC", "删除时间UTC"}, out, nil
 }
 
 // urlValues 是 url.Values 的最小接口，方便把 handler 拆成可单测的小函数。

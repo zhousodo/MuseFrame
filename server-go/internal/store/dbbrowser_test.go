@@ -35,16 +35,9 @@ func TestSensitiveColumnsNeverReturnedInClear(t *testing.T) {
 		table, column, raw string
 	}{
 		{"server_secrets", "value", "SUPER-SECRET-SALT-VALUE"},
-		{"auth_identities", "email_normalized", "zhousodo@example.com"},
-		{"auth_identities", "provider_subject", "email:zhousodo@example.com"},
-		{"purchases", "external_transaction_id", "GPA.3312-1234-5678-90123"},
-		{"sessions", "device_id", "device-fingerprint-abcdef"},
 		{"email_codes", "code_hash", "8f14e45fceea167a5a36dedd4bea2543"},
 		{"idempotency_records", "response_body", "{\"job\":{\"id\":\"secret-job\"}}"},
 		{"idempotency_records", "request_hash", "deadbeefdeadbeefdeadbeefdeadbeef"},
-		{"free_grants", "device_hash", "605fb71109d96a0c907711c9"},
-		{"free_grants", "ip_hash", "a1b2c3d4e5f60718293a4b5c"},
-		{"manual_grants", "idempotency_key", "panel-click-20260911-0001"},
 	}
 	for _, c := range cases {
 		got := MaskCell(c.table, c.column, c.raw, false)
@@ -58,7 +51,37 @@ func TestSensitiveColumnsNeverReturnedInClear(t *testing.T) {
 	}
 }
 
+// 🔴 2026-09-12 第七轮的**正向**断言：用户资料一律完整回。
+//
+// 这几列此前都在脱敏清单里（邮箱打码成 z***@example.com、交易号与设备/IP 哈希
+// 整体掩码）。它们不是凭据，是客服每天要用的东西：拿邮箱联系用户、
+// 拿交易号去商店后台对账、拿设备与 IP 判断「这一批账号是不是同一个人在刷」。
+// 而这个后台只有管理员令牌打得开 —— 把它们打码的真实代价是有人去 SSH 上 psql。
+func TestUserDataReturnedInFull(t *testing.T) {
+	cases := []struct {
+		table, column, raw string
+	}{
+		{"auth_identities", "email_normalized", "zhousodo@example.com"},
+		{"auth_identities", "provider_subject", "email:zhousodo@example.com"},
+		{"purchases", "external_transaction_id", "GPA.3312-1234-5678-90123"},
+		{"sessions", "device_id", "device-fingerprint-abcdef"},
+		{"free_grants", "device_hash", "605fb71109d96a0c907711c9"},
+		{"free_grants", "ip_hash", "a1b2c3d4e5f60718293a4b5c"},
+		{"free_grants", "ip", "203.0.113.7"},
+		{"manual_grants", "idempotency_key", "panel-click-20260911-0001"},
+	}
+	for _, c := range cases {
+		if got := MaskCell(c.table, c.column, c.raw, false); got != c.raw {
+			t.Errorf("%s.%s 必须原样回（管理员后台），实际 %v", c.table, c.column, got)
+		}
+		if RedactionFor(c.table, c.column) != RedactNone {
+			t.Errorf("%s.%s 不该再出现在列级脱敏清单里", c.table, c.column)
+		}
+	}
+}
+
 // sessions.token 保留前 6 位（与 Node 版一致），但剩下的必须没了。
+// 🔴 令牌是**凭据**：第七轮把用户资料全部放开，这一列刻意没动。
 func TestSessionTokenKeepsSixChars(t *testing.T) {
 	raw := "abcdefghijklmnopqrstuvwxyz012345"
 	got, _ := MaskCell("sessions", "token", raw, false).(string)

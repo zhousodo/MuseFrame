@@ -14,7 +14,6 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -148,7 +147,7 @@ func ListEventVersions(ctx context.Context, q Queryer, since time.Time) ([]Event
 	return out, rows.Err()
 }
 
-// EventSampleRow 是一条原始埋点样本。User 只回前 8 位（脱敏契约，与 users 列表一致）。
+// EventSampleRow 是一条原始埋点样本。User 是**完整**用户 id（与 users 列表一致）。
 type EventSampleRow struct {
 	At    string          `json:"at"`
 	Name  string          `json:"name"`
@@ -159,7 +158,7 @@ type EventSampleRow struct {
 // ListEventSamples 原始埋点样本，倒序。name 为空表示不筛。
 func ListEventSamples(ctx context.Context, q Queryer, since time.Time, name string, tr TimeRange, limit int) ([]EventSampleRow, error) {
 	sql := `
-		SELECT occurred_at, name, substr(user_id,1,8), props
+		SELECT occurred_at, name, user_id, props
 		FROM events
 		WHERE occurred_at >= $1` + notUserEventClause(2)
 	args := append([]any{since}, notUserEventArgs()...)
@@ -234,7 +233,7 @@ type AssetFilter struct {
 func ListAdminAssets(ctx context.Context, q Queryer, f AssetFilter) ([]AdminAssetRow, error) {
 	sql := `
 		SELECT a.id, a.kind, a.status, a.content_type, a.byte_size, a.width, a.height, a.sha256,
-		       substr(a.user_id,1,8),
+		       a.user_id,
 		       (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=a.user_id AND ai.email_normalized IS NOT NULL LIMIT 1),
 		       a.project_id, a.aigc_label, a.created_at, a.deleted_at
 		FROM assets a WHERE true`
@@ -248,8 +247,8 @@ func ListAdminAssets(ctx context.Context, q Queryer, f AssetFilter) ([]AdminAsse
 		sql += ` AND a.status = $` + itoa(len(args))
 	}
 	if f.UserID != "" {
-		// 前缀匹配：后台列表里只显示 id 的前 8 位，运营能复制到的就是那 8 位。
-		// 要求填完整 id 等于这个筛选永远没人用得上。
+		// 前缀匹配：列表里现在显示完整 id，但筛选仍然接受任意长度的前缀 ——
+		// 运营手里常常只有工单里抄来的几位。
 		args = append(args, f.UserID+"%")
 		sql += ` AND a.user_id LIKE $` + itoa(len(args)) + ` ESCAPE '\'`
 	}
@@ -510,18 +509,31 @@ func GetUserByPrefix(ctx context.Context, q Queryer, prefix string) (id string, 
 // 所以发信记录也会到期被删。后台那一节的说明里写了这句。
 const EmailSendKind = "email.send"
 
-// EmailSendRow 是一条发信记录。收件地址**已打码**（a***@example.com）。
+// EmailSendRow 是一条发信记录。收件地址是**完整地址**（管理员后台，见 InsertEmailSend）。
 type EmailSendRow struct {
-	At    string  `json:"at"`
-	Kind  string  `json:"kind"`
-	To    string  `json:"to"`
-	OK    bool    `json:"ok"`
-	Error *string `json:"error"`
+	At   string `json:"at"`
+	Kind string `json:"kind"`
+	To   string `json:"to"`
+	// Subject 是主题。历史行（本版之前落的）没有这一项，回空串。
+	// 验证码信记的是**去掉验证码之后**的主题模板，不是真实主题。
+	Subject string  `json:"subject"`
+	OK      bool    `json:"ok"`
+	Error   *string `json:"error"`
 }
 
-// InsertEmailSend 记一条发信记录。to 必须是**已打码**的地址。
-func InsertEmailSend(ctx context.Context, q Queryer, id, kind, maskedTo string, ok bool, errText string, t time.Time) error {
-	props := map[string]any{"kind": kind, "to": maskedTo, "ok": ok}
+// InsertEmailSend 记一条发信记录。
+//
+// 🔴 2026-09-12 第七轮：to 存**完整收件地址**（此前存 a***@example.com），
+// 并新增 subject。理由：这张表回答的问题是「用户说他没收到验证码」，
+// 而打码之后客服没法确认后台这行记的就是他报的那个地址（a***@qq.com 可以是任何人）。
+//
+// 🔴 subject 由调用方给，而且**绝不能**是验证码信的真实主题 ——
+// 那一行以明文验证码开头（mailer.loginCodeBody）。验证码本体一个字节都不入库。
+func InsertEmailSend(ctx context.Context, q Queryer, id, kind, to, subject string, ok bool, errText string, t time.Time) error {
+	props := map[string]any{"kind": kind, "to": to, "ok": ok}
+	if subject != "" {
+		props["subject"] = subject
+	}
 	if errText != "" {
 		props["error"] = errText
 	}
@@ -535,7 +547,8 @@ func InsertEmailSend(ctx context.Context, q Queryer, id, kind, maskedTo string, 
 // ListEmailSends 发信记录，倒序。
 func ListEmailSends(ctx context.Context, q Queryer, limit int) ([]EmailSendRow, error) {
 	rows, err := q.Query(ctx, `
-		SELECT occurred_at, props->>'kind', props->>'to', COALESCE((props->>'ok')::boolean, false), props->>'error'
+		SELECT occurred_at, props->>'kind', props->>'to', props->>'subject',
+		       COALESCE((props->>'ok')::boolean, false), props->>'error'
 		FROM events WHERE name = $1 ORDER BY occurred_at DESC, id DESC LIMIT $2`, EmailSendKind, limit)
 	if err != nil {
 		return nil, err
@@ -545,12 +558,12 @@ func ListEmailSends(ctx context.Context, q Queryer, limit int) ([]EmailSendRow, 
 	for rows.Next() {
 		var r EmailSendRow
 		var t time.Time
-		var kind, to *string
-		if err := rows.Scan(&t, &kind, &to, &r.OK, &r.Error); err != nil {
+		var kind, to, subject *string
+		if err := rows.Scan(&t, &kind, &to, &subject, &r.OK, &r.Error); err != nil {
 			return nil, err
 		}
 		r.At = ISO(t)
-		r.Kind, r.To = deref(kind), deref(to)
+		r.Kind, r.To, r.Subject = deref(kind), deref(to), deref(subject)
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -566,7 +579,8 @@ type EmailCodeRow struct {
 	Expired    bool   `json:"expired"`
 }
 
-// ListEmailCodes 验证码签发台账。email 打码。
+// ListEmailCodes 验证码签发台账。email 回**完整地址**（2026-09-12 起不再打码 ——
+// 客服要确认「用户报的这个邮箱到底签发过几次码」，打码之后这张表答不了这个问题）。
 //
 // 🔴 code_hash 一个字节都不回。它是 HMAC，但后台页面不需要它，
 // 而「后台能看到验证码哈希」这件事本身会变成下一个人复制粘贴的起点。
@@ -585,28 +599,11 @@ func ListEmailCodes(ctx context.Context, q Queryer, now time.Time, limit int) ([
 		if err := rows.Scan(&r.Email, &created, &expires, &r.Attempts, &r.IssueCount); err != nil {
 			return nil, err
 		}
-		r.Email = MaskEmail(r.Email)
 		r.CreatedAt, r.ExpiresAt = ISO(created), ISO(expires)
 		r.Expired = expires.Before(now)
 		out = append(out, r)
 	}
 	return out, rows.Err()
-}
-
-// MaskEmail 把地址打码成 a***@example.com。与 mailer.MaskEmail 同语义。
-//
-// 🔴 刻意不 import internal/mailer：store 被 mailer 之外的一堆东西用，
-// 为一个 20 行的纯函数加一条 store -> mailer 依赖会把依赖图拧成环（mailer 要用 store 落记录）。
-func MaskEmail(to string) string {
-	to = strings.TrimSpace(to)
-	i := strings.LastIndex(to, "@")
-	if i <= 0 {
-		if to == "" {
-			return ""
-		}
-		return "***"
-	}
-	return to[:1] + "***" + to[i:]
 }
 
 func deref(s *string) string {

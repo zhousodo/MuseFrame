@@ -37,8 +37,12 @@ func TestAdminDBTableRedactionEndToEnd(t *testing.T) {
 		t.Fatalf("server_secrets 必须整表拒绝，实际 %d %s", r.Code, r.Body)
 	}
 
-	// 逐张表拉出来，断言敏感明文一个都不出现。
-	forbidden := []string{secretVal, email, "email:" + email, orderID,
+	// 逐张表拉出来，断言**凭据与密钥**的明文一个都不出现。
+	//
+	// 🔴 2026-09-12 第七轮：这张清单里**不再包括**邮箱与交易号。
+	// 它们是用户资料，不是凭据 —— 客服要拿邮箱联系用户、拿交易号去商店后台对账，
+	// 而这个后台只有管理员令牌打得开。下面紧接着有一条正向断言钉住「必须看得见」。
+	forbidden := []string{secretVal,
 		"8f14e45fceea167a5a36dedd4bea2543", "sk-LEAKED-KEY-VALUE", "guesttoken"}
 	for _, tbl := range store.BrowsableTableNames() {
 		r := e.do("GET", "/v1/admin/db/table/"+tbl+"?limit=200", nil, e.admin())
@@ -50,6 +54,21 @@ func TestAdminDBTableRedactionEndToEnd(t *testing.T) {
 			if strings.Contains(body, f) {
 				t.Errorf("表 %s 的响应里出现了明文敏感值 %q", tbl, f)
 			}
+		}
+	}
+
+	// 🔴 正向断言：用户资料必须**看得见**。
+	// 变异验证：把 auth_identities.email_normalized / provider_subject 或
+	// purchases.external_transaction_id 放回 redactColumns，这几行红。
+	for _, want := range []struct{ table, value string }{
+		{"auth_identities", email},
+		{"auth_identities", "email:" + email},
+		{"purchases", orderID},
+	} {
+		r := e.do("GET", "/v1/admin/db/table/"+want.table+"?limit=200", nil, e.admin())
+		if !strings.Contains(string(r.Body), want.value) {
+			t.Errorf("表 %s 必须完整显示 %q（自家后台看自家用户资料），实际 %s",
+				want.table, want.value, r.Body)
 		}
 	}
 
@@ -153,22 +172,23 @@ func TestAdminConfigSecretWriteRejected(t *testing.T) {
 	}
 }
 
-// 路由总数：公开 30 + 管理 34 = 64（另加一条不在公开契约里的 /v1/ready）。
-// 管理路由 2026-09-12 两轮加到 34：
+// 路由总数：公开 30 + 管理 37 = 67（另加一条不在公开契约里的 /v1/ready）。
+// 管理路由 2026-09-12 三轮加到 37：
 //
 //	第三轮 +5 PATCH styles-admin/{id}、POST users/{id}/status、GET user-facts、
 //	        GET audit、GET feedback-reasons
 //	第四轮 +9 GET events / assets / user-detail / email-log / api-health、
 //	        GET export/{kind}.csv、POST feedback/{id}/handled、
 //	        POST jobs/{id}/retry、POST purchases/{id}/reverify
+//	第七轮 +3 GET job-detail（全部候选）、GET photo-analyses、GET style-versions（spec）
 //
-// 🔴 公开路由数必须**不变**。这一轮的判据是「后台看得见 App 已经在上报的东西」，
+// 🔴 公开路由数必须**不变**。这几轮的判据都是「后台看得见 App 已经在上报的东西」，
 // 不是「给 App 加接口」—— 公开侧一旦变了就说明改到了契约，而 App 不在这次发版里。
 func TestRouteCount(t *testing.T) {
 	e := newTestEnv(t)
 	pub, adm := e.app.RouteCount()
-	if adm != 34 {
-		t.Fatalf("管理路由应为 34 条，实际 %d", adm)
+	if adm != 37 {
+		t.Fatalf("管理路由应为 37 条，实际 %d", adm)
 	}
 	if pub != 31 {
 		t.Fatalf("公开路由应为 30 条契约路由 + 1 条内部 /v1/ready = 31，实际 %d", pub)

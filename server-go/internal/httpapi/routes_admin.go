@@ -2,7 +2,7 @@ package httpapi
 
 import "net/http"
 
-// registerAdminRoutes 注册 25 条管理后台路由，全部 requireAdmin。
+// registerAdminRoutes 注册 37 条管理后台路由（编号 31–67），全部 requireAdmin。
 // 鉴权：只读 X-Admin-Token 请求头，常数时间比对，限流 120/min。
 func (a *App) registerAdminRoutes() {
 	a.add(http.MethodGet, `/v1/admin/overview`, a.hAdminOverview)                          // 31
@@ -48,6 +48,14 @@ func (a *App) registerAdminRoutes() {
 	//    不需要 —— add() 把 pattern 锚成 ^…$，`/v1/admin/export/users.csv` 与
 	//    任何 assets 路由都不可能同时匹配。顺序只影响 404 归因，不影响正确性。
 	a.add(http.MethodGet, `/v1/admin/export/([a-z]+)\.csv`, a.hAdminExportCSV) // 61
+
+	// ---- 2026-09-12 第七轮：最后三块只读视图 ------------------------------
+	// 任务详情（全部候选，按产出时间）、画面分析表、风格版本的完整 spec。
+	// 这三张表此前在后台只有「数据库浏览器按表分页」一条读法，而那条读法
+	// 答不了任何一个需要跨表 JOIN 或者按 id 定位的问题。
+	a.add(http.MethodGet, `/v1/admin/job-detail`, a.hAdminJobDetail)         // 65
+	a.add(http.MethodGet, `/v1/admin/photo-analyses`, a.hAdminPhotoAnalyses) // 66
+	a.add(http.MethodGet, `/v1/admin/style-versions`, a.hAdminStyleVersions) // 67
 
 	a.add(http.MethodPost, `/v1/admin/feedback/([\w-]+)/handled`, a.hAdminFeedbackHandled)    // 62
 	a.add(http.MethodPost, `/v1/admin/jobs/([\w-]+)/retry`, a.hAdminJobRetry)                 // 63

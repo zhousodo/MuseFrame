@@ -175,6 +175,10 @@
   #viewer .drawer{background:var(--bg);color:var(--ink);text-align:left;cursor:default;
     width:min(1080px,96vw);max-height:92vh;overflow-y:auto;border-radius:8px;padding:16px 20px 24px;}
   #viewer .drawer h3{font-size:14px;margin:20px 0 6px;}
+  /* spec 是一大段 JSON：等宽、保留缩进、自己滚，绝不撑破抽屉宽度。 */
+  #viewer .drawer pre.spec{background:var(--surface);border:1px solid var(--line);border-radius:6px;
+    padding:10px 12px;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink);
+    max-height:40vh;overflow:auto;white-space:pre;}
 
   /* ---------- 页面内对话框（替代原生 confirm/prompt） ---------- */
   #modal{position:fixed;inset:0;background:rgba(17,24,39,.45);display:none;align-items:center;
@@ -414,7 +418,7 @@
           <select id="jobStatus"><option value="">全部</option><option value="queued">queued 排队</option><option value="running">running 生成中</option><option value="quality_check">quality_check 质检</option><option value="succeeded">succeeded 成功</option><option value="failed">failed 失败</option><option value="cancelled">cancelled 取消</option></select></label>
         <label class="f"><span>时间窗</span>
           <select id="jobSince"><option value="">不限</option><option value="1">近 1 小时</option><option value="24">近 24 小时</option><option value="168">近 7 天</option><option value="720">近 30 天</option></select></label>
-        <label class="f grow"><span>用户 ID（前 8 位即可，回车或离开输入框生效）</span>
+        <label class="f grow"><span>用户 ID（完整 id 或任意长度前缀，回车或离开输入框生效）</span>
           <input id="jobUser" placeholder="留空 = 全部用户" autocomplete="off"></label>
         <label class="f"><span>开始日期 (UTC+8)</span><input type="date" id="jobFrom"></label>
         <label class="f"><span>结束日期 (UTC+8，含当天)</span><input type="date" id="jobTo"></label>
@@ -432,7 +436,7 @@
           <select id="assetKind"><option value="">全部</option><option value="source">source 源图</option><option value="candidate">candidate 成品</option><option value="thumbnail">thumbnail 缩略图</option><option value="export">export 导出</option></select></label>
         <label class="f"><span>状态</span>
           <select id="assetStatus"><option value="">全部</option><option value="pending">pending</option><option value="ready">ready</option><option value="quarantined">quarantined</option><option value="deleted">deleted</option></select></label>
-        <label class="f grow"><span>用户 ID（前 8 位即可，回车或离开输入框生效）</span>
+        <label class="f grow"><span>用户 ID（完整 id 或任意长度前缀，回车或离开输入框生效）</span>
           <input id="assetUser" placeholder="留空 = 全部用户" autocomplete="off"></label>
         <label class="f"><span>开始日期 (UTC+8)</span><input type="date" id="assetFrom"></label>
         <label class="f"><span>结束日期 (UTC+8，含当天)</span><input type="date" id="assetTo"></label>
@@ -444,6 +448,9 @@
            foster parenting，把它挪到 <table> 前面成为兄弟节点，而渲染函数只改
            table.innerHTML —— 那行「加载中…」就永久钉在表头上方。 -->
       <div class="tw"><table id="assetsTable"><tbody><tr><td colspan="10" class="loading">加载中…</td></tr></tbody></table></div>
+      <h3 class="sec">画面分析（photo_analyses）</h3>
+      <p class="note" id="photoAnalysesNote">加载中…</p>
+      <div class="tw"><table id="photoAnalyses"><tbody><tr><td colspan="9" class="loading">加载中…</td></tr></tbody></table></div>
     </section>
 
     <!-- ---------------- 风格 ---------------- -->
@@ -530,7 +537,9 @@
     <section id="view-email" class="view">
       <div class="vhead"><h2>发信记录</h2><p class="note" id="emailLogNote">加载中…</p></div>
       <h3 class="sec">邮件发送</h3>
-      <div class="tw"><table id="emailSends"><tbody><tr><td colspan="5" class="loading">加载中…</td></tr></tbody></table></div>
+      <p class="note">收件人是<b>完整地址</b>（这张表要回答「用户说他没收到验证码」，打码就对不上人了）。
+        验证码信的主题记的是一个<b>不含验证码</b>的常量 —— 真实主题以明文验证码开头，它一个字节都不入库。</p>
+      <div class="tw"><table id="emailSends"><tbody><tr><td colspan="6" class="loading">加载中…</td></tr></tbody></table></div>
       <h3 class="sec">验证码签发台账</h3>
       <p class="note">同一邮箱在「验证码有效期」这个窗口内最多签发几次，由「配置 · 邮件通道与验证码」里的 <code>email_code_max_issues_per_window</code> 决定。</p>
       <div class="tw"><table id="emailCodes"><tbody><tr><td colspan="5" class="loading">加载中…</td></tr></tbody></table></div>
@@ -587,7 +596,7 @@
     <!-- ---------------- 数据库 ---------------- -->
     <section id="view-db" class="view">
       <div class="vhead"><h2>数据库浏览</h2>
-        <p class="note">只读地翻库。左侧选表分页浏览，下面的查询台只接受 SELECT / WITH。密钥列已脱敏；
+        <p class="note">只读地翻库。左侧选表分页浏览，下面的查询台只接受 SELECT / WITH。<b>凭据列</b>（会话令牌 / 验证码哈希 / 幂等响应体 / 密钥）仍然脱敏，用户资料（邮箱、交易号、设备与 IP）完整显示；
           <b>这一页是全后台唯一展示 UTC 的地方</b>（展示的是库里原始列值，ISO-8601 带 Z；其余页面一律北京时间 UTC+8）。
           这里<b>改不了</b>任何数据 —— 要改去对应的功能页，那样才有审计。</p></div>
       <div class="dblayout">
@@ -750,12 +759,17 @@ function idCell(id, word){
   return `<span class="idc"><code title="${escapeHtml(s)}">${escapeHtml(s)}</code>` +
     `<button class="cp" type="button" data-copy="${escapeHtml(s)}" title="复制完整 id">⧉</button></span>`;
 }
+/* userCell 是「这一行是谁的」。邮箱完整显示，用户 id 给完整值（同 idCell：
+   窄列里由 CSS 省略号收尾，title 里是全文，旁边一键复制）。
+   🔴 2026-09-12：这里曾经把 id 截成 uid.slice(0,8) 再补一个省略号 ——
+   那是**数据**被截断（复制出来也只有 8 位），不是排版。自家后台看自家用户，
+   客服要把完整 id 粘进查询台、粘进工单。 */
 function userCell(userId, email){
   const uid = userId === null || userId === undefined ? '' : String(userId).trim();
   const mail = email === null || email === undefined ? '' : String(email).trim();
   const who = mail ? escapeHtml(mail) : '<span class="empty">游客（无邮箱）</span>';
   if (!uid) return who;
-  return `${who}<br><span class="idc"><a href="#" data-user="${escapeHtml(uid)}" title="打开用户详情">${escapeHtml(uid.slice(0,8))}…</a>` +
+  return `${who}<br><span class="idc"><a href="#" data-user="${escapeHtml(uid)}" title="打开用户详情（${escapeHtml(uid)}）"><code>${escapeHtml(uid)}</code></a>` +
     `<button class="cp" type="button" data-copy="${escapeHtml(uid)}" title="复制完整用户 id">⧉</button></span>`;
 }
 document.addEventListener('click', async (e) => {
@@ -945,7 +959,7 @@ async function exportCsv(kind, params){
     a.remove();
     // 立刻撤销会让部分浏览器在开始下载前就拿不到 blob，延后一拍。
     setTimeout(() => URL.revokeObjectURL(href), 10000);
-    toast(`已导出 ${rows ?? '?'} 行（当前筛选口径，邮箱已打码）`);
+    toast(`已导出 ${rows ?? '?'} 行（当前筛选口径，邮箱与用户 id 完整）`);
   } catch(e) { toast('导出失败：' + e.message, true); }
 }
 
@@ -1117,9 +1131,11 @@ async function loadJobsTable(){
           ${x.upstreamSummary ? '<br><code title="上游图片服务商最近一次返回的摘要">' + escapeHtml(JSON.stringify(x.upstreamSummary)) + '</code>'
             : '<br><span class="empty">上游无记录</span>'}</td>
         <td class="nowrap">${timeCell(x.created_at)}</td>
-        <td>${retriable ? `<button class="ghost sm" data-retry="${escapeHtml(x.id)}">重试</button>` : '<span class="empty">不可重试</span>'}</td></tr>`;
+        <td class="nowrap"><button class="ghost sm" data-jobdetail="${escapeHtml(x.id)}">详情</button>
+          ${retriable ? `<button class="ghost sm" data-retry="${escapeHtml(x.id)}">重试</button>` : '<span class="empty">不可重试</span>'}</td></tr>`;
       }).join('') + '</tbody>' : emptyRow(11, filtered ? '没有符合筛选条件的任务，换个条件试试。' : '还没有任何生成任务。'));
     $('jobs').querySelectorAll('[data-retry]').forEach(b => b.addEventListener('click', () => retryJob(b.dataset.retry, b)));
+    $('jobs').querySelectorAll('[data-jobdetail]').forEach(b => b.addEventListener('click', () => openJobDetail(b.dataset.jobdetail)));
   } catch(e) {
     if (e.status !== 401) $('jobs').innerHTML = errRow(11, e.message);
   }
@@ -1478,6 +1494,49 @@ async function loadAssets(){
     if (e.status === 401) return;
     $('assetsTable').innerHTML = errRow(10, e.message);
   }
+  loadPhotoAnalyses();
+}
+/* 画面分析（photo_analyses）。跟着资产页一起拉 —— 分析是**按源图**做的，
+   它和资产列表回答的是同一个问题的两半：「用户传了什么」和「我们看出了什么」。
+   用户筛选与这一页的「用户 ID」输入框共用（前缀匹配，后端下推到 SQL）。 */
+async function loadPhotoAnalyses(){
+  const q = new URLSearchParams({ userId: $('assetUser').value.trim() });
+  for (const [k, v] of [...q]) if (!v) q.delete(k);
+  try {
+    const r = await api('/v1/admin/photo-analyses' + (q.toString() ? '?' + q : ''));
+    $('photoAnalysesNote').textContent = (r.note || '') +
+      '　状态分布：' + (Object.keys(r.statusCounts || {}).length
+        ? Object.keys(r.statusCounts).sort().map(k => `${k} ${r.statusCounts[k]}`).join('　') : '（暂无数据）');
+    const rows = r.analyses || [];
+    $('photoAnalyses').innerHTML =
+      '<thead><tr><th>源图</th><th>状态</th><th>主体</th><th class="num">人数</th><th class="num">清晰度</th>' +
+      '<th class="num">曝光</th><th>提示 / 建议</th><th>归属</th><th>时间 (UTC+8)</th></tr></thead>' +
+      (rows.length ? '<tbody>' + rows.map(a => `<tr>
+        <td>${thumb(a.assetId)}</td>
+        <td><span class="b ${a.status === 'ready' ? 'ok' : a.status === 'failed' ? 'err' : ''}">${escapeHtml(String(a.status || '未知'))}</span></td>
+        <td>${txt(a.subjectType, '未判定')}</td>
+        <td class="num">${numCell(a.personCount, '', '未判定')}</td>
+        <td class="num">${scoreCell(a.sharpness)}</td>
+        <td class="num">${scoreCell(a.exposure)}</td>
+        <td style="max-width:320px">${listCell(a.warnings, '无提示')}${listCell(a.recommendations, '无建议')}</td>
+        <td>${userCell(a.user, a.email)}</td>
+        <td class="nowrap">${timeCell(a.createdAt)}</td></tr>`).join('') + '</tbody>'
+        : emptyRow(9, '还没有任何画面分析记录（分析在源图上传后由服务端写）。'));
+  } catch(e) {
+    if (e.status === 401) return;
+    $('photoAnalyses').innerHTML = errRow(9, e.message);
+  }
+}
+/* 分数列：0–1 的小数保留两位。null 是「没分析出来」，不是 0 分 ——
+   显示成 0 会让人以为这张图糊得一塌糊涂。 */
+function scoreCell(v){
+  if (v === null || v === undefined || isNaN(Number(v))) return none('未判定');
+  return Number(v).toFixed(2);
+}
+/* 提示 / 建议原文。数组为空时给一句人话，不渲染空格子。 */
+function listCell(arr, emptyWord){
+  if (!Array.isArray(arr) || !arr.length) return `<div class="empty">${escapeHtml(emptyWord)}</div>`;
+  return '<div>' + arr.map(x => escapeHtml(String(x))).join('、') + '</div>';
 }
 
 /* ================= 统计图表 ================= */
@@ -1641,6 +1700,7 @@ function renderOpsStyles(){
         <div class="btnrow" style="margin-top:12px">
           <button data-save-style="${escapeHtml(s.id)}">保存</button>
           <button class="${s.status === 'published' ? 'danger' : 'ghost'}" data-quick-style="${escapeHtml(s.id)}" data-status="${escapeHtml(s.status || '')}">${s.status === 'published' ? '紧急下架' : '重新上架'}</button>
+          <button class="ghost" data-style-spec="${escapeHtml(s.id)}">版本与 spec</button>
           <span class="muted" style="font-size:12px">#${i+1} · 保存后 /v1/styles 立刻反映，不需要发版</span>
           <span class="cfgsaved" data-style-saved="${escapeHtml(s.id)}"></span>
         </div>
@@ -1649,6 +1709,7 @@ function renderOpsStyles(){
   }).join('');
   $('opsStyles').querySelectorAll('[data-save-style]').forEach(b => b.addEventListener('click', () => saveStyle(b)));
   $('opsStyles').querySelectorAll('[data-quick-style]').forEach(b => b.addEventListener('click', () => toggleStyleStatus(b)));
+  $('opsStyles').querySelectorAll('[data-style-spec]').forEach(b => b.addEventListener('click', () => openStyleVersions(b.dataset.styleSpec)));
 }
 async function saveStyle(btn){
   const card = btn.closest('.ecard');
@@ -2286,13 +2347,14 @@ async function loadEmailLog(){
     $('emailLogNote').textContent = (r.note || '') + (r.configured ? '' : '　SMTP 当前未配置，发信会直接失败。');
     const sends = r.sends || [];
     $('emailSends').innerHTML =
-      '<thead><tr><th>时间 (UTC+8)</th><th>类型</th><th>收件人</th><th>结果</th><th>错误</th></tr></thead>' +
+      '<thead><tr><th>时间 (UTC+8)</th><th>类型</th><th>收件人</th><th>主题</th><th>结果</th><th>错误</th></tr></thead>' +
       (sends.length ? '<tbody>' + sends.map(x => `<tr><td class="nowrap">${timeCell(x.at)}</td>
         <td>${x.kind === 'login_code' ? '验证码' : x.kind === 'admin_test' ? '后台测试' : txt(x.kind, '未记录')}</td>
         <td>${txt(x.to, '未记录')}</td>
+        <td>${txt(x.subject, '未记录（本版之前的记录没有主题）')}</td>
         <td><span class="b ${x.ok ? 'ok' : 'err'}">${x.ok ? '成功' : '失败'}</span></td>
         <td>${x.error ? escapeHtml(x.error) : none('无')}</td></tr>`).join('') + '</tbody>'
-        : emptyRow(5, '还没有发信记录（记录住在 events 表里，会随保留期一起清）。'));
+        : emptyRow(6, '还没有发信记录（记录住在 events 表里，会随保留期一起清）。'));
     const codes = r.codes || [];
     $('emailCodes').innerHTML =
       '<thead><tr><th>邮箱</th><th>签发 (UTC+8)</th><th>过期 (UTC+8)</th><th class="num">已试次数</th><th class="num">窗口内签发</th></tr></thead>' +
@@ -2304,7 +2366,7 @@ async function loadEmailLog(){
   } catch(e) {
     if (e.status !== 401) {
       // 两张表都要落错误：只改一张，另一张会永久停在「加载中…」。
-      $('emailSends').innerHTML = errRow(5, e.message);
+      $('emailSends').innerHTML = errRow(6, e.message);
       $('emailCodes').innerHTML = errRow(5, e.message);
     }
   }
@@ -2450,6 +2512,8 @@ async function openUserDetail(userId){
     <p class="note">${txt(r.note, '')}</p>
     <div class="cards">
       ${cardHtml('完整 ID', `<span style="font-size:13px">${idCell(u.id)}</span>`, '')}
+      ${cardHtml('邮箱', `<span style="font-size:13px">${u.email ? escapeHtml(u.email) : none('游客（无邮箱）')}</span>`,
+        '客服回信用的就是这一个地址。')}
       ${cardHtml('昵称', txt(u.displayName, '未设置'), '')}
       ${cardHtml('状态', u.status === 'active' ? '<span class="b ok">active</span>' : `<span class="b err">${escapeHtml(String(u.status || '未知'))}</span>`,
         u.deletedAt ? '已软删' : '')}
@@ -2458,6 +2522,24 @@ async function openUserDetail(userId){
       ${cardHtml('语言 / 时区', `<span style="font-size:14px">${txt(u.locale, '未上报')} / ${txt(u.timezone, '未上报')}</span>`,
         u.isGuest ? '游客账号' : '')}
     </div>
+    <h3>登录身份（${(r.identities || []).length}）</h3>
+    ${tbl(['登录方式','邮箱','平台侧标识 provider_subject','绑定时间 (UTC+8)'], (r.identities || []).map(x => `<tr>
+      <td>${txt(x.provider, '未记录')}</td>
+      <td>${x.email ? escapeHtml(x.email) : none('这条身份没有邮箱')}</td>
+      <td>${idCell(x.subject, '未记录')}</td>
+      <td class="nowrap">${timeCell(x.createdAt)}</td></tr>`),
+      '没有任何登录身份（纯游客账号）')}
+    <h3>免费额度发放（${(r.freeGrants || []).length}）</h3>
+    <p class="note">每次发放对「设备 / 账号」各写一行，只有主键那行带张数，其余是占位（去重用）。
+      <b>IP 是明文</b>：判断「这一批账号是不是同一个人在刷」只有这一列答得了。
+      本版之前的历史行没有这一列，显示为「当时未记录」。</p>
+    ${tbl(['时间 (UTC+8)','张数','客户端 IP','去重键','设备哈希'], (r.freeGrants || []).map(x => `<tr>
+      <td class="nowrap">${timeCell(x.createdAt)}</td>
+      <td class="num">${intOr0(x.units)}${x.units ? '' : ' <span class="b">占位</span>'}</td>
+      <td>${x.ip ? `<code>${escapeHtml(x.ip)}</code>` : none('当时未记录')}</td>
+      <td>${idCell(x.dedupeKey, '无')}</td>
+      <td>${x.deviceHash ? idCell(x.deviceHash) : none('没有设备指纹')}</td></tr>`),
+      '这个账号没有领过免费额度')}
     <h3>额度账本（${(r.ledger || []).length}）</h3>
     ${tbl(['时间 (UTC+8)','分录','张数','来源','额度到期 (UTC+8)','任务'], (r.ledger || []).map(l => `<tr>
       <td class="nowrap">${timeCell(l.at)}</td><td>${txt(l.entryType, '未记录')}</td>
@@ -2491,6 +2573,108 @@ async function openUserDetail(userId){
       <td class="nowrap">${timeCell(x.lastSeenAt)}</td>
       <td class="nowrap">${x.expiresAt ? timeCell(x.expiresAt) : '永不过期'}${x.expired ? ' <span class="b">已过期</span>' : ''}</td></tr>`),
       '没有活跃会话（用户从没登录过，或会话已被清掉）')}
+  </div>`;
+  $('closeDrawer').addEventListener('click', closeViewer);
+  box.querySelector('.drawer').addEventListener('click', (e) => e.stopPropagation());
+}
+
+/* ================= 任务详情（全部候选） ================= */
+/* 🔴 任务表里只显示**第一张**候选。一个任务可以产出多张，而「后面几张是不是
+   也这样」是失败复盘的第一个问题 —— 此前只能去数据库浏览器翻
+   generation_candidates（那张表里没有归属、没有缩略图、也没有顺序概念）。
+   这个抽屉按**产出时间**列出全部候选，外加源图的画面分析。 */
+async function openJobDetail(jobId){
+  if (!jobId) return;
+  await ensureImgTok();
+  const box = $('viewer');
+  box.innerHTML = '<div class="drawer"><p class="loading">加载中…</p></div>';
+  box.style.display = 'flex';
+  let r;
+  try {
+    r = await api('/v1/admin/job-detail?jobId=' + encodeURIComponent(jobId));
+  } catch(e) {
+    box.innerHTML = `<div class="drawer">${errHtml(e.message)}
+      <div class="btnrow"><button class="ghost" id="closeDrawer">关闭</button></div></div>`;
+    const b = $('closeDrawer'); if (b) b.addEventListener('click', closeViewer);
+    return;
+  }
+  const j = r.job || {};
+  const an = r.sourceAnalysis;
+  const cands = r.candidates || [];
+  box.innerHTML = `<div class="drawer">
+    <div class="tmeta" style="justify-content:space-between"><h2 style="font-size:17px;color:var(--ink)">任务详情</h2>
+      <button class="ghost sm" id="closeDrawer">关闭</button></div>
+    <p class="note">${txt(r.note, '')}</p>
+    <div class="cards">
+      ${cardHtml('任务 ID', `<span style="font-size:13px">${idCell(j.id)}</span>`, '')}
+      ${cardHtml('状态', statusCell(j.status, j.error_code), `阶段 ${txt(j.stage, '未记录')}`)}
+      ${cardHtml('用户', `<span style="font-size:13px">${userCell(j.user, j.email)}</span>`, '')}
+      ${cardHtml('风格', txt(j.style, '未记录'), `版本 ${idCell(j.styleId, '未记录')}`)}
+      ${cardHtml('耗时', numCell(j.seconds, ' 秒', '未完成'), `尝试 ${intOr0(j.attempt_count)} 次 · 被重试 ${intOr0(j.retryCount)} 次`)}
+      ${cardHtml('候选数', cands.length + ' 张', '列表页只显示第一张')}
+    </div>
+    <h3>原图与参数</h3>
+    <div class="tw"><table><thead><tr><th>原图</th><th>生成参数 controls</th><th>出参 output</th><th>上游返回</th></tr></thead>
+      <tbody><tr><td>${thumb(j.sourceAssetId)}</td>
+        <td><code>${escapeHtml(JSON.stringify(j.controls || {}))}</code></td>
+        <td><code>${escapeHtml(JSON.stringify(j.output || {}))}</code></td>
+        <td>${j.upstreamSummary ? `<code>${escapeHtml(JSON.stringify(j.upstreamSummary))}</code>` : none('上游无记录')}</td>
+      </tr></tbody></table></div>
+    <h3>源图画面分析</h3>
+    ${an ? `<p class="note">主体 <b>${txt(an.subjectType, '未判定')}</b>　人数 ${numCell(an.personCount, '', '未判定')}　
+      清晰度 ${scoreCell(an.sharpness)}　曝光 ${scoreCell(an.exposure)}　状态 ${escapeHtml(String(an.status || '未知'))}</p>
+      ${listCell(an.warnings, '无提示')}${listCell(an.recommendations, '无建议')}`
+      : '<p class="empty">这张源图没有分析记录（分析行由服务端在上传后写）。</p>'}
+    <h3>全部候选（${cands.length}，按产出时间）</h3>
+    ${cands.length ? `<div class="tw"><table><thead><tr><th>预览</th><th class="num">序号</th><th>质检</th>
+      <th>资产状态</th><th>AI 标识</th><th class="num">尺寸</th><th class="num">大小</th>
+      <th>资产 ID</th><th>产出 (UTC+8)</th></tr></thead><tbody>` +
+      cands.map(c => `<tr><td>${thumb(c.assetId)}</td>
+        <td class="num">${intOr0(c.index)}</td>
+        <td>${c.qualityPassed ? '<span class="b ok">通过</span>' : '<span class="b err">未通过</span>'}</td>
+        <td>${txt(c.assetStatus, '未知')}${c.deletedAt ? ' <span class="b warn">已软删</span>' : ''}</td>
+        <td>${aigcCell({ kind: 'candidate', aigcLabel: c.aigcLabel })}</td>
+        <td class="num">${c.width && c.height ? c.width + '×' + c.height : none('未记录')}</td>
+        <td class="num">${fmtBytes(c.byteSize)}</td>
+        <td>${idCell(c.assetId)}</td>
+        <td class="nowrap">${timeCell(c.createdAt)}</td></tr>`).join('') +
+      '</tbody></table></div>'
+      : '<p class="empty">这个任务没有产出任何候选（失败任务通常就是这样）。</p>'}
+  </div>`;
+  $('closeDrawer').addEventListener('click', closeViewer);
+  box.querySelector('.drawer').addEventListener('click', (e) => e.stopPropagation());
+}
+
+/* ================= 风格版本与 spec ================= */
+/* 🔴 spec 是「这个风格到底怎么生成的」唯一的答案：提示词模板、控件取值域、
+   负面词、后处理参数全在里面。此前后台只显示「有几个已发布版本」，
+   于是「为什么这个风格出图变了」只能 SSH 上去 psql。只读 —— spec 改一个字
+   就该是一个新版本，所以这里刻意没有编辑框。 */
+async function openStyleVersions(styleId){
+  if (!styleId) return;
+  const box = $('viewer');
+  box.innerHTML = '<div class="drawer"><p class="loading">加载中…</p></div>';
+  box.style.display = 'flex';
+  let r;
+  try {
+    r = await api('/v1/admin/style-versions?styleId=' + encodeURIComponent(styleId));
+  } catch(e) {
+    box.innerHTML = `<div class="drawer">${errHtml(e.message)}
+      <div class="btnrow"><button class="ghost" id="closeDrawer">关闭</button></div></div>`;
+    const b = $('closeDrawer'); if (b) b.addEventListener('click', closeViewer);
+    return;
+  }
+  const vs = r.versions || [];
+  box.innerHTML = `<div class="drawer">
+    <div class="tmeta" style="justify-content:space-between"><h2 style="font-size:17px;color:var(--ink)">风格版本与 spec</h2>
+      <button class="ghost sm" id="closeDrawer">关闭</button></div>
+    <p class="note">${txt(r.note, '')}</p>
+    ${vs.length ? vs.map(v => `<h3>版本 ${intOr0(v.version)}　
+        <span class="b ${v.status === 'published' ? 'ok' : ''}">${escapeHtml(String(v.status || '未知'))}</span>
+        <span class="muted" style="font-size:12px;font-weight:400">　${idCell(v.id)}　服役任务 ${intOr0(v.jobs)} 次　
+        发布 ${v.publishedAt ? timeCell(v.publishedAt) : '<span class="empty">未发布</span>'}</span></h3>
+      <pre class="spec">${escapeHtml(JSON.stringify(v.spec || {}, null, 2))}</pre>`).join('')
+      : '<p class="empty">这个风格没有任何版本行 —— 那它在 App 里一定看不到（目录 JOIN 的是已发布版本）。</p>'}
   </div>`;
   $('closeDrawer').addEventListener('click', closeViewer);
   box.querySelector('.drawer').addEventListener('click', (e) => e.stopPropagation());

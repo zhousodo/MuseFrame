@@ -93,6 +93,16 @@ func (a *App) MaybeGrantFree(ctx context.Context, q store.Queryer, userID string
 		src = "unknown"
 	}
 	ipHash := hash24(src, a.ipSalt)
+	// 🔴 明文地址**另存一列**（free_grants.ip，见 migrations/005_free_grant_ip.sql）。
+	// 哈希够用来数「这个 IP 今天领了几张」，但运营要回答的是
+	// 「这 40 个账号是不是同一个人」「要不要把这个地址报给 CDN 拦一下」——
+	// 哈希对这两个问题一个字也答不出来，盐一换连历史行的可比性都没了。
+	// 取不到地址时写 NULL（而不是 "unknown"）：限流那边的 src 才需要兜底成一个桶，
+	// 台账这一列要的是「当时确实不知道」这个事实。
+	var plainIP *string
+	if clientIP != "" {
+		plainIP = &clientIP
+	}
 	now := a.now()
 	w, err := store.GetFreeGrantWindow(ctx, q, &ipHash, now)
 	if err != nil {
@@ -120,7 +130,7 @@ func (a *App) MaybeGrantFree(ctx context.Context, q store.Queryer, userID string
 		if k == dedupeID {
 			units = freeUnits
 		}
-		if err := store.InsertFreeGrant(ctx, q, a.newID(), userID, k, deviceHash, &ipHash, units, now); err != nil {
+		if err := store.InsertFreeGrant(ctx, q, a.newID(), userID, k, deviceHash, &ipHash, plainIP, units, now); err != nil {
 			return "", err
 		}
 	}

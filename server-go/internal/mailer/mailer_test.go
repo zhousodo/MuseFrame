@@ -77,20 +77,29 @@ func TestConfiguredNeedsAllThree(t *testing.T) {
 	}
 }
 
-// TestMaskEmailKeepsDomainDropsLocal 收件地址打码：域名留着（判断是不是被某个
-// 服务商拒收的关键），本地部分只留首字符 —— 后台不需要、也不该展示完整用户邮箱。
-func TestMaskEmailKeepsDomainDropsLocal(t *testing.T) {
-	for in, want := range map[string]string{
-		"alice@example.cn":      "a***@example.cn",
-		"a@b.co":                "a***@b.co",
-		"  bob@qq.com  ":        "b***@qq.com",
-		"not-an-email":          "***",
-		"":                      "",
-		"x@sub.domain.example.": "x***@sub.domain.example.",
-	} {
-		if got := MaskEmail(in); got != want {
-			t.Errorf("MaskEmail(%q) = %q，应为 %q", in, got, want)
-		}
+// TestLastSendKeepsFullRecipient 收件地址**完整**保留（2026-09-12 起）。
+//
+// 🔴 这条替换掉了原来的 TestMaskEmailKeepsDomainDropsLocal（断言打码成
+// a***@example.cn）。这是一个只有管理员令牌打得开的自家后台，而这个字段
+// 唯一的用处是「刚才那封信到底发给谁了」—— 它必须能和用户报的地址对上。
+// 打码的版本只能答「某个 example.cn 的人」，于是客服还是得去 SSH 查库。
+func TestLastSendKeepsFullRecipient(t *testing.T) {
+	m := New(cfgstore.NewForTest(map[string]string{
+		"SMTP_HOST": "127.0.0.1", "SMTP_USER": "bot@example.cn", "SMTP_PORT": "1",
+	}), "pass")
+	m.dial = func(string, time.Duration) (net.Conn, error) {
+		return nil, errors.New("connection refused")
+	}
+	_, _ = m.Send("  alice@example.cn  ", "MuseFrame 邮件配置测试", "t", "")
+	last, ok := m.LastSend()
+	if !ok {
+		t.Fatal("发送失败也必须留痕")
+	}
+	if last.To != "alice@example.cn" {
+		t.Fatalf("收件地址应完整保留（两端空白去掉），实际 %q", last.To)
+	}
+	if strings.Contains(last.To, "***") {
+		t.Fatalf("收件地址不该再被打码，实际 %q", last.To)
 	}
 }
 
@@ -125,8 +134,8 @@ func TestLastSendNeverLeaksTheCode(t *testing.T) {
 	if last.Kind != "login_code" {
 		t.Errorf("类别应为 login_code，实际 %q", last.Kind)
 	}
-	if last.To != "a***@example.cn" {
-		t.Errorf("收件地址应打码，实际 %q", last.To)
+	if last.To != "alice@example.cn" {
+		t.Errorf("收件地址应完整回，实际 %q", last.To)
 	}
 	if last.Error == "" {
 		t.Error("失败原因不能为空，否则运营看不出是 DNS、端口还是口令的问题")
@@ -139,10 +148,10 @@ func TestLastSendNeverLeaksTheCode(t *testing.T) {
 		}
 	}
 	// 后台测试邮件走 Send，类别必须是 manual（成功路径这里也是 dial 失败，
-	// 但类别与打码逻辑与成功路径共用同一段代码）。
+	// 但类别与记账逻辑与成功路径共用同一段代码）。
 	_, _ = m.Send("bob@qq.com", "MuseFrame 邮件配置测试", "t", "")
 	last2, _ := m.LastSend()
-	if last2.Kind != "manual" || last2.To != "b***@qq.com" {
-		t.Errorf("后台测试邮件应记作 manual + 打码地址，实际 %+v", last2)
+	if last2.Kind != "manual" || last2.To != "bob@qq.com" {
+		t.Errorf("后台测试邮件应记作 manual + 完整地址，实际 %+v", last2)
 	}
 }
