@@ -212,11 +212,13 @@ func (a *App) exportAssets(ctx context.Context, q urlValues, limit int) ([]strin
 			r.ID, r.Kind, r.Status, r.ContentType, int64PtrStr(r.ByteSize),
 			intPtrStr(r.Width), intPtrStr(r.Height), derefStr(r.SHA256),
 			r.User, store.CSVMaskEmail(r.Email), derefStr(r.ProjectID),
-			r.CreatedAt, derefStr(r.DeletedAt),
+			derefStr(r.AIGCLabel), r.CreatedAt, derefStr(r.DeletedAt),
 		})
 	}
+	// 「AI标识」列同样进 CSV：合规盘点（「线上还有多少张成品没标识」）是个
+	// 离线统计动作，做在表格里，不该逼着人去后台一页一页翻。
 	return []string{"资产id", "类型", "状态", "内容类型", "字节数", "宽", "高", "sha256",
-		"用户id前8位", "邮箱(已打码)", "项目id", "创建时间UTC", "删除时间UTC"}, out, nil
+		"用户id前8位", "邮箱(已打码)", "项目id", "AI标识", "创建时间UTC", "删除时间UTC"}, out, nil
 }
 
 // urlValues 是 url.Values 的最小接口，方便把 handler 拆成可单测的小函数。

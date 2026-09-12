@@ -126,7 +126,7 @@ func TestSecretFromEnvOnly(t *testing.T) {
 // 密钥项仍必须恰为 2 个 —— 这条一旦变大就说明有人往注册表里加了新密钥，
 // 而注册表是后台可写面，新密钥必须先确认 Secret:true。
 func TestRegistryHasExpectedKeys(t *testing.T) {
-	const wantKeys = 41
+	const wantKeys = 47
 	if len(Registry) != wantKeys {
 		t.Fatalf("注册表应有 %d 个键，实际 %d（Node 版那 26 个必须一个不少）", wantKeys, len(Registry))
 	}
@@ -136,7 +136,11 @@ func TestRegistryHasExpectedKeys(t *testing.T) {
 		"image_size_square", "image_size_landscape", "image_size_portrait",
 		"max_job_attempts", "provider_breaker_streak", "provider_breaker_cooldown_seconds",
 		"pack_credit_expiry_days", "free_credit_expiry_days",
-		"event_retention_days", "idempotency_retention_days", "session_ttl_days"} {
+		"event_retention_days", "idempotency_retention_days", "session_ttl_days",
+		// AIGC 标识（《人工智能生成合成内容标识办法》）。少一个键就意味着
+		// 那一维度回到了「只能改代码 + 发版」，而这一组全是合规旋钮。
+		"aigc_label_enabled", "aigc_label_text", "aigc_label_position",
+		"aigc_label_opacity", "aigc_label_size_pct", "aigc_content_producer"} {
 		if _, ok := byKey[k]; !ok {
 			t.Errorf("注册表缺键 %s", k)
 		}

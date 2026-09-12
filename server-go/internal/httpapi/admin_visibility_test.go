@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"museframe-api/internal/aigc"
 	"museframe-api/internal/store"
 )
 
@@ -131,7 +132,7 @@ func TestAdminAssetsListsAndFilters(t *testing.T) {
 	ctx := nil2ctx()
 	uid, _, pid, aid := e.prepareJobInputs("assets@example.com", 2)
 	candAsset := e.nextID()
-	if err := store.InsertCandidateAsset(ctx, e.st.Q(), candAsset, uid, pid, candAsset+".jpg", 1000, 800, 1000, e.now); err != nil {
+	if err := store.InsertCandidateAsset(ctx, e.st.Q(), candAsset, uid, pid, candAsset+".jpg", 1000, 800, 1000, aigc.MarkVisibleMeta, e.now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -204,7 +205,7 @@ func TestAdminUserDetailAggregatesEverySurface(t *testing.T) {
 	ctx := nil2ctx()
 	uid, tok, pid, aid := e.prepareJobInputs("detail@example.com", 3)
 	candAsset := e.nextID()
-	if err := store.InsertCandidateAsset(ctx, e.st.Q(), candAsset, uid, pid, candAsset+".jpg", 1000, 800, 1000, e.now); err != nil {
+	if err := store.InsertCandidateAsset(ctx, e.st.Q(), candAsset, uid, pid, candAsset+".jpg", 1000, 800, 1000, aigc.MarkVisibleMeta, e.now); err != nil {
 		t.Fatal(err)
 	}
 	jobID := "job-detail"
@@ -521,7 +522,7 @@ func (e *testEnv) seedFeedback(comment string) (candID, userID string) {
 	ctx := nil2ctx()
 	uid, tok, pid, aid := e.prepareJobInputs("fb@example.com", 2)
 	candAsset := e.nextID()
-	if err := store.InsertCandidateAsset(ctx, e.st.Q(), candAsset, uid, pid, candAsset+".jpg", 1000, 800, 1000, e.now); err != nil {
+	if err := store.InsertCandidateAsset(ctx, e.st.Q(), candAsset, uid, pid, candAsset+".jpg", 1000, 800, 1000, aigc.MarkVisibleMeta, e.now); err != nil {
 		e.t.Fatal(err)
 	}
 	jobID := "job-fb"

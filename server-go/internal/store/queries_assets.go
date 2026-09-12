@@ -5,12 +5,12 @@ import (
 	"time"
 )
 
-const assetCols = `id, user_id, project_id, kind, status, storage_key, content_type, byte_size, width, height, sha256, created_at, updated_at, deleted_at`
+const assetCols = `id, user_id, project_id, kind, status, storage_key, content_type, byte_size, width, height, sha256, aigc_label, created_at, updated_at, deleted_at`
 
 func scanAsset(row interface{ Scan(...any) error }) (*Asset, error) {
 	var a Asset
 	err := row.Scan(&a.ID, &a.UserID, &a.ProjectID, &a.Kind, &a.Status, &a.StorageKey, &a.ContentType,
-		&a.ByteSize, &a.Width, &a.Height, &a.SHA256, &a.CreatedAt, &a.UpdatedAt, &a.DeletedAt)
+		&a.ByteSize, &a.Width, &a.Height, &a.SHA256, &a.AIGCLabel, &a.CreatedAt, &a.UpdatedAt, &a.DeletedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +55,7 @@ func GetAssetByID(ctx context.Context, q Queryer, id string) (*Asset, error) {
 func GetAssetForImgToken(ctx context.Context, q Queryer, id string) (*Asset, error) {
 	return scanAsset(q.QueryRow(ctx,
 		`SELECT a.id, a.user_id, a.project_id, a.kind, a.status, a.storage_key, a.content_type, a.byte_size,
-		        a.width, a.height, a.sha256, a.created_at, a.updated_at, a.deleted_at
+		        a.width, a.height, a.sha256, a.aigc_label, a.created_at, a.updated_at, a.deleted_at
 		 FROM assets a JOIN users u ON u.id = a.user_id
 		 WHERE a.id = $1 AND a.deleted_at IS NULL AND u.deleted_at IS NULL AND u.is_guest = false`, id))
 }
@@ -101,11 +101,16 @@ func SetAssetProject(ctx context.Context, q Queryer, assetID, projectID, userID 
 }
 
 // InsertCandidateAsset 写 worker 产出的候选图资产。
-func InsertCandidateAsset(ctx context.Context, q Queryer, id, userID, projectID, storageKey string, size int64, w, h int, t time.Time) error {
+//
+// aigcLabel 是《人工智能生成合成内容标识办法》的标识状态（aigc.MarkVisibleMeta /
+// aigc.MarkMeta）。🔴 它是**必填参数**而不是事后 UPDATE：成品行和它的标识状态
+// 必须在同一条 INSERT 里落库，否则中间任何一次失败都会留下一张「已交付、
+// 状态未知」的图 —— 而那张图的字节里到底有没有标识，事后无从判断。
+func InsertCandidateAsset(ctx context.Context, q Queryer, id, userID, projectID, storageKey string, size int64, w, h int, aigcLabel string, t time.Time) error {
 	_, err := q.Exec(ctx,
-		`INSERT INTO assets (id, user_id, project_id, kind, status, storage_key, content_type, byte_size, width, height, created_at, updated_at)
-		 VALUES ($1,$2,$3,'candidate','ready',$4,'image/jpeg',$5,$6,$7,$8,$9)`,
-		id, userID, projectID, storageKey, size, w, h, t, t)
+		`INSERT INTO assets (id, user_id, project_id, kind, status, storage_key, content_type, byte_size, width, height, aigc_label, created_at, updated_at)
+		 VALUES ($1,$2,$3,'candidate','ready',$4,'image/jpeg',$5,$6,$7,$8,$9,$10)`,
+		id, userID, projectID, storageKey, size, w, h, aigcLabel, t, t)
 	return err
 }
 

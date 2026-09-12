@@ -13,7 +13,8 @@ import (
 func TestEveryItemHasGroup(t *testing.T) {
 	known := map[string]bool{
 		GroupGeneration: true, GroupCredits: true, GroupAuth: true, GroupRetention: true,
-		GroupEmail: true, GroupStorage: true, GroupSupport: true, GroupDeploy: true,
+		GroupEmail: true, GroupStorage: true, GroupSupport: true, GroupAIGC: true,
+		GroupDeploy: true,
 	}
 	for _, it := range Registry {
 		if it.Group == "" {

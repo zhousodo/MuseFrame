@@ -38,9 +38,13 @@ type Asset struct {
 	Width       *int
 	Height      *int
 	SHA256      *string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	DeletedAt   *time.Time
+	// AIGCLabel 是《人工智能生成合成内容标识办法》的标识状态：
+	// nil = 未标识（历史成品与全部源图）、"meta" = 只有隐式元数据、
+	// "visible+meta" = 显式水印 + 隐式元数据。见 migrations/004_aigc_label.sql。
+	AIGCLabel *string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	DeletedAt *time.Time
 }
 
 // Project 对应 projects 表。status: draft | generating | ready | saved。

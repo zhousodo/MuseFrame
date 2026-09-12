@@ -34,6 +34,14 @@ type JobCandidate struct {
 	DownloadURL string `json:"downloadUrl"`
 	Width       *int   `json:"width,omitempty"`
 	Height      *int   `json:"height,omitempty"`
+	// AIGCLabeled 告诉 App「这张图的字节里已经带了 AI 生成内容标识」，
+	// App 据此在界面上显示「AI 生成」角标（《人工智能生成合成内容标识办法》
+	// 要求的提示之一）。
+	//
+	// 🔴 它**不是**开关，也不该被 App 用来决定要不要显示角标的措辞：
+	// 服务端从本版起对每一张新成品都标识，这个字段只有对**历史成品**才会是
+	// false。App 侧的角标是界面提示，与字节里的标识是两件独立的事。
+	AIGCLabeled bool `json:"aigcLabeled"`
 }
 
 // JobBilling 是计费块。
@@ -84,6 +92,7 @@ func (a *App) hGetJob(c *Ctx) (any, error) {
 		}
 		if asset, err := store.GetAssetByID(ctx, a.st.Q(), cand.AssetID); err == nil {
 			jc.Width, jc.Height = asset.Width, asset.Height
+			jc.AIGCLabeled = asset.AIGCLabel != nil && *asset.AIGCLabel != ""
 		}
 		out.Candidate = jc
 	} else if !store.IsNoRows(err) {

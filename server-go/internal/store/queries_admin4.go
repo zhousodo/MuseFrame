@@ -206,8 +206,12 @@ type AdminAssetRow struct {
 	User        string  `json:"user"`
 	Email       *string `json:"email"`
 	ProjectID   *string `json:"projectId"`
-	CreatedAt   string  `json:"createdAt"`
-	DeletedAt   *string `json:"deletedAt"`
+	// AIGCLabel 是 AI 生成内容标识状态：nil = 未标识（历史成品与全部源图）、
+	// "meta" = 只有隐式元数据、"visible+meta" = 显式水印 + 隐式元数据。
+	// 运营看它回答的问题是「这张图出了站以后，别人能不能看出它是 AI 生成的」。
+	AIGCLabel *string `json:"aigcLabel"`
+	CreatedAt string  `json:"createdAt"`
+	DeletedAt *string `json:"deletedAt"`
 }
 
 // AssetFilter 是资产列表的筛选条件。零值表示不筛。
@@ -228,7 +232,7 @@ func ListAdminAssets(ctx context.Context, q Queryer, f AssetFilter) ([]AdminAsse
 		SELECT a.id, a.kind, a.status, a.content_type, a.byte_size, a.width, a.height, a.sha256,
 		       substr(a.user_id,1,8),
 		       (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=a.user_id AND ai.email_normalized IS NOT NULL LIMIT 1),
-		       a.project_id, a.created_at, a.deleted_at
+		       a.project_id, a.aigc_label, a.created_at, a.deleted_at
 		FROM assets a WHERE true`
 	args := []any{}
 	if f.Kind != "" {
@@ -257,7 +261,7 @@ func ListAdminAssets(ctx context.Context, q Queryer, f AssetFilter) ([]AdminAsse
 		var created time.Time
 		var deleted *time.Time
 		if err := rows.Scan(&r.ID, &r.Kind, &r.Status, &r.ContentType, &r.ByteSize, &r.Width, &r.Height,
-			&r.SHA256, &r.User, &r.Email, &r.ProjectID, &created, &deleted); err != nil {
+			&r.SHA256, &r.User, &r.Email, &r.ProjectID, &r.AIGCLabel, &created, &deleted); err != nil {
 			return nil, err
 		}
 		r.CreatedAt = ISO(created)

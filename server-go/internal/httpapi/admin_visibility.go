@@ -99,7 +99,11 @@ var knownClientEvents = []string{
 
 const assetsNote = "App 上传的每一张源图（PUT /v1/assets/{id}/upload）与后端生成的每一张成品 / 导出图。" +
 	"缩略图点开看大图走的是短时图片令牌，管理员令牌不进 URL。" +
-	"sha256 由资产迁移工具回填，历史行可能为空。storage_key 刻意不回（磁盘布局不外传）。"
+	"sha256 由资产迁移工具回填，历史行可能为空。storage_key 刻意不回（磁盘布局不外传）。" +
+	"「AI 标识」列是《人工智能生成合成内容标识办法》的标识状态：" +
+	"「水印+元数据」= 显式角标画进了像素且文件元数据里有 GB 45438-2025 的标识字段；" +
+	"「仅元数据」= 运营把 aigc_label_enabled 关掉了，只剩隐式标识；" +
+	"「未标识」= 源图（本来就不需要标识）或本版之前产出的历史成品（刻意不回溯）。"
 
 func (a *App) hAdminAssets(c *Ctx) (any, error) {
 	if err := a.requireAdmin(c); err != nil {

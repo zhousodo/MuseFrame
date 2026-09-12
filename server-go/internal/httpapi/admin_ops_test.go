@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"museframe-api/internal/aigc"
 	"museframe-api/internal/cfgstore"
 	"museframe-api/internal/store"
 )
@@ -529,7 +530,7 @@ func TestAdminFeedbackReasonsAreObserved(t *testing.T) {
 
 	candAsset := e.nextID()
 	if err := store.InsertCandidateAsset(ctx, e.st.Q(), candAsset, uid, pid, candAsset+".jpg",
-		1000, 800, 1000, e.now); err != nil {
+		1000, 800, 1000, aigc.MarkVisibleMeta, e.now); err != nil {
 		t.Fatal(err)
 	}
 	jobID := "job-reasons"

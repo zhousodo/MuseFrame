@@ -24,6 +24,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	// 🔴 注册表校验「水印文案能不能画出来」需要字体的字形覆盖，所以这里
+	// 依赖 aigc。方向只有这一条（aigc 不认识 cfgstore），没有环。
+	"museframe-api/internal/aigc"
 )
 
 // ErrSecretNotWritable：secret 键不允许写入数据库。
@@ -50,6 +54,7 @@ const (
 	GroupEmail      = "email"      // 邮件通道与验证码
 	GroupStorage    = "storage"    // 存储与上传
 	GroupSupport    = "support"    // 客服与联系方式
+	GroupAIGC       = "aigc"       // AI 生成内容标识（合规）
 	GroupDeploy     = "deploy"     // 部署级只读
 )
 
@@ -161,6 +166,34 @@ var Registry = []Item{
 		"幂等记录保留天数（太短会让超期的重放变成重复下单）", false, GroupRetention},
 	{"session_ttl_days", KindNumber, "SESSION_TTL_DAYS", float64(90),
 		"登录会话有效期天数。只影响此后签发/续期的会话，已存在的会话在下次活动时被续到新期限", false, GroupRetention},
+
+	// ---- AI 生成内容标识（《人工智能生成合成内容标识办法》2025-09-01 施行）----
+	//
+	// 🔴 这一组只管**显式标识**（画在像素上的角标）。隐式标识（写进 EXIF/XMP
+	//    的 GB 45438-2025 结构）**没有开关**：办法第五条是「应当添加」，
+	//    一个开关的唯一用途是把自己关进违规状态。见 internal/aigc 的包注释。
+	//
+	// 🔴 它们只对**此后**产出的成品生效，不回溯历史图（回溯要重编码已经交付
+	//    给用户的图，是一次不可逆的画质损失，换来的合规收益是零）。
+	{"aigc_label_enabled", KindBool, "AIGC_LABEL_ENABLED", true,
+		"在生成成品上画「AI 生成」显式标识（《人工智能生成合成内容标识办法》第四条要求）。" +
+			"🔴 关掉之后新产出的图上不会有任何可见标识，这是有法律后果的动作；" +
+			"隐式元数据标识不受这个开关影响，始终写入", false, GroupAIGC},
+	{"aigc_label_text", KindString, "AIGC_LABEL_TEXT", "AI 生成 · 留影",
+		"显式标识的文字（最多 40 字）。内嵌字体是 ASCII + GB2312 子集，" +
+			"含子集外字符（生僻字 / 韩文 / emoji）的文案会被拒绝并列出那些字 —— " +
+			"不然线上水印里那个字会是一片空白，而后台显示「已保存」", false, GroupAIGC},
+	{"aigc_label_position", KindString, "AIGC_LABEL_POSITION", "bottom-right",
+		"显式标识的位置。默认右下角（照片构图里最不容易压到主体的一角）", false, GroupAIGC},
+	{"aigc_label_opacity", KindNumber, "AIGC_LABEL_OPACITY", 0.85,
+		"显式标识的不透明度（0.05–1）。🔴 下界不是 0：想去掉水印请用 aigc_label_enabled，" +
+			"把不透明度调到几乎透明会产出一张「自称已标识」却看不见标识的图", false, GroupAIGC},
+	{"aigc_label_size_pct", KindNumber, "AIGC_LABEL_SIZE_PCT", 3.2,
+		"显式标识的字号，占图像**短边**的百分比（1–10）。跟短边走而不是写死像素，" +
+			"这样 1024 的图和 4000 的图上标识看起来一样大", false, GroupAIGC},
+	{"aigc_content_producer", KindString, "AIGC_CONTENT_PRODUCER", "留影 MuseFrame（lenscript.cn）",
+		"隐式标识里的「内容制作服务提供者」（GB 45438-2025 附录A 的 ContentProducer）。" +
+			"这是核验方用来判断这张图出自谁家的字段，填服务提供者的正式名称", false, GroupAIGC},
 }
 
 // numRanges 是数值项的合法**闭区间**，按键名索引。没有条目 = 不限。
@@ -217,6 +250,13 @@ var numRanges = map[string][2]float64{
 	"idempotency_retention_days": {1, 365},
 	// 1 天..5 年。0 会让每个新会话一签发就过期（现象 = 登录成功后立刻被登出）。
 	"session_ttl_days": {1, 1825},
+	// 🔴 下界 0.05 而不是 0：0 = 画一个完全透明的水印，产出的图会被标成
+	//    「已加显式标识」而实际上肉眼什么都看不到 —— 比没加更糟，因为它还骗了
+	//    自己的审计。要关请用 aigc_label_enabled。
+	"aigc_label_opacity": {0.05, 1},
+	// 1%..10% 短边。低于 1% 在 1024 的图上不到 11px（中文糊成一团噪点）；
+	// 高于 10% 的角标会压掉画面主体，用户会去找「怎么把水印关了」。
+	"aigc_label_size_pct": {1, 10},
 }
 
 // strEnums 是字符串项的合法取值白名单，按键名索引。没有条目 = 自由文本。
@@ -240,6 +280,9 @@ var strEnums = map[string][]string{
 	"image_size_square":    {"1024x1024", "1536x1024", "1024x1536", "auto"},
 	"image_size_landscape": {"1024x1024", "1536x1024", "1024x1536", "auto"},
 	"image_size_portrait":  {"1024x1024", "1536x1024", "1024x1536", "auto"},
+	// 白名单从 aigc 包取，不在这里再抄一遍：抄一份的下场是某天加了个位置，
+	// 后台能选、渲染时回落成右下角，而没有任何报错。
+	"aigc_label_position": aigc.Positions,
 }
 
 // StrEnum 返回某个字符串项的合法取值白名单。ok 为假表示自由文本。
@@ -279,6 +322,30 @@ func (s *Store) ImageSizeFor(orientation string) string {
 	}
 	return s.EnumString("image_size_square")
 }
+
+// AIGCOptions 把注册表里那一组键翻成一次标识动作的参数。
+//
+// 每次生成现读现取（和 MaxAttempts 一样），所以后台改完位置/文案/开关，
+// **下一个任务**就按新值走，不需要发版也不需要重启。
+func (s *Store) AIGCOptions(produceID string, now time.Time) aigc.Options {
+	return aigc.Options{
+		LabelEnabled:  s.Bool("aigc_label_enabled"),
+		LabelText:     strings.TrimSpace(s.String("aigc_label_text")),
+		LabelPosition: s.EnumString("aigc_label_position"),
+		LabelOpacity:  s.ClampedNumber("aigc_label_opacity"),
+		LabelSizePct:  s.ClampedNumber("aigc_label_size_pct"),
+		Producer:      strings.TrimSpace(s.String("aigc_content_producer")),
+		ProductName:   AIGCProductName,
+		ProduceID:     produceID,
+		Now:           now.UTC(),
+	}
+}
+
+// AIGCProductName 进 EXIF Software / XMP CreatorTool。
+//
+// 刻意**不**做成配置项：EXIF 的 Software 字段按规范只能是 ASCII，
+// 而这是产品英文名，不是运营口味 —— 中文名走 aigc_content_producer（XMP，UTF-8）。
+const AIGCProductName = "MuseFrame"
 
 // MaxJobAttempts 是单任务最多尝试次数（含首次）。
 func (s *Store) MaxJobAttempts() int { return s.ClampedInt("max_job_attempts") }
@@ -594,6 +661,10 @@ func (s *Store) Set(ctx context.Context, key string, value any) error {
 	if err := checkEnum(it, stored); err != nil {
 		return err
 	}
+	// 同理，第三类：水印文案必须能真的画出来。见 checkLabelText。
+	if err := checkLabelText(it, stored); err != nil {
+		return err
+	}
 	if s.backend != nil {
 		if err := s.backend.UpsertAppConfig(ctx, key, stored); err != nil {
 			return err
@@ -641,6 +712,37 @@ func checkEnum(it Item, stored string) error {
 		}
 	}
 	return fmt.Errorf("%s 只能是 %s 之一（收到 %q）", it.Key, strings.Join(allowed, " / "), stored)
+}
+
+// MaxLabelTextRunes 是水印文案的长度上限。
+//
+// 🔴 上限不是审美问题：文案宽度超过图像宽度时，水印会从右下角被推到
+// 左边界（DrawLabel 里的 x < margin 夹取），横穿整张画面。40 字在
+// 3.2% 字号下约占短边的 1.3 倍，已经是「怎么排都难看」的边界。
+const MaxLabelTextRunes = 40
+
+// checkLabelText 校验水印文案：长度 + 内嵌字体是否画得出来。
+//
+// 🔴 为什么这道校验必须在**写**的一侧：字体是子集，画不出的字只会是一片空白。
+// 那是个看不见的故障 —— 后台显示「已保存」，而此后每一张成品的法定显式标识
+// 都缺了半句话，唯一的发现方式是下载成品逐字看。
+func checkLabelText(it Item, stored string) error {
+	if it.Key != "aigc_label_text" {
+		return nil
+	}
+	v := strings.TrimSpace(stored)
+	if v == "" {
+		return fmt.Errorf("aigc_label_text 不能为空。要停用显式标识请把 aigc_label_enabled 关掉，" +
+			"而不是把文案清空 —— 后者会让后台看起来「标识开着」而实际什么都不画")
+	}
+	if n := len([]rune(v)); n > MaxLabelTextRunes {
+		return fmt.Errorf("aigc_label_text 最多 %d 个字（收到 %d 个）", MaxLabelTextRunes, n)
+	}
+	if bad := aigc.UnsupportedRunes(v); len(bad) > 0 {
+		return fmt.Errorf("aigc_label_text 里有内嵌字体画不出来的字符：%q。"+
+			"字体是 ASCII + GB2312 子集，请换用常用汉字或英文（这些字画出来会是空白）", string(bad))
+	}
+	return nil
 }
 
 func fmtNum(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) }
