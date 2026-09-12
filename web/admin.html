@@ -30,6 +30,12 @@
   .refresh { width:auto; margin:0; padding:7px 16px; font-size:12.5px; }
   #viewer { position:fixed; inset:0; background:rgba(23,23,23,.85); display:none; align-items:center; justify-content:center; cursor:zoom-out; z-index:50; }
   #viewer img { max-width:92vw; max-height:92vh; border-radius:8px; }
+  /* 用户详情抽屉：和大图查看器共用 #viewer 这层遮罩（同一个 closeViewer 收口），
+     但内容是一张可滚动的白卡，光标不是 zoom-out。 */
+  #viewer .detail { background:var(--canvas); color:var(--ink); cursor:default; text-align:left;
+    width:min(1080px,94vw); max-height:90vh; overflow-y:auto; border-radius:12px; padding:18px 20px 24px; }
+  #viewer .detail h3 { font-size:13.5px; margin:18px 0 6px; }
+  #viewer .detail img.thumb { max-width:none; max-height:none; }
   .wrap { overflow-x:auto; scrollbar-width:thin; scrollbar-color:var(--line) transparent; }
   .wrap::-webkit-scrollbar { height:10px; }
   .wrap::-webkit-scrollbar-track { background:transparent; }
@@ -137,6 +143,9 @@
       <button class="tabbtn" data-tab="overview">概览</button>
       <button class="tabbtn" data-tab="users">用户</button>
       <button class="tabbtn" data-tab="stats">统计</button>
+      <button class="tabbtn" data-tab="events">埋点</button>
+      <button class="tabbtn" data-tab="assets">资产</button>
+      <button class="tabbtn" data-tab="health">健康</button>
       <button class="tabbtn" data-tab="ops">运营</button>
       <button class="tabbtn" data-tab="db">数据库</button>
       <button class="tabbtn" data-tab="config">配置</button>
@@ -149,11 +158,38 @@
     <div id="genbarOverview"></div>
     <div id="guardbarOverview"></div>
     <div class="cards" id="cards">加载中…</div>
-    <h2>生成任务（最近 60 条）</h2>
+    <h2>生成任务</h2>
+    <p class="muted viewnote" id="jobsNote"></p>
+    <div class="bar" style="align-items:flex-end;gap:10px">
+      <label style="flex:0 0 170px"><span class="muted" style="font-size:11px">状态</span>
+        <select id="jobStatus"><option value="">全部</option><option value="queued">queued</option><option value="running">running</option><option value="quality_check">quality_check</option><option value="succeeded">succeeded</option><option value="failed">failed</option><option value="cancelled">cancelled</option></select></label>
+      <label style="flex:0 0 150px"><span class="muted" style="font-size:11px">时间窗</span>
+        <select id="jobSince"><option value="">不限</option><option value="1">近 1 小时</option><option value="24">近 24 小时</option><option value="168">近 7 天</option><option value="720">近 30 天</option></select></label>
+      <label style="flex:0 0 180px"><span class="muted" style="font-size:11px">用户 ID（前 8 位即可）</span>
+        <input id="jobUser" placeholder="可空" autocomplete="off"></label>
+      <button class="small ghost" id="jobsExport">导出 CSV</button>
+    </div>
     <div class="wrap"><table id="jobs"></table></div>
     <h2>购买记录</h2>
+    <p class="muted viewnote" id="purchasesNote"></p>
+    <div class="bar" style="align-items:flex-end;gap:10px">
+      <label style="flex:0 0 150px"><span class="muted" style="font-size:11px">状态</span>
+        <select id="purchaseStatus"><option value="">全部</option><option value="pending">pending</option><option value="verified">verified</option></select></label>
+      <label style="flex:0 0 150px"><span class="muted" style="font-size:11px">平台</span>
+        <select id="purchasePlatform"><option value="">全部</option><option value="google">google</option><option value="apple">apple</option><option value="web">web</option></select></label>
+      <button class="small ghost" id="purchasesExport">导出 CSV</button>
+    </div>
     <div class="wrap"><table id="purchases"></table></div>
     <h2>用户反馈</h2>
+    <p class="muted viewnote" id="feedbackNote"></p>
+    <div class="bar" style="align-items:flex-end;gap:10px">
+      <label style="flex:0 0 150px"><span class="muted" style="font-size:11px">评价</span>
+        <select id="fbRating"><option value="">全部</option><option value="negative">👎 差评</option><option value="positive">👍 好评</option></select></label>
+      <label style="flex:0 0 170px"><span class="muted" style="font-size:11px">处理状态</span>
+        <select id="fbHandled"><option value="">全部</option><option value="no">未处理</option><option value="yes">已处理</option></select></label>
+      <span class="muted" id="fbUnhandled" style="font-size:12.5px"></span>
+      <button class="small ghost" id="feedbackExport">导出 CSV</button>
+    </div>
     <div class="wrap"><table id="feedback"></table></div>
   </section>
 
@@ -172,10 +208,64 @@
     <div class="bar" style="margin-top:22px">
       <h2 style="margin:0">用户列表</h2>
       <input id="userSearch" placeholder="按邮箱 / 显示名 / ID 搜索，回车" style="max-width:320px;padding:8px 10px;font-size:13px" onkeydown="if(event.key==='Enter')loadUsers()">
+      <button class="small ghost" id="usersExport">导出 CSV</button>
     </div>
+    <p class="muted viewnote" id="usersNote"></p>
     <p class="muted viewnote">禁用账号＝该账号的所有令牌立刻按「未登录」处理（任何接口回 401）；会话行没删，启用后原令牌立刻恢复。作品与额度台账一律不动，所以这是个可逆动作。禁用必须填原因，原因进「运营 · 操作审计」。</p>
     <div id="userFacts" class="rtgrid" style="margin-bottom:10px"></div>
     <div class="wrap" style="margin-top:10px"><table id="usersTable"></table></div>
+  </section>
+
+  <section id="tab-events" class="tabpane" style="display:none">
+    <!-- 🔴 说明文字由后端随数据回（note 字段），前端只负责显示。
+         说明里写的是口径（窗口多长、按什么时区切、哪些行被排除），
+         而口径是后端决定的 —— 抄一份在这里等于留一份一定会过期的副本。 -->
+    <p class="muted viewnote" id="eventsNote" style="margin-top:14px">加载中…</p>
+    <div class="bar" style="align-items:flex-end;gap:10px;margin-top:6px">
+      <div class="rangebtns" id="eventDaysBtns">
+        <button class="small ghost" data-days="7">7 天</button>
+        <button class="small ghost" data-days="30">30 天</button>
+        <button class="small ghost" data-days="90">90 天</button>
+      </div>
+      <label style="flex:0 0 220px"><span class="muted" style="font-size:11px">只看某个事件的原始样本</span>
+        <input id="eventNameFilter" placeholder="如 generation_failed，回车" autocomplete="off"></label>
+      <button class="small ghost" id="eventsExport">导出 CSV</button>
+    </div>
+    <h2>按事件名</h2>
+    <div id="eventNames">加载中…</div>
+    <h2>按 App 版本</h2>
+    <div id="eventVersions">加载中…</div>
+    <h2>按天</h2>
+    <div id="eventDays">加载中…</div>
+    <h2>原始样本</h2>
+    <div id="eventSamples">加载中…</div>
+  </section>
+
+  <section id="tab-assets" class="tabpane" style="display:none">
+    <p class="muted viewnote" id="assetsNote" style="margin-top:14px">加载中…</p>
+    <div class="bar" style="align-items:flex-end;gap:10px;margin-top:6px">
+      <label style="flex:0 0 150px"><span class="muted" style="font-size:11px">类型</span>
+        <select id="assetKind"><option value="">全部</option><option value="source">source 源图</option><option value="candidate">candidate 成品</option><option value="thumbnail">thumbnail</option><option value="export">export 导出</option></select></label>
+      <label style="flex:0 0 150px"><span class="muted" style="font-size:11px">状态</span>
+        <select id="assetStatus"><option value="">全部</option><option value="pending">pending</option><option value="ready">ready</option><option value="quarantined">quarantined</option><option value="deleted">deleted</option></select></label>
+      <label style="flex:0 0 200px"><span class="muted" style="font-size:11px">用户 ID（前 8 位即可）</span>
+        <input id="assetUser" placeholder="可空" autocomplete="off"></label>
+      <button class="small ghost" id="assetsExport">导出 CSV</button>
+    </div>
+    <div id="assetTotals" class="rtgrid" style="margin-top:10px"></div>
+    <div class="wrap" style="margin-top:10px"><table id="assetsTable">加载中…</table></div>
+  </section>
+
+  <section id="tab-health" class="tabpane" style="display:none">
+    <h2 style="margin-top:20px">接口健康</h2>
+    <p class="muted viewnote" id="healthNote">加载中…</p>
+    <div id="healthCards" class="cards"></div>
+    <div class="wrap" style="margin-top:10px"><table id="healthTable">加载中…</table></div>
+    <h2>邮件发送记录</h2>
+    <p class="muted viewnote" id="emailLogNote">加载中…</p>
+    <div class="wrap"><table id="emailSends">加载中…</table></div>
+    <h3 style="margin:16px 0 6px;font-size:14px">验证码签发台账</h3>
+    <div class="wrap"><table id="emailCodes">加载中…</table></div>
   </section>
 
   <section id="tab-ops" class="tabpane" style="display:none">
@@ -278,8 +368,8 @@ const $ = (id) => document.getElementById(id);
 // a stolen/lost browser profile equivalent to a long-lived operator session.
 let TOK = sessionStorage.getItem('mf.admin') || '';
 localStorage.removeItem('mf.admin'); // clear the legacy persistent copy
-const TABS = ['overview','users','stats','ops','db','config'];
-const tabState = { overview:false, users:false, stats:false, ops:false, db:false, config:false };
+const TABS = ['overview','users','stats','events','assets','health','ops','db','config'];
+const tabState = { overview:false, users:false, stats:false, events:false, assets:false, health:false, ops:false, db:false, config:false };
 let statsDays = 30;
 const dbState = { tables:[], selected:null, offset:0, limit:50, total:0 };
 
@@ -422,31 +512,158 @@ async function loadOverview(){
     $('cards').innerHTML = errHtml(e.message);
   }
 
+  await loadJobsTable();
+  await loadPurchasesTable();
+  await loadFeedbackTable();
+}
+
+function jobFilterParams(){
+  return { status: $('jobStatus').value, sinceHours: $('jobSince').value, userId: ($('jobUser').value||'').trim() };
+}
+async function loadJobsTable(){
+  const q = new URLSearchParams(jobFilterParams());
+  for (const [k,v] of [...q]) if (!v) q.delete(k);
   try {
-    const jobs = (await api('/v1/admin/jobs')).jobs || [];
-    $('jobs').innerHTML = '<tr><th>原图</th><th>结果</th><th>风格</th><th>邮箱</th><th>状态</th><th>耗时</th><th>尝试</th><th>用户</th><th>时间 (UTC+8)</th></tr>' +
-      (jobs.length ? jobs.map(x=>`<tr><td>${thumb(x.sourceAssetId)}</td><td>${thumb(x.candidateAssetId)}</td><td>${escapeHtml(x.style||'')}</td>
+    const r = await api('/v1/admin/jobs' + (q.toString() ? '?' + q : ''));
+    $('jobsNote').textContent = (r.note || '') + `　自动重试上限 ${r.maxAttempts ?? '?'} 次；达到上限的任务 worker 不再碰，只能在这里手动重试。`;
+    const jobs = r.jobs || [];
+    $('jobs').innerHTML = '<tr><th>原图</th><th>结果</th><th>风格</th><th>邮箱</th><th>状态</th><th>耗时</th><th>尝试</th><th>重试</th><th>参数 / 上游返回</th><th>用户</th><th>时间 (UTC+8)</th><th></th></tr>' +
+      (jobs.length ? jobs.map(x=>{
+        const retriable = x.status === 'failed' || x.status === 'cancelled';
+        return `<tr><td>${thumb(x.sourceAssetId)}</td><td>${thumb(x.candidateAssetId)}</td><td>${escapeHtml(x.style||'')}</td>
         <td class="muted">${escapeHtml(x.email||'—')}</td>
         <td class="${x.status==='succeeded'?'ok':x.status==='failed'?'bad':'muted'}">${escapeHtml(x.status)}${x.error_code?'<br><span class=muted>'+escapeHtml(x.error_code)+'</span>':''}</td>
-        <td>${x.seconds!=null?x.seconds+'s':'—'}</td><td>${x.attempt_count}</td><td class="muted">${escapeHtml(x.user||'')}</td><td class="muted">${agoCell(x.created_at)}</td></tr>`).join('') : '<tr><td colspan=9 class=muted>暂无任务</td></tr>');
+        <td>${x.seconds!=null?x.seconds+'s':'—'}</td><td>${x.attempt_count}</td>
+        <td class="muted">${x.retryCount||0}${x.parentJobId?'<br><span class="badge badge-light" title="这条本身是某次重试生成的">重试产物</span>':''}</td>
+        <td class="muted" style="font-size:11px;max-width:260px">
+          <code>${escapeHtml(JSON.stringify(x.controls||{}))}</code>
+          ${x.upstreamSummary?'<br><code title="上游图片服务商最近一次返回的摘要">'+escapeHtml(JSON.stringify(x.upstreamSummary))+'</code>':'<br><span class="muted">上游无记录</span>'}</td>
+        <td class="muted"><a href="#" onclick="openUserDetail('${escapeHtml(x.user)}');return false">${escapeHtml(x.user||'')}</a></td>
+        <td class="muted">${agoCell(x.created_at)}</td>
+        <td>${retriable?`<button class="small ghost" onclick="retryJob('${escapeHtml(x.id)}',this)">重试</button>`:'<span class="muted">—</span>'}</td></tr>`;
+      }).join('') : '<tr><td colspan=12 class=muted>没有符合条件的任务</td></tr>');
   } catch(e) {
     if (e.status !== 401) $('jobs').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
   }
+}
 
+/* 重试新建一条任务并**重新预留额度**（失败时已退过，净额不变）。
+   余额不够会回 409，提示去用户页发额度 —— 悄悄跳过扣减就等于白送一张图。 */
+async function retryJob(jobId, btn){
+  if (!confirm('重试这个任务？\n\n会新建一条任务并重新预留 1 份额度（失败时已退还给用户，净额不变）。原任务保持 failed 不变。')) return;
+  btn.disabled = true;
   try {
-    const pu = (await api('/v1/admin/purchases')).purchases || [];
-    $('purchases').innerHTML = '<tr><th>商品</th><th>邮箱</th><th>金额</th><th>状态</th><th>用户</th><th>时间 (UTC+8)</th></tr>' +
-      (pu.length ? pu.map(p=>`<tr><td>${escapeHtml(p.product)}</td><td class="muted">${escapeHtml(p.email||'—')}</td><td>${fmt$(p.amount_minor)}</td><td>${escapeHtml(p.status)}</td><td class="muted">${escapeHtml(p.user||'')}</td><td class="muted">${agoCell(p.purchased_at)}</td></tr>`).join('') : '<tr><td colspan=6 class=muted>暂无购买</td></tr>');
+    const r = await api(`/v1/admin/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST' });
+    toast(`已重新排队（新任务 ${String(r.jobId).slice(0,8)}…，扣 ${r.reservedUnits} 份，余 ${r.availableUnits}）`);
+    if (!r.auditLogged) toast('⚠ 这次操作没留下审计记录', true);
+    loadJobsTable();
+    refreshAudit();
+  } catch(e) {
+    btn.disabled = false;
+    toast('重试失败：' + e.message, true);
+  }
+}
+
+function purchaseFilterParams(){
+  return { status: $('purchaseStatus').value, platform: $('purchasePlatform').value };
+}
+async function loadPurchasesTable(){
+
+  const q = new URLSearchParams(purchaseFilterParams());
+  for (const [k,v] of [...q]) if (!v) q.delete(k);
+  try {
+    const r = await api('/v1/admin/purchases' + (q.toString() ? '?' + q : ''));
+    $('purchasesNote').textContent = r.note || '';
+    const pu = r.purchases || [];
+    $('purchases').innerHTML = '<tr><th>商品</th><th>平台</th><th>交易号</th><th>邮箱</th><th>金额</th><th>状态</th><th>入账额度</th><th>用户</th><th>时间 (UTC+8)</th><th></th></tr>' +
+      (pu.length ? pu.map(p=>{
+        /* 🔴 verified 而入账额度 0 = 钱收了、额度没发。这一格是那起事故的唯一可见处。 */
+        const missed = p.status === 'verified' && !p.unitsGranted;
+        return `<tr><td>${escapeHtml(p.product)}</td>
+        <td>${escapeHtml(p.platform||'')}</td>
+        <td class="muted" style="font-size:11px">${escapeHtml(p.txId||'—')}</td>
+        <td class="muted">${escapeHtml(p.email||'—')}</td>
+        <td>${p.amountMinor!=null?fmt$(p.amountMinor):'—'}</td>
+        <td>${escapeHtml(p.status)}</td>
+        <td class="${missed?'bad':''}">${p.unitsGranted}${missed?'<br><span class="badge badge-warn">漏入账</span>':''}</td>
+        <td class="muted"><a href="#" onclick="openUserDetail('${escapeHtml(p.userId||p.user)}');return false">${escapeHtml(p.user||'')}</a></td>
+        <td class="muted">${agoCell(p.purchasedAt)}</td>
+        <td>${p.status==='verified'?`<button class="small ghost" onclick="reverifyPurchase('${escapeHtml(p.id)}',this)">重验</button>`:'<span class="muted">—</span>'}</td></tr>`;
+      }).join('') : '<tr><td colspan=10 class=muted>没有符合条件的购买</td></tr>');
   } catch(e) {
     if (e.status !== 401) $('purchases').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
   }
+}
 
+/* 重验只补发缺失的额度，幂等 —— 已经正确入账的单子点多少次都不会多发。
+   它**不会**重新向商店要收据：购买令牌只存在于 App 那一次请求里，从不落库。 */
+async function reverifyPurchase(id, btn){
+  btn.disabled = true;
   try {
-    const fb = (await api('/v1/admin/feedback')).feedback || [];
-    $('feedback').innerHTML = '<tr><th>评价</th><th>原因</th><th>风格</th><th>时间 (UTC+8)</th></tr>' +
-      (fb.length ? fb.map(f=>{ const reasons = parseReasonCodes(f.reason_codes); return `<tr><td>${f.rating==='positive'?'👍':'👎'}</td><td>${escapeHtml(reasons.join(', ')||'—')}</td><td>${escapeHtml(f.style||'—')}</td><td class="muted">${agoCell(f.created_at)}</td></tr>`; }).join('') : '<tr><td colspan=4 class=muted>暂无反馈</td></tr>');
+    const r = await api(`/v1/admin/purchases/${encodeURIComponent(id)}/reverify`, { method: 'POST' });
+    toast(r.message || '已重验');
+    loadPurchasesTable();
+    refreshAudit();
+  } catch(e) {
+    btn.disabled = false;
+    toast('重验失败：' + e.message, true);
+  }
+}
+
+function fbFilterParams(){ return { rating: $('fbRating').value, handled: $('fbHandled').value }; }
+async function loadFeedbackTable(){
+
+  const q = new URLSearchParams(fbFilterParams());
+  for (const [k,v] of [...q]) if (!v) q.delete(k);
+  try {
+    const r = await api('/v1/admin/feedback' + (q.toString() ? '?' + q : ''));
+    $('feedbackNote').textContent = r.note || '';
+    $('fbUnhandled').textContent = `未处理 ${r.unhandled ?? 0} 条`;
+    const fb = r.feedback || [];
+    $('feedback').innerHTML = '<tr><th>评价</th><th>结果图</th><th>原因码</th><th>用户写的正文</th><th>风格</th><th>邮箱</th><th>时间 (UTC+8)</th><th>处理</th><th></th></tr>' +
+      (fb.length ? fb.map(f=>{
+        const reasons = parseReasonCodes(f.reasonCodes);
+        return `<tr><td>${f.rating==='positive'?'👍':'👎'}</td>
+        <td>${thumb(f.assetId)}</td>
+        <td>${escapeHtml(reasons.join(', ')||'—')}</td>
+        <td style="max-width:280px;white-space:pre-wrap">${f.comment?escapeHtml(f.comment):'<span class="muted">（没写正文）</span>'}</td>
+        <td>${escapeHtml(f.style||'—')}</td>
+        <td class="muted">${escapeHtml(f.email||'—')}</td>
+        <td class="muted">${agoCell(f.createdAt)}</td>
+        <td class="muted" style="font-size:11px">${f.handledAt
+          ? `<span class="badge badge-light">已处理</span><br>${escapeHtml(fmtBJ(f.handledAt))}${f.handledNote?'<br>'+escapeHtml(f.handledNote):''}`
+          : '<span class="badge badge-warn">未处理</span>'}</td>
+        <td>${f.handledAt
+          ? `<button class="small ghost" onclick="markFeedback('${escapeHtml(f.id)}',false,this)">撤销</button>`
+          : `<button class="small ghost" onclick="markFeedback('${escapeHtml(f.id)}',true,this)">标为已处理</button>`}</td></tr>`;
+      }).join('') : '<tr><td colspan=9 class=muted>没有符合条件的反馈</td></tr>');
   } catch(e) {
     if (e.status !== 401) $('feedback').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
+  }
+}
+
+/* 标记/撤销「已处理」。每次都落一条审计（运营 · 操作审计看得到）。
+   🔴 撤销会把备注一起清掉 —— 留着上一次的备注会让下一个人看到「未处理」
+   却带着一条「已退额度」的备注，而这两件事里只有一件是真的。 */
+async function markFeedback(id, handled, btn){
+  let note = null;
+  if (handled) {
+    note = prompt('处理备注（可空，最多 500 字）：如「已退 2 份额度并回访」', '');
+    if (note === null) return;        // 点了取消
+  } else if (!confirm('撤销「已处理」？备注会一起清掉。')) {
+    return;
+  }
+  btn.disabled = true;
+  try {
+    const r = await api(`/v1/admin/feedback/${encodeURIComponent(id)}/handled`,
+      { method: 'POST', body: handled ? { handled: true, note: note || undefined } : { handled: false } });
+    toast(handled ? `已标为已处理（还剩 ${r.unhandled} 条未处理）` : `已撤销（未处理 ${r.unhandled} 条）`);
+    if (!r.auditLogged) toast('⚠ 这次操作没留下审计记录', true);
+    loadFeedbackTable();
+    refreshAudit();
+  } catch(e) {
+    btn.disabled = false;
+    toast('操作失败：' + e.message, true);
   }
 }
 
@@ -455,7 +672,9 @@ async function loadUsers(){
   $('usersTable').innerHTML = '加载中…';
   try {
     const search = ($('userSearch').value || '').trim();
-    const users = (await api('/v1/admin/users' + (search ? '?q=' + encodeURIComponent(search) : ''))).users || [];
+    const r = await api('/v1/admin/users' + (search ? '?q=' + encodeURIComponent(search) : ''));
+    $('usersNote').textContent = r.note || '';
+    const users = r.users || [];
     $('usersTable').innerHTML = '<tr><th>邮箱</th><th>显示名</th><th>登录方式</th><th>身份</th><th>状态</th><th>余额</th><th>生成数</th><th>ID</th><th>注册时间 (UTC+8)</th><th></th></tr>' +
       (users.length ? users.map(u=>{
         /* 🔴 status 不是装饰：active 之外的值会让该账号的所有令牌被当成未登录。
@@ -472,11 +691,12 @@ async function loadUsers(){
         <td>${statusCell}</td>
         <td>${u.units ?? 0}</td>
         <td>${u.jobs ?? 0}</td>
-        <td class="muted" title="${escapeHtml(u.userId||'')}">${escapeHtml(u.id)}</td>
+        <td class="muted" title="点开看这个用户的全部足迹：额度账本 / 项目 / 任务 / 资产 / 购买 / 会话"><a href="#" onclick="openUserDetail('${escapeHtml(u.userId||u.id)}');return false">${escapeHtml(u.id)}</a></td>
         <td class="muted">${agoCell(u.createdAt)}</td>
         <td style="white-space:nowrap">
           <button class="small ghost" data-grant-user="${escapeHtml(u.userId||'')}" data-grant-label="${escapeHtml(u.email || u.id)}" onclick="pickGrantUser(this)">加额度</button>
           <button class="small ghost" data-user-status="${escapeHtml(u.userId||'')}" data-cur="${escapeHtml(u.status||'active')}" data-label="${escapeHtml(u.email || u.id)}">${suspended ? '启用' : '禁用'}</button>
+          <button class="small ghost" onclick="openUserDetail('${escapeHtml(u.userId||u.id)}')">详情</button>
         </td>
       </tr>`;}).join('') : '<tr><td colspan=10 class=muted>暂无用户</td></tr>');
     $('usersTable').querySelectorAll('[data-user-status]').forEach(b => b.addEventListener('click', () => setUserStatus(b)));
@@ -1440,12 +1660,266 @@ async function loadConfig(){
   } catch(e) { if (e.status !== 401) { $('configForm').innerHTML = errHtml(e.message); $('runtimePanel').innerHTML = errHtml(e.message); } }
 }
 
+/* ---------- CSV 导出 ----------
+   🔴 不能用 <a href download> 或 window.open：管理员令牌走请求头，
+   浏览器发起的导航带不上头，那样的链接一律回 401。所以走 fetch 拿 blob
+   再用一个临时的 object URL 触发下载 —— 令牌始终留在头里、不进 URL。 */
+async function exportCsv(kind, params){
+  const qs = new URLSearchParams(params || {});
+  for (const [k, v] of [...qs]) if (v === '' || v == null) qs.delete(k);
+  const url = `/v1/admin/export/${encodeURIComponent(kind)}.csv` + (qs.toString() ? '?' + qs : '');
+  try {
+    const r = await fetch(url, { headers: { 'x-admin-token': TOK } });
+    if (!r.ok) { toast('导出失败：HTTP ' + r.status, true); return; }
+    const rows = r.headers.get('X-Row-Count');
+    const blob = await r.blob();
+    const href = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = (r.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1]
+      || `museframe-${kind}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    // 立刻撤销会让部分浏览器在开始下载前就拿不到 blob，延后一拍。
+    setTimeout(() => URL.revokeObjectURL(href), 10000);
+    toast(`已导出 ${rows ?? '?'} 行（邮箱已打码）`);
+  } catch(e) { toast('导出失败：' + e.message, true); }
+}
+
+/* ---------- 埋点 ---------- */
+let eventDays = 7;
+async function loadEvents(){
+  const q = new URLSearchParams({ days: String(eventDays) });
+  const name = ($('eventNameFilter').value || '').trim();
+  if (name) q.set('name', name);
+  try {
+    const r = await api('/v1/admin/events?' + q);
+    $('eventsNote').textContent = r.note || '';
+    document.querySelectorAll('#eventDaysBtns [data-days]').forEach(b =>
+      b.classList.toggle('active', Number(b.dataset.days) === eventDays));
+
+    const known = new Set(r.knownClientEvents || []);
+    const names = r.names || [];
+    $('eventNames').innerHTML = names.length ? `<div class="wrap"><table>
+      <tr><th>事件名</th><th>次数</th><th>独立用户</th><th>首次 (UTC+8)</th><th>最近 (UTC+8)</th><th>来源</th></tr>
+      ${names.map(n => `<tr>
+        <td><a href="#" onclick="filterEvent('${escapeHtml(n.name)}');return false">${escapeHtml(n.name)}</a></td>
+        <td>${n.total}</td><td>${n.users}</td>
+        <td class="muted">${agoCell(n.firstAt)}</td><td class="muted">${agoCell(n.lastAt)}</td>
+        <td>${known.has(n.name) ? '<span class="badge badge-light">已知客户端</span>'
+            : '<span class="badge badge-warn">未知 / 老版本</span>'}</td></tr>`).join('')}
+      </table></div>`
+      : `<p class="muted">窗口内没有任何埋点。保留期 ${r.retentionDays ?? '?'} 天，比它更早的已被清理。</p>`;
+
+    const vers = r.versions || [];
+    $('eventVersions').innerHTML = vers.length ? `<div class="wrap"><table>
+      <tr><th>App 版本</th><th>事件数</th><th>独立用户</th></tr>
+      ${vers.map(v => `<tr><td>${escapeHtml(v.version)}</td><td>${v.total}</td><td>${v.users}</td></tr>`).join('')}
+      </table></div>` + (vers.length === 1 && vers[0].version === '(未上报)'
+        ? '<p class="muted" style="font-size:12px">当前 App 的 track() 不上报版本号，所以这里只有一行。后端已兼容 appVersion / app_version / version 三种键，App 哪天开始报哪一个都会自动分开。</p>'
+        : '')
+      : '<p class="muted">暂无数据。</p>';
+
+    // 按天 × 事件名透视成一张表：行是天，列是事件名（只取次数最多的前 8 个）。
+    const byDay = r.byDay || [];
+    const topNames = names.slice(0, 8).map(n => n.name);
+    const days = [...new Set(byDay.map(d => d.day))];
+    const cell = {};
+    byDay.forEach(d => { cell[d.day + '|' + d.name] = d.total; });
+    $('eventDays').innerHTML = days.length ? `<div class="wrap"><table>
+      <tr><th>日期 (UTC)</th>${topNames.map(n => `<th>${escapeHtml(n)}</th>`).join('')}<th>合计</th></tr>
+      ${days.map(d => {
+        const total = byDay.filter(x => x.day === d).reduce((a, x) => a + x.total, 0);
+        return `<tr><td>${escapeHtml(d)}</td>${topNames.map(n =>
+          `<td>${cell[d + '|' + n] ?? '<span class="muted">0</span>'}</td>`).join('')}<td><b>${total}</b></td></tr>`;
+      }).join('')}</table></div>
+      <p class="muted" style="font-size:12px">日界按 UTC 切，和「统计」页同一口径 —— 这样两张表能横着对。只列次数最多的 8 个事件名，合计是当天全部。</p>`
+      : '<p class="muted">暂无数据。</p>';
+
+    const sa = r.samples || [];
+    $('eventSamples').innerHTML = (r.sampleFilter ? `<p class="muted" style="font-size:12px">只看 <code>${escapeHtml(r.sampleFilter)}</code> —— 上面的聚合仍是全量。<button class="small ghost" onclick="filterEvent('')">清除筛选</button></p>` : '')
+      + (sa.length ? `<div class="wrap"><table>
+      <tr><th>时间 (UTC+8)</th><th>事件名</th><th>用户</th><th>props</th></tr>
+      ${sa.map(x => `<tr><td class="muted">${agoCell(x.at)}</td><td>${escapeHtml(x.name)}</td>
+        <td class="muted">${escapeHtml(x.user || '—')}</td>
+        <td><code style="font-size:11px">${escapeHtml(JSON.stringify(x.props || {}))}</code></td></tr>`).join('')}
+      </table></div>` : '<p class="muted">暂无样本。</p>');
+  } catch(e) {
+    if (e.status === 401) return;
+    $('eventsNote').innerHTML = errHtml(e.message);
+  }
+}
+function filterEvent(name){ $('eventNameFilter').value = name; loadEvents(); }
+
+/* ---------- 资产 ---------- */
+function assetFilterParams(){
+  return { kind: $('assetKind').value, status: $('assetStatus').value, userId: ($('assetUser').value||'').trim() };
+}
+function fmtBytes(n){
+  if (n == null) return '—';
+  const u = ['B','KB','MB','GB'];
+  let i = 0, v = Number(n);
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return (i === 0 ? v : v.toFixed(1)) + ' ' + u[i];
+}
+async function loadAssets(){
+  await ensureImgTok();
+  const q = new URLSearchParams(assetFilterParams());
+  for (const [k, v] of [...q]) if (!v) q.delete(k);
+  try {
+    const r = await api('/v1/admin/assets' + (q.toString() ? '?' + q : ''));
+    $('assetsNote').textContent = r.note || '';
+    const totals = r.totals || [];
+    $('assetTotals').innerHTML = totals.length
+      ? totals.map(t => `<span class="kv"><b>${escapeHtml(t.kind)}</b><br>${t.count} 个 · ${fmtBytes(t.bytes)}</span>`).join('')
+        + `<span class="kv"><b>合计</b><br>${totals.reduce((a,t)=>a+t.count,0)} 个 · ${fmtBytes(totals.reduce((a,t)=>a+t.bytes,0))}</span>`
+      : '<span class="kv muted">库里还没有资产</span>';
+    const rows = r.assets || [];
+    $('assetsTable').innerHTML = '<tr><th>预览</th><th>类型</th><th>状态</th><th>尺寸</th><th>大小</th><th>sha256</th><th>归属</th><th>项目</th><th>创建 (UTC+8)</th></tr>' +
+      (rows.length ? rows.map(a => `<tr>
+        <td>${thumb(a.id)}</td>
+        <td>${escapeHtml(a.kind)}</td>
+        <td class="${a.status==='ready'?'ok':a.status==='quarantined'?'bad':'muted'}">${escapeHtml(a.status)}${a.deletedAt?'<br><span class="badge badge-warn">已软删</span>':''}</td>
+        <td class="muted">${a.width && a.height ? a.width + '×' + a.height : '—'}</td>
+        <td>${fmtBytes(a.byteSize)}</td>
+        <td class="muted" style="font-size:11px">${a.sha256 ? escapeHtml(String(a.sha256).slice(0,12)) + '…' : '<span class="muted">未回填</span>'}</td>
+        <td class="muted">${escapeHtml(a.email || a.user || '—')}<br><a href="#" onclick="openUserDetail('${escapeHtml(a.user)}');return false">${escapeHtml(a.user)}</a></td>
+        <td class="muted" style="font-size:11px">${a.projectId ? escapeHtml(String(a.projectId).slice(0,8)) : '—'}</td>
+        <td class="muted">${agoCell(a.createdAt)}</td></tr>`).join('')
+        : '<tr><td colspan=9 class=muted>没有符合条件的资产</td></tr>');
+  } catch(e) {
+    if (e.status === 401) return;
+    $('assetsTable').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
+  }
+}
+
+/* ---------- 健康（接口计数 + 邮件记录） ---------- */
+async function loadHealth(){
+  try {
+    const r = await api('/v1/admin/api-health');
+    $('healthNote').textContent = r.note || '';
+    const err = (r.count4xx || 0) + (r.count5xx || 0);
+    $('healthCards').innerHTML = [
+      ['窗口内请求', r.total ?? 0, `最近 ${r.hours ?? 24} 小时`],
+      ['4xx', r.count4xx ?? 0, '客户端错误'],
+      ['5xx', r.count5xx ?? 0, (r.count5xx ? '⚠ 需要查日志' : '正常')],
+      ['错误率', (r.total ? (err * 100 / r.total).toFixed(1) : '0.0') + '%', '4xx+5xx / 总数'],
+      ['进程已运行', fmtDur(r.uptimeSeconds), '重启会把计数清零'],
+    ].map(c => `<div class="card"><span>${c[0]}</span><b>${c[1]}</b><span>${escapeHtml(String(c[2]))}</span></div>`).join('');
+    const rows = r.routes || [];
+    $('healthTable').innerHTML = '<tr><th>接口</th><th>请求数</th><th>4xx</th><th>5xx</th><th>平均</th><th>P95</th><th>最慢</th></tr>' +
+      (rows.length ? rows.map(x => `<tr>
+        <td><code style="font-size:11px">${escapeHtml(x.method)} ${escapeHtml(x.route.replace(/^[A-Z]+ /, ''))}</code></td>
+        <td>${x.total}</td>
+        <td class="${x.count4xx?'muted':''}">${x.count4xx}</td>
+        <td class="${x.count5xx?'bad':'muted'}">${x.count5xx}</td>
+        <td>${x.avgMs}ms</td>
+        <td>${x.p95Capped ? '&gt;' : ''}${x.p95Ms}ms</td>
+        <td class="muted">${x.maxMs}ms</td></tr>`).join('')
+        : '<tr><td colspan=7 class=muted>本进程启动以来还没有请求被计到（重启后从零开始）</td></tr>');
+  } catch(e) {
+    if (e.status !== 401) $('healthTable').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
+  }
+
+  try {
+    const r = await api('/v1/admin/email-log');
+    $('emailLogNote').textContent = (r.note || '') + (r.configured ? '' : '　⚠ SMTP 当前未配置，发信会直接失败。');
+    const sends = r.sends || [];
+    $('emailSends').innerHTML = '<tr><th>时间 (UTC+8)</th><th>类型</th><th>收件（已打码）</th><th>结果</th><th>错误</th></tr>' +
+      (sends.length ? sends.map(x => `<tr><td class="muted">${agoCell(x.at)}</td>
+        <td>${x.kind === 'login_code' ? '验证码' : x.kind === 'admin_test' ? '后台测试' : escapeHtml(x.kind||'—')}</td>
+        <td>${escapeHtml(x.to || '—')}</td>
+        <td class="${x.ok?'ok':'bad'}">${x.ok ? '成功' : '失败'}</td>
+        <td class="muted" style="font-size:11px">${escapeHtml(x.error || '')}</td></tr>`).join('')
+        : '<tr><td colspan=5 class=muted>还没有发信记录（记录住在 events 表里，会随保留期一起清）</td></tr>');
+    const codes = r.codes || [];
+    $('emailCodes').innerHTML = '<tr><th>邮箱（已打码）</th><th>签发 (UTC+8)</th><th>过期 (UTC+8)</th><th>已试次数</th><th>窗口内签发</th></tr>' +
+      (codes.length ? codes.map(x => `<tr><td>${escapeHtml(x.email)}</td>
+        <td class="muted">${agoCell(x.createdAt)}</td>
+        <td class="${x.expired?'muted':''}">${escapeHtml(fmtBJ(x.expiresAt))}${x.expired?' <span class="badge badge-light">已过期</span>':''}</td>
+        <td>${x.attempts}</td><td>${x.issueCount}</td></tr>`).join('')
+        : '<tr><td colspan=5 class=muted>暂无签发记录</td></tr>');
+  } catch(e) {
+    if (e.status !== 401) $('emailSends').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
+  }
+}
+
+/* ---------- 用户详情抽屉 ---------- */
+async function openUserDetail(userId){
+  if (!userId) return;
+  const box = $('viewer');
+  box.innerHTML = '<div class="detail"><p class="muted">加载中…</p></div>';
+  box.style.display = 'flex';
+  let r;
+  try {
+    r = await api('/v1/admin/user-detail?userId=' + encodeURIComponent(userId));
+  } catch(e) {
+    box.innerHTML = `<div class="detail" onclick="event.stopPropagation()">${errHtml(e.message)}
+      <p class="muted" style="font-size:12px">${e.status === 409 ? '这个 8 位前缀匹配到了多个用户 —— 从「数据库 · users」里复制完整 id 再试。' : ''}</p>
+      <button class="small ghost" onclick="closeViewer()">关闭</button></div>`;
+    return;
+  }
+  const u = r.user || {};
+  const tbl = (head, rows, empty) => rows.length
+    ? `<div class="wrap"><table><tr>${head.map(h=>`<th>${h}</th>`).join('')}</tr>${rows.join('')}</table></div>`
+    : `<p class="muted">${empty}</p>`;
+  box.innerHTML = `<div class="detail" onclick="event.stopPropagation()">
+    <div class="bar"><h2 style="margin:0">用户详情</h2><button class="small ghost" onclick="closeViewer()">关闭</button></div>
+    <p class="muted viewnote">${escapeHtml(r.note || '')}</p>
+    <div class="rtgrid">
+      <span class="kv"><b>完整 ID</b><br><code style="font-size:11px">${escapeHtml(u.id||'')}</code></span>
+      <span class="kv"><b>昵称</b><br>${escapeHtml(u.displayName || '—')}</span>
+      <span class="kv"><b>状态</b><br>${u.status === 'active' ? '<span class="badge badge-light">active</span>' : `<span class="badge badge-warn">${escapeHtml(u.status||'')}</span>`}${u.deletedAt ? ' <span class="badge badge-warn">已软删</span>' : ''}</span>
+      <span class="kv"><b>可用额度</b><br>${r.availableUnits ?? 0}</span>
+      <span class="kv"><b>注册</b><br>${escapeHtml(fmtBJ(u.createdAt))} (UTC+8)</span>
+      <span class="kv"><b>语言 / 时区</b><br>${escapeHtml(u.locale||'')} / ${escapeHtml(u.timezone||'')}${u.isGuest ? '<br><span class="badge badge-warn">游客账号</span>' : ''}</span>
+    </div>
+    <h3>额度账本（${(r.ledger||[]).length}）</h3>
+    ${tbl(['时间 (UTC+8)','分录','张数','来源','任务'], (r.ledger||[]).map(l=>`<tr>
+      <td class="muted">${agoCell(l.at)}</td><td>${escapeHtml(l.entryType)}</td>
+      <td class="${l.units>0?'ok':l.units<0?'bad':'muted'}">${l.units>0?'+':''}${l.units}</td>
+      <td>${escapeHtml(l.source||'')}</td>
+      <td class="muted" style="font-size:11px">${l.jobId?escapeHtml(String(l.jobId).slice(0,8)):'—'}</td></tr>`), '没有任何额度流水')}
+    <h3>购买（${(r.purchases||[]).length}）</h3>
+    ${tbl(['时间 (UTC+8)','商品','平台','交易号','状态','金额'], (r.purchases||[]).map(p=>`<tr>
+      <td class="muted">${agoCell(p.purchasedAt)}</td><td>${escapeHtml(p.product)}</td>
+      <td>${escapeHtml(p.platform)}</td><td class="muted" style="font-size:11px">${escapeHtml(p.txId||'')}</td>
+      <td>${escapeHtml(p.status)}</td><td>${p.amountMinor!=null?fmt$(p.amountMinor):'—'}</td></tr>`), '没有购买记录')}
+    <h3>项目（${(r.projects||[]).length}）</h3>
+    ${tbl(['更新 (UTC+8)','标题','状态','任务数'], (r.projects||[]).map(x=>`<tr>
+      <td class="muted">${agoCell(x.updatedAt)}</td><td>${escapeHtml(x.title||'（未命名）')}</td>
+      <td>${escapeHtml(x.status)}${x.deleted?' <span class="badge badge-warn">已软删</span>':''}</td>
+      <td>${x.jobs}</td></tr>`), '没有项目')}
+    <h3>任务（${(r.jobs||[]).length}）</h3>
+    ${tbl(['时间 (UTC+8)','风格','状态','失败原因','耗时'], (r.jobs||[]).map(x=>`<tr>
+      <td class="muted">${agoCell(x.created_at)}</td><td>${escapeHtml(x.style||'')}</td>
+      <td class="${x.status==='succeeded'?'ok':x.status==='failed'?'bad':'muted'}">${escapeHtml(x.status)}</td>
+      <td class="muted">${escapeHtml(x.error_code||'—')}</td>
+      <td>${x.seconds!=null?x.seconds+'s':'—'}</td></tr>`), '没有生成任务')}
+    <h3>资产（${(r.assets||[]).length}）</h3>
+    ${tbl(['预览','类型','状态','大小','创建 (UTC+8)'], (r.assets||[]).map(a=>`<tr>
+      <td>${thumb(a.id)}</td><td>${escapeHtml(a.kind)}</td><td>${escapeHtml(a.status)}</td>
+      <td>${fmtBytes(a.byteSize)}</td><td class="muted">${agoCell(a.createdAt)}</td></tr>`), '没有资产')}
+    <h3>会话（${(r.sessions||[]).length}）</h3>
+    ${tbl(['令牌后 6 位','设备','最近活跃 (UTC+8)','到期 (UTC+8)'], (r.sessions||[]).map(x=>`<tr>
+      <td><code style="font-size:11px">…${escapeHtml(x.tokenTail)}</code></td>
+      <td class="muted" style="font-size:11px">${escapeHtml(x.deviceId||'—')}</td>
+      <td class="muted">${agoCell(x.lastSeenAt)}</td>
+      <td class="${x.expired?'muted':''}">${x.expiresAt?escapeHtml(fmtBJ(x.expiresAt)):'永不'}${x.expired?' <span class="badge badge-light">已过期</span>':''}</td></tr>`),
+      '没有活跃会话（用户从没登录过，或会话已被清掉）')}
+  </div>`;
+}
+
 /* ---------- Tabs / boot ---------- */
 function currentTab(){ const h = (location.hash||'').replace('#',''); return TABS.includes(h) ? h : 'overview'; }
 function loadTabByName(name){
   if (name === 'overview') return loadOverview();
   if (name === 'users') return loadUsers();
   if (name === 'stats') return loadStats();
+  if (name === 'events') return loadEvents();
+  if (name === 'assets') return loadAssets();
+  if (name === 'health') return loadHealth();
   if (name === 'ops') return loadOps();
   if (name === 'db') return loadDb();
   if (name === 'config') return loadConfig();
@@ -1466,6 +1940,22 @@ function bindStaticEvents(){
   document.querySelectorAll('#rangebtns [data-days]').forEach(btn => btn.addEventListener('click', () => { statsDays = Number(btn.dataset.days); loadStats(); }));
   $('sqlRun').addEventListener('click', runSql);
   $('sendTestEmail').addEventListener('click', sendTestEmail);
+  document.querySelectorAll('#eventDaysBtns [data-days]').forEach(btn =>
+    btn.addEventListener('click', () => { eventDays = Number(btn.dataset.days); loadEvents(); }));
+  $('eventNameFilter').addEventListener('keydown', e => { if (e.key === 'Enter') loadEvents(); });
+  $('eventsExport').addEventListener('click', () =>
+    exportCsv('events', { days: eventDays, name: ($('eventNameFilter').value||'').trim() }));
+  ['assetKind','assetStatus'].forEach(id => $(id).addEventListener('change', loadAssets));
+  $('assetUser').addEventListener('keydown', e => { if (e.key === 'Enter') loadAssets(); });
+  $('assetsExport').addEventListener('click', () => exportCsv('assets', assetFilterParams()));
+  ['jobStatus','jobSince'].forEach(id => $(id).addEventListener('change', loadJobsTable));
+  $('jobUser').addEventListener('keydown', e => { if (e.key === 'Enter') loadJobsTable(); });
+  $('jobsExport').addEventListener('click', () => exportCsv('jobs', jobFilterParams()));
+  ['purchaseStatus','purchasePlatform'].forEach(id => $(id).addEventListener('change', loadPurchasesTable));
+  $('purchasesExport').addEventListener('click', () => exportCsv('purchases', purchaseFilterParams()));
+  ['fbRating','fbHandled'].forEach(id => $(id).addEventListener('change', loadFeedbackTable));
+  $('feedbackExport').addEventListener('click', () => exportCsv('feedback', fbFilterParams()));
+  $('usersExport').addEventListener('click', () => exportCsv('users', { q: ($('userSearch').value||'').trim() }));
 }
 
 async function boot(){

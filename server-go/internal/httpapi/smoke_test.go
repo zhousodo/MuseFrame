@@ -107,6 +107,19 @@ func TestSmokeAllRoutes(t *testing.T) {
 		{"GET", "/v1/admin/user-facts", nil, admin, 200},
 		{"GET", "/v1/admin/audit", nil, admin, 200},
 		{"GET", "/v1/admin/feedback-reasons", nil, admin, 200},
+		// 2026-09-12 第四轮新增的 9 条（全链路可见性）。
+		{"GET", "/v1/admin/events?days=7", nil, admin, 200},
+		{"GET", "/v1/admin/assets?kind=candidate", nil, admin, 200},
+		{"GET", "/v1/admin/user-detail?userId=" + uid, nil, admin, 200},
+		{"GET", "/v1/admin/email-log", nil, admin, 200},
+		{"GET", "/v1/admin/api-health?hours=24", nil, admin, 200},
+		{"GET", "/v1/admin/export/users.csv", nil, admin, 200},
+		// 反馈行是上面 POST /v1/candidates/{id}/feedback 刚建的，id 由 nextID 决定，
+		// 所以这里用一个**不存在**的 id 打 404 —— 冒烟只负责「路由活着且不 5xx」，
+		// 标记往返的正确性由 TestFeedbackHandledRoundTrip 断言。
+		{"POST", "/v1/admin/feedback/nope/handled", map[string]any{"handled": true}, admin, 404},
+		{"POST", "/v1/admin/jobs/" + jobID + "/retry", nil, admin, 409}, // 该任务是 succeeded
+		{"POST", "/v1/admin/purchases/nope/reverify", nil, admin, 404},
 	}
 
 	hit := map[string]bool{}

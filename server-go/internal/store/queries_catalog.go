@@ -152,6 +152,15 @@ func GetProductByKey(ctx context.Context, q Queryer, key string) (*Product, erro
 	return scanProduct(q.QueryRow(ctx, `SELECT `+productCols+` FROM products WHERE internal_key = $1`, key))
 }
 
+// GetProductByID 按主键取商品（含下架）。
+//
+// 🔴 后台重验购买时必须用 id 而不是 internal_key：purchases.product_id 是外键指
+// 向 products.id；一个下架后被改过 internal_key 的商品用 key 是查不回来的，
+// 而那笔旧购买的额度该补还是要补。
+func GetProductByID(ctx context.Context, q Queryer, id string) (*Product, error) {
+	return scanProduct(q.QueryRow(ctx, `SELECT `+productCols+` FROM products WHERE id = $1`, id))
+}
+
 // ProductUpdate 是商品可编辑字段的补丁。nil = 这次不改这一项。
 //
 // 🔴 三个「可为 null 的列」用 (SetX bool, X *T) 二元组表达，不能只用指针：

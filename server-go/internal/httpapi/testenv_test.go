@@ -171,6 +171,9 @@ func pad8(n int) string {
 type resp struct {
 	Code int
 	Body []byte
+	// Header 是响应头。CSV 导出要断言 Content-Disposition 与 X-Row-Count，
+	// 而那两个只存在于头里（正文是 CSV 文本，不是 JSON）。
+	Header http.Header
 }
 
 func (r resp) JSON(t *testing.T, dst any) {
@@ -210,7 +213,7 @@ func (e *testEnv) do(method, path string, body any, headers map[string]string) r
 	}
 	w := httptest.NewRecorder()
 	e.app.Handler().ServeHTTP(w, req)
-	return resp{Code: w.Code, Body: w.Body.Bytes()}
+	return resp{Code: w.Code, Body: w.Body.Bytes(), Header: w.Header()}
 }
 
 func (e *testEnv) admin() map[string]string { return map[string]string{"X-Admin-Token": adminToken} }
