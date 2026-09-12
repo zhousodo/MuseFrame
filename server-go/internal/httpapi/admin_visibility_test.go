@@ -283,12 +283,17 @@ func TestAdminUserDetailAggregatesEverySurface(t *testing.T) {
 	if len(out.Sessions) != 1 {
 		t.Fatalf("应当有 1 个会话，实际 %d", len(out.Sessions))
 	}
-	// 🔴 会话只回令牌后 6 位；完整令牌绝不能出现在响应里。
-	if len(out.Sessions[0].TokenTail) != 6 {
-		t.Errorf("会话应当只回令牌后 6 位，实际 %q", out.Sessions[0].TokenTail)
-	}
+	// 🔴 2026-09-12 起会话出参里**一个字节的令牌都不回**（此前回「后 6 位」）。
+	// 密钥类的东西不该露出任何片段，而「对上具体哪一个设备」看 device_id 与
+	// 最近活跃时间就够 —— 那两列一直都在。
 	if strings.Contains(string(r.Body), tok) {
 		t.Errorf("响应里出现了完整会话令牌")
+	}
+	if len(tok) >= 6 && strings.Contains(string(r.Body), tok[len(tok)-6:]) {
+		t.Errorf("响应里出现了会话令牌的尾段")
+	}
+	if strings.Contains(string(r.Body), "tokenTail") {
+		t.Errorf("出参里还有 tokenTail 字段")
 	}
 }
 
