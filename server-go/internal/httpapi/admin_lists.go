@@ -86,10 +86,15 @@ func (a *App) hAdminJobs(c *Ctx) (any, error) {
 	}
 	ctx := c.R.Context()
 	q := c.URL.Query()
+	tr, err := parseTimeRange(q)
+	if err != nil {
+		return nil, err
+	}
 	f := store.JobFilter{
 		Status:     pickEnum(q.Get("status"), "created", "queued", "running", "quality_check", "succeeded", "failed", "cancelled"),
 		SinceHours: clampOptionalHours(q.Get("sinceHours")),
 		UserID:     truncateRunes(trimSpace(q.Get("userId")), 64),
+		Range:      tr,
 		Limit:      clampLimit(q.Get("limit"), 60, 500),
 	}
 	rows, err := store.ListAdminJobsFiltered(ctx, a.st.Q(), f, a.now())
@@ -101,8 +106,9 @@ func (a *App) hAdminJobs(c *Ctx) (any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"note": jobsNote, "jobs": rows, "statusCounts": counts,
-		"filter": map[string]any{"status": f.Status, "sinceHours": f.SinceHours, "userId": f.UserID},
+		"note": jobsNote + timeRangeNote(tr), "jobs": rows, "statusCounts": counts,
+		"filter": map[string]any{"status": f.Status, "sinceHours": f.SinceHours, "userId": f.UserID,
+			"from": q.Get("from"), "to": q.Get("to")},
 		// 上限是热键：达到它的任务会被 worker 判死，运营据此判断「还会不会自己重试」。
 		"maxAttempts": a.worker.MaxAttempts(),
 	}, nil
@@ -119,9 +125,14 @@ func (a *App) hAdminFeedback(c *Ctx) (any, error) {
 	}
 	ctx := c.R.Context()
 	q := c.URL.Query()
+	tr, err := parseTimeRange(q)
+	if err != nil {
+		return nil, err
+	}
 	f := store.FeedbackFilter{
 		Rating:  pickEnum(q.Get("rating"), "positive", "negative"),
 		Handled: pickEnum(q.Get("handled"), "yes", "no"),
+		Range:   tr,
 		Limit:   clampLimit(q.Get("limit"), 100, 500),
 	}
 	rows, err := store.ListAdminFeedbackFull(ctx, a.st.Q(), f)
@@ -133,8 +144,9 @@ func (a *App) hAdminFeedback(c *Ctx) (any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"note": feedbackNote, "feedback": rows, "unhandled": unhandled,
-		"filter": map[string]any{"rating": f.Rating, "handled": f.Handled},
+		"note": feedbackNote + timeRangeNote(tr), "feedback": rows, "unhandled": unhandled,
+		"filter": map[string]any{"rating": f.Rating, "handled": f.Handled,
+			"from": q.Get("from"), "to": q.Get("to")},
 	}, nil
 }
 
@@ -158,9 +170,14 @@ func (a *App) hAdminPurchases(c *Ctx) (any, error) {
 		return nil, err
 	}
 	q := c.URL.Query()
+	tr, err := parseTimeRange(q)
+	if err != nil {
+		return nil, err
+	}
 	f := store.PurchaseFilter{
 		Status:   pickEnum(q.Get("status"), purchaseStatuses...),
 		Platform: pickEnum(q.Get("platform"), "google", "apple", "web"),
+		Range:    tr,
 		Limit:    clampLimit(q.Get("limit"), 100, 500),
 	}
 	rows, err := store.ListAdminPurchasesFull(c.R.Context(), a.st.Q(), f)
@@ -168,8 +185,9 @@ func (a *App) hAdminPurchases(c *Ctx) (any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"note": purchasesNote, "purchases": rows,
-		"filter": map[string]any{"status": f.Status, "platform": f.Platform},
+		"note": purchasesNote + timeRangeNote(tr), "purchases": rows,
+		"filter": map[string]any{"status": f.Status, "platform": f.Platform,
+			"from": q.Get("from"), "to": q.Get("to")},
 	}, nil
 }
 
@@ -185,11 +203,15 @@ func (a *App) hAdminUsers(c *Ctx) (any, error) {
 	// 客服最常干的就是拿「中文昵称 + 邮箱片段」一起搜 —— 对齐立刻被打破。）
 	// Node 侧是 .slice(0, 120)（server/admin.js:148），数的是字符，这里也按字符算。
 	search := truncateRunes(strings.ToLower(trimSpace(c.URL.Query().Get("q"))), MaxAdminSearch)
-	rows, err := store.ListAdminUsers(c.R.Context(), a.st.Q(), limit, search)
+	tr, err := parseTimeRange(c.URL.Query())
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"note": usersNote, "users": rows}, nil
+	rows, err := store.ListAdminUsers(c.R.Context(), a.st.Q(), limit, search, tr)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"note": usersNote + timeRangeNote(tr), "users": rows}, nil
 }
 
 // usersNote 是用户视图的口径说明。

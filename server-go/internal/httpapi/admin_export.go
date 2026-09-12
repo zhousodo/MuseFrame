@@ -97,7 +97,11 @@ func (a *App) hAdminExportCSV(c *Ctx) (any, error) {
 
 func (a *App) exportUsers(ctx context.Context, q urlValues, limit int) ([]string, [][]string, error) {
 	search := truncateRunes(strings.ToLower(trimSpace(q.Get("q"))), MaxAdminSearch)
-	rows, err := store.ListAdminUsers(ctx, a.st.Q(), limit, search)
+	tr, err := parseTimeRange(q)
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, err := store.ListAdminUsers(ctx, a.st.Q(), limit, search, tr)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -114,10 +118,15 @@ func (a *App) exportUsers(ctx context.Context, q urlValues, limit int) ([]string
 }
 
 func (a *App) exportJobs(ctx context.Context, q urlValues, limit int) ([]string, [][]string, error) {
+	tr, err := parseTimeRange(q)
+	if err != nil {
+		return nil, nil, err
+	}
 	f := store.JobFilter{
 		Status:     pickEnum(q.Get("status"), "created", "queued", "running", "quality_check", "succeeded", "failed", "cancelled"),
 		SinceHours: clampOptionalHours(q.Get("sinceHours")),
 		UserID:     truncateRunes(trimSpace(q.Get("userId")), 64),
+		Range:      tr,
 		Limit:      limit,
 	}
 	rows, err := store.ListAdminJobsFiltered(ctx, a.st.Q(), f, a.now())
@@ -137,9 +146,14 @@ func (a *App) exportJobs(ctx context.Context, q urlValues, limit int) ([]string,
 }
 
 func (a *App) exportPurchases(ctx context.Context, q urlValues, limit int) ([]string, [][]string, error) {
+	tr, err := parseTimeRange(q)
+	if err != nil {
+		return nil, nil, err
+	}
 	f := store.PurchaseFilter{
 		Status:   pickEnum(q.Get("status"), purchaseStatuses...),
 		Platform: pickEnum(q.Get("platform"), "google", "apple", "web"),
+		Range:    tr,
 		Limit:    limit,
 	}
 	rows, err := store.ListAdminPurchasesFull(ctx, a.st.Q(), f)
@@ -159,9 +173,14 @@ func (a *App) exportPurchases(ctx context.Context, q urlValues, limit int) ([]st
 }
 
 func (a *App) exportFeedback(ctx context.Context, q urlValues, limit int) ([]string, [][]string, error) {
+	tr, err := parseTimeRange(q)
+	if err != nil {
+		return nil, nil, err
+	}
 	f := store.FeedbackFilter{
 		Rating:  pickEnum(q.Get("rating"), "positive", "negative"),
 		Handled: pickEnum(q.Get("handled"), "yes", "no"),
+		Range:   tr,
 		Limit:   limit,
 	}
 	rows, err := store.ListAdminFeedbackFull(ctx, a.st.Q(), f)
@@ -184,7 +203,11 @@ func (a *App) exportEvents(ctx context.Context, q urlValues, limit int) ([]strin
 	days := clampDays(q.Get("days"), 7, 90)
 	name := truncateRunes(trimSpace(q.Get("name")), 120)
 	since := a.now().Add(-time.Duration(days) * 24 * time.Hour)
-	rows, err := store.ListEventSamples(ctx, a.st.Q(), since, name, limit)
+	tr, err := parseTimeRange(q)
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, err := store.ListEventSamples(ctx, a.st.Q(), since, name, tr, limit)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -196,10 +219,15 @@ func (a *App) exportEvents(ctx context.Context, q urlValues, limit int) ([]strin
 }
 
 func (a *App) exportAssets(ctx context.Context, q urlValues, limit int) ([]string, [][]string, error) {
+	tr, err := parseTimeRange(q)
+	if err != nil {
+		return nil, nil, err
+	}
 	f := store.AssetFilter{
 		Kind:   pickEnum(q.Get("kind"), "source", "candidate", "thumbnail", "export"),
 		Status: pickEnum(q.Get("status"), "pending", "ready", "quarantined", "deleted"),
 		UserID: truncateRunes(trimSpace(q.Get("userId")), 64),
+		Range:  tr,
 		Limit:  limit,
 	}
 	rows, err := store.ListAdminAssets(ctx, a.st.Q(), f)

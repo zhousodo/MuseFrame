@@ -563,6 +563,53 @@ func TestAdminHTMLKeepsAIGCLabelSurface(t *testing.T) {
 	}
 }
 
+// 🔴 六类导出都必须有 from/to 时间筛选，而且用的是**和列表同一个**取值函数。
+// 此前只有任务表有「最近 N 小时」，其余四类只能整段导出再在表格里删行 ——
+// 导出有 5000 行上限，被截断之后删到最后得到的是一份静悄悄少了几天的账。
+func TestAdminHTMLHasTimeRangeFiltersOnEveryExport(t *testing.T) {
+	code := adminCode(t)
+	if !strings.Contains(code, "function rangeParams(prefix){") {
+		t.Fatal("缺少 rangeParams()：起止日期必须走统一取值")
+	}
+	for _, prefix := range []string{"job", "purchase", "fb", "asset", "user", "event"} {
+		for _, suffix := range []string{"From", "To"} {
+			if !strings.Contains(code, `id="`+prefix+suffix+`"`) {
+				t.Errorf("缺少日期输入框 #%s%s", prefix, suffix)
+			}
+		}
+		if !strings.Contains(code, `rangeParams('`+prefix+`')`) {
+			t.Errorf("%s 的筛选参数没有带上起止日期", prefix)
+		}
+	}
+	// 日期一改就要重新拉数据，否则表还是旧的那一份而导出已经按新区间走了。
+	for _, bind := range []string{
+		"'jobFrom','jobTo'", "'purchaseFrom','purchaseTo'", "'fbFrom','fbTo'",
+		"'assetFrom','assetTo'", "'userFrom','userTo'", "'eventFrom','eventTo'",
+	} {
+		if !strings.Contains(code, bind) {
+			t.Errorf("日期输入框没有绑定重新加载：%s", bind)
+		}
+	}
+	// 标签必须写明是北京时间、且「结束日期」含当天 —— 后端按 UTC+8 的半开区间解释。
+	if !strings.Contains(code, "开始日期 (UTC+8)") || !strings.Contains(code, "结束日期 (UTC+8，含当天)") {
+		t.Error("日期输入框必须标明时区与是否含当天")
+	}
+}
+
+// 密钥类的东西不露任何片段：会话表此前显示「令牌后 6 位」，现在一个字节都不显示。
+func TestAdminHTMLShowsNoTokenFragment(t *testing.T) {
+	code := adminCode(t)
+	for _, bad := range []string{"tokenTail", "令牌后 6 位"} {
+		if strings.Contains(code, bad) {
+			t.Errorf("会话表仍在显示令牌片段：%s", bad)
+		}
+	}
+	// 额度到期要在用户详情里看得见：「我买的张数怎么没了」最常见的真因就是 bucket 到期。
+	if !strings.Contains(code, "额度到期 (UTC+8)") || !strings.Contains(code, "l.expiresAt") {
+		t.Error("用户详情的额度账本必须显示 bucket 到期时间")
+	}
+}
+
 // 后台不引任何外部资源：引一个 CDN 就等于给后台加一个我们不控制的单点。
 func TestAdminHTMLHasNoExternalResources(t *testing.T) {
 	code := adminCode(t)

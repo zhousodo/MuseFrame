@@ -362,6 +362,8 @@
       <div class="filters" style="margin-top:16px">
         <label class="f grow"><span>搜索（邮箱 / 显示名 / ID，回车或离开输入框生效）</span>
           <input id="userSearch" placeholder="留空 = 全部用户" autocomplete="off"></label>
+        <label class="f"><span>开始日期 (UTC+8)</span><input type="date" id="userFrom"></label>
+        <label class="f"><span>结束日期 (UTC+8，含当天)</span><input type="date" id="userTo"></label>
         <div class="right">
           <button class="ghost sm" id="grantOpen">手动加额度</button>
           <button class="ghost sm" id="usersExport">导出 CSV</button>
@@ -396,6 +398,8 @@
           <select id="purchaseStatus"><option value="">全部</option><option value="pending">pending 待验证</option><option value="verified">verified 已验证</option></select></label>
         <label class="f"><span>平台</span>
           <select id="purchasePlatform"><option value="">全部</option><option value="google">google</option><option value="apple">apple</option><option value="web">web</option></select></label>
+        <label class="f"><span>开始日期 (UTC+8)</span><input type="date" id="purchaseFrom"></label>
+        <label class="f"><span>结束日期 (UTC+8，含当天)</span><input type="date" id="purchaseTo"></label>
         <div class="right"><button class="ghost sm" id="purchasesExport">导出 CSV</button></div>
       </div>
       <div class="tmeta"><span id="purchasesCount"></span></div>
@@ -412,6 +416,8 @@
           <select id="jobSince"><option value="">不限</option><option value="1">近 1 小时</option><option value="24">近 24 小时</option><option value="168">近 7 天</option><option value="720">近 30 天</option></select></label>
         <label class="f grow"><span>用户 ID（前 8 位即可，回车或离开输入框生效）</span>
           <input id="jobUser" placeholder="留空 = 全部用户" autocomplete="off"></label>
+        <label class="f"><span>开始日期 (UTC+8)</span><input type="date" id="jobFrom"></label>
+        <label class="f"><span>结束日期 (UTC+8，含当天)</span><input type="date" id="jobTo"></label>
         <div class="right"><button class="ghost sm" id="jobsExport">导出 CSV</button></div>
       </div>
       <div class="tmeta"><span id="jobsCount"></span><span id="jobsStatusCounts"></span></div>
@@ -428,6 +434,8 @@
           <select id="assetStatus"><option value="">全部</option><option value="pending">pending</option><option value="ready">ready</option><option value="quarantined">quarantined</option><option value="deleted">deleted</option></select></label>
         <label class="f grow"><span>用户 ID（前 8 位即可，回车或离开输入框生效）</span>
           <input id="assetUser" placeholder="留空 = 全部用户" autocomplete="off"></label>
+        <label class="f"><span>开始日期 (UTC+8)</span><input type="date" id="assetFrom"></label>
+        <label class="f"><span>结束日期 (UTC+8，含当天)</span><input type="date" id="assetTo"></label>
         <div class="right"><button class="ghost sm" id="assetsExport">导出 CSV</button></div>
       </div>
       <div id="assetTotals" class="cards"></div>
@@ -477,6 +485,8 @@
           <select id="fbRating"><option value="">全部</option><option value="negative">差评</option><option value="positive">好评</option></select></label>
         <label class="f"><span>处理状态</span>
           <select id="fbHandled"><option value="">全部</option><option value="no">未处理</option><option value="yes">已处理</option></select></label>
+        <label class="f"><span>开始日期 (UTC+8)</span><input type="date" id="fbFrom"></label>
+        <label class="f"><span>结束日期 (UTC+8，含当天)</span><input type="date" id="fbTo"></label>
         <div class="right"><button class="ghost sm" id="feedbackExport">导出 CSV</button></div>
       </div>
       <div class="tmeta"><span id="feedbackCount"></span><span id="fbUnhandled"></span></div>
@@ -502,6 +512,8 @@
         </div>
         <label class="f grow"><span>只看某个事件的原始样本（回车或离开输入框生效）</span>
           <input id="eventNameFilter" placeholder="如 generation_failed，留空 = 全部" autocomplete="off"></label>
+        <label class="f"><span>开始日期 (UTC+8)</span><input type="date" id="eventFrom"></label>
+        <label class="f"><span>结束日期 (UTC+8，含当天)</span><input type="date" id="eventTo"></label>
         <div class="right"><button class="ghost sm" id="eventsExport">导出 CSV</button></div>
       </div>
       <h3 class="sec">按事件名</h3>
@@ -1065,8 +1077,15 @@ function statusCell(status, errCode){
 }
 
 /* ================= 生成任务 ================= */
+/* 🔴 from/to 一律和列表用同一个取值函数：页面上那张表和导出的 CSV 必须是
+   同一份口径。此前一半的导出根本没有时间筛选，运营只能整段导出再删行 ——
+   而导出有 5000 行上限，被截断之后删到最后得到的是一份静悄悄少了几天的账。 */
+function rangeParams(prefix){
+  return { from: ($(prefix + 'From').value || '').trim(), to: ($(prefix + 'To').value || '').trim() };
+}
 function jobFilterParams(){
-  return { status: $('jobStatus').value, sinceHours: $('jobSince').value, userId: ($('jobUser').value || '').trim() };
+  return Object.assign({ status: $('jobStatus').value, sinceHours: $('jobSince').value,
+    userId: ($('jobUser').value || '').trim() }, rangeParams('job'));
 }
 async function loadJobsTable(){
   const q = new URLSearchParams(jobFilterParams());
@@ -1128,7 +1147,8 @@ async function retryJob(jobId, btn){
 
 /* ================= 购买记录 ================= */
 function purchaseFilterParams(){
-  return { status: $('purchaseStatus').value, platform: $('purchasePlatform').value };
+  return Object.assign({ status: $('purchaseStatus').value, platform: $('purchasePlatform').value },
+    rangeParams('purchase'));
 }
 async function loadPurchasesTable(){
   const q = new URLSearchParams(purchaseFilterParams());
@@ -1186,7 +1206,9 @@ function parseReasonCodes(v) {
   }
   return [];
 }
-function fbFilterParams(){ return { rating: $('fbRating').value, handled: $('fbHandled').value }; }
+function fbFilterParams(){
+  return Object.assign({ rating: $('fbRating').value, handled: $('fbHandled').value }, rangeParams('fb'));
+}
 async function loadFeedbackTable(){
   const q = new URLSearchParams(fbFilterParams());
   for (const [k,v] of [...q]) if (!v) q.delete(k);
@@ -1278,13 +1300,20 @@ function renderOpsReasons(r){
 </script>
 <script>
 /* ================= 用户 ================= */
+function userFilterParams(){
+  return Object.assign({ q: ($('userSearch').value || '').trim() }, rangeParams('user'));
+}
 async function loadUsers(){
-  const search = ($('userSearch').value || '').trim();
+  const p = userFilterParams();
+  const search = p.q;
+  const q = new URLSearchParams(p);
+  for (const [k, v] of [...q]) if (!v) q.delete(k);
+  const filtered = q.toString() !== '';
   try {
-    const r = await api('/v1/admin/users' + (search ? '?q=' + encodeURIComponent(search) : ''));
+    const r = await api('/v1/admin/users' + (filtered ? '?' + q : ''));
     $('usersNote').textContent = r.note || '';
     const users = r.users || [];
-    $('usersCount').textContent = countText(users.length, '个账号', !!search);
+    $('usersCount').textContent = countText(users.length, '个账号', filtered);
     $('navUsers').textContent = intOr0(users.length);
     $('usersTable').innerHTML =
       '<thead><tr><th>邮箱</th><th>显示名</th><th>登录方式</th><th>身份</th><th>状态</th><th class="num">余额</th>' +
@@ -1412,7 +1441,8 @@ function aigcCell(a){
   return '<span class="b">未标识</span><br><span class="muted" style="font-size:11px">历史成品，不回溯</span>';
 }
 function assetFilterParams(){
-  return { kind: $('assetKind').value, status: $('assetStatus').value, userId: ($('assetUser').value || '').trim() };
+  return Object.assign({ kind: $('assetKind').value, status: $('assetStatus').value,
+    userId: ($('assetUser').value || '').trim() }, rangeParams('asset'));
 }
 async function loadAssets(){
   await ensureImgTok();
@@ -1870,6 +1900,9 @@ async function loadEvents(){
   const q = new URLSearchParams({ days: String(eventDays) });
   const name = ($('eventNameFilter').value || '').trim();
   if (name) q.set('name', name);
+  const er = rangeParams('event');
+  if (er.from) q.set('from', er.from);
+  if (er.to) q.set('to', er.to);
   try {
     const r = await api('/v1/admin/events?' + q);
     $('eventsNote').textContent = r.note || '';
@@ -2426,10 +2459,11 @@ async function openUserDetail(userId){
         u.isGuest ? '游客账号' : '')}
     </div>
     <h3>额度账本（${(r.ledger || []).length}）</h3>
-    ${tbl(['时间 (UTC+8)','分录','张数','来源','任务'], (r.ledger || []).map(l => `<tr>
+    ${tbl(['时间 (UTC+8)','分录','张数','来源','额度到期 (UTC+8)','任务'], (r.ledger || []).map(l => `<tr>
       <td class="nowrap">${timeCell(l.at)}</td><td>${txt(l.entryType, '未记录')}</td>
       <td class="num ${l.units > 0 ? 'okt' : l.units < 0 ? 'err' : ''}">${l.units > 0 ? '+' : ''}${intOr0(l.units)}</td>
       <td>${txt(l.source, '未记录')}</td>
+      <td class="nowrap">${l.expiresAt ? timeCell(l.expiresAt) + (l.expired ? ' <span class="b warn">已过期</span>' : '') : '<span class="empty">永不过期</span>'}</td>
       <td>${l.jobId ? idCell(l.jobId) : none('非生成扣减')}</td></tr>`), '没有任何额度流水')}
     <h3>购买（${(r.purchases || []).length}）</h3>
     ${tbl(['时间 (UTC+8)','商品','平台','交易号','状态','金额'], (r.purchases || []).map(p => `<tr>
@@ -2452,8 +2486,7 @@ async function openUserDetail(userId){
       <td>${thumb(a.id)}</td><td>${txt(a.kind, '未记录')}</td><td>${txt(a.status, '未知')}</td>
       <td class="num">${fmtBytes(a.byteSize)}</td><td class="nowrap">${timeCell(a.createdAt)}</td></tr>`), '没有资产')}
     <h3>会话（${(r.sessions || []).length}）</h3>
-    ${tbl(['令牌后 6 位','设备','最近活跃 (UTC+8)','到期 (UTC+8)'], (r.sessions || []).map(x => `<tr>
-      <td><code>…${escapeHtml(String(x.tokenTail || ''))}</code></td>
+    ${tbl(['设备','最近活跃 (UTC+8)','到期 (UTC+8)'], (r.sessions || []).map(x => `<tr>
       <td>${txt(x.deviceId, '未上报')}</td>
       <td class="nowrap">${timeCell(x.lastSeenAt)}</td>
       <td class="nowrap">${x.expiresAt ? timeCell(x.expiresAt) : '永不过期'}${x.expired ? ' <span class="b">已过期</span>' : ''}</td></tr>`),
@@ -2551,19 +2584,22 @@ function bindStaticEvents(){
   // 取值函数 —— 写成 exportCsv('events', {...}) 的话，大括号里的 $('…').value
   // 在 click 那一刻就已经求完，同步与否都改不了它。
   $('eventsExport').addEventListener('click', () =>
-    exportCsv('events', () => ({ days: eventDays, name: ($('eventNameFilter').value || '').trim() })));
-  ['assetKind','assetStatus'].forEach(id => $(id).addEventListener('change', loadAssets));
+    exportCsv('events', () => Object.assign({ days: eventDays,
+      name: ($('eventNameFilter').value || '').trim() }, rangeParams('event'))));
+  ['assetKind','assetStatus','assetFrom','assetTo'].forEach(id => $(id).addEventListener('change', loadAssets));
   bindFilterInput('assetUser', loadAssets);
   $('assetsExport').addEventListener('click', () => exportCsv('assets', assetFilterParams));
-  ['jobStatus','jobSince'].forEach(id => $(id).addEventListener('change', loadJobsTable));
+  ['jobStatus','jobSince','jobFrom','jobTo'].forEach(id => $(id).addEventListener('change', loadJobsTable));
   bindFilterInput('jobUser', loadJobsTable);
   $('jobsExport').addEventListener('click', () => exportCsv('jobs', jobFilterParams));
-  ['purchaseStatus','purchasePlatform'].forEach(id => $(id).addEventListener('change', loadPurchasesTable));
+  ['purchaseStatus','purchasePlatform','purchaseFrom','purchaseTo'].forEach(id => $(id).addEventListener('change', loadPurchasesTable));
   $('purchasesExport').addEventListener('click', () => exportCsv('purchases', purchaseFilterParams));
-  ['fbRating','fbHandled'].forEach(id => $(id).addEventListener('change', loadFeedbackTable));
+  ['fbRating','fbHandled','fbFrom','fbTo'].forEach(id => $(id).addEventListener('change', loadFeedbackTable));
   $('feedbackExport').addEventListener('click', () => exportCsv('feedback', fbFilterParams));
   bindFilterInput('userSearch', loadUsers);
-  $('usersExport').addEventListener('click', () => exportCsv('users', () => ({ q: ($('userSearch').value || '').trim() })));
+  ['userFrom','userTo'].forEach(id => $(id).addEventListener('change', loadUsers));
+  ['eventFrom','eventTo'].forEach(id => $(id).addEventListener('change', loadEvents));
+  $('usersExport').addEventListener('click', () => exportCsv('users', userFilterParams));
 }
 
 function saveTok(){

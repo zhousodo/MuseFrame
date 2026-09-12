@@ -68,12 +68,16 @@ func (a *App) hAdminEvents(c *Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	samples, err := store.ListEventSamples(ctx, a.st.Q(), since, name, limit)
+	tr, err := parseTimeRange(c.URL.Query())
+	if err != nil {
+		return nil, err
+	}
+	samples, err := store.ListEventSamples(ctx, a.st.Q(), since, name, tr, limit)
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{
-		"note": eventsNote, "days": days, "names": names, "byDay": byDay,
+		"note": eventsNote + timeRangeNote(tr), "days": days, "names": names, "byDay": byDay,
 		"versions": versions, "samples": samples, "sampleFilter": name,
 		// 保留期是热键：埋点页看不到比它更早的数据，这个数字必须和生效值一致。
 		"retentionDays": a.rt.EventRetentionDays(),
@@ -111,10 +115,15 @@ func (a *App) hAdminAssets(c *Ctx) (any, error) {
 	}
 	ctx := c.R.Context()
 	q := c.URL.Query()
+	tr, err := parseTimeRange(q)
+	if err != nil {
+		return nil, err
+	}
 	f := store.AssetFilter{
 		Kind:   pickEnum(q.Get("kind"), "source", "candidate", "thumbnail", "export"),
 		Status: pickEnum(q.Get("status"), "pending", "ready", "quarantined", "deleted"),
 		UserID: truncateRunes(trimSpace(q.Get("userId")), 64),
+		Range:  tr,
 		Limit:  clampLimit(q.Get("limit"), 100, 500),
 	}
 	rows, err := store.ListAdminAssets(ctx, a.st.Q(), f)
@@ -125,7 +134,7 @@ func (a *App) hAdminAssets(c *Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"note": assetsNote, "assets": rows, "totals": totals}, nil
+	return map[string]any{"note": assetsNote + timeRangeNote(tr), "assets": rows, "totals": totals}, nil
 }
 
 // ---- 用户纵向详情 ----------------------------------------------------------
@@ -166,7 +175,7 @@ func (a *App) hAdminUserDetail(c *Ctx) (any, error) {
 		return nil, err
 	}
 	now := a.now()
-	ledger, err := store.ListUserLedger(ctx, a.st.Q(), userID, 200)
+	ledger, err := store.ListUserLedger(ctx, a.st.Q(), userID, a.now(), 200)
 	if err != nil {
 		return nil, err
 	}

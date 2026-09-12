@@ -152,7 +152,7 @@ func ListAdminJobs(ctx context.Context, q Queryer, limit int) ([]AdminJobRow, er
 		       substr(j.user_id,1,8),
 		       (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=j.user_id AND ai.email_normalized IS NOT NULL LIMIT 1),
 		       s.public_name, j.source_asset_id,
-		       (SELECT c.asset_id FROM generation_candidates c WHERE c.job_id=j.id LIMIT 1)
+		       (SELECT c.asset_id FROM generation_candidates c WHERE c.job_id=j.id ORDER BY c.candidate_index ASC, c.created_at ASC LIMIT 1)
 		FROM generation_jobs j
 		JOIN style_versions v ON v.id=j.style_version_id JOIN styles s ON s.id=v.style_id
 		ORDER BY j.created_at DESC, j.id ASC LIMIT $1`, limit)
