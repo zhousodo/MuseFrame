@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>留影 MuseFrame 运营后台使用指南</title>
+<style>
+  :root{
+    --bg:#F7F6F2; --panel:#FFFFFF; --ink:#1D1C1A; --muted:#6B6862;
+    --line:#E2DFD6; --accent:#1F5C8B; --accent-soft:#EAF2F8;
+    --warn:#8A5A12; --warn-soft:#FBF3E2; --bad:#A32A1F; --bad-soft:#FBEDEB;
+    --ok:#1F6B46; --ok-soft:#EAF4EE; --code-bg:#EFEDE6;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#17181A; --panel:#1F2124; --ink:#E8E6E1; --muted:#9C9890;
+      --line:#33363B; --accent:#7FB6DC; --accent-soft:#1B2B36;
+      --warn:#D8A657; --warn-soft:#2C2417; --bad:#E98B80; --bad-soft:#2E1C19;
+      --ok:#86C99F; --ok-soft:#16251C; --code-bg:#2A2D31;
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    -webkit-text-size-adjust:100%}
+  .page{max-width:1080px;margin:0 auto;padding:28px 20px 96px}
+  header.doc{border-bottom:2px solid var(--line);padding-bottom:18px;margin-bottom:22px}
+  h1{font-size:27px;line-height:1.3;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:13.5px;line-height:1.7}
+  h2{font-size:20px;margin:38px 0 10px;padding-top:10px;border-top:1px solid var(--line)}
+  h3{font-size:16.5px;margin:24px 0 8px}
+  h4{font-size:14.5px;margin:18px 0 6px;color:var(--muted)}
+  p{margin:9px 0}
+  a{color:var(--accent)}
+  code,kbd{background:var(--code-bg);border-radius:4px;padding:1px 5px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.8px;word-break:break-all}
+  pre{background:var(--code-bg);border:1px solid var(--line);border-radius:9px;padding:11px 13px;
+    overflow-x:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.6px;line-height:1.65;margin:10px 0}
+  pre code{background:none;padding:0;font-size:inherit}
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0}
+  .note,.warn,.bad,.ok{border-left:4px solid;border-radius:9px;padding:11px 14px;margin:13px 0;font-size:14px}
+  .note{border-color:var(--accent);background:var(--accent-soft)}
+  .warn{border-color:var(--warn);background:var(--warn-soft)}
+  .bad{border-color:var(--bad);background:var(--bad-soft)}
+  .ok{border-color:var(--ok);background:var(--ok-soft)}
+  .tag{display:inline-block;font-size:11.5px;border:1px solid var(--line);border-radius:999px;
+    padding:1px 9px;background:var(--panel);color:var(--muted);vertical-align:2px;white-space:nowrap}
+  .tag.hot{border-color:var(--ok);color:var(--ok)}
+  .tag.env{border-color:var(--warn);color:var(--warn)}
+  .tag.ro{border-color:var(--muted)}
+  .tag.danger{border-color:var(--bad);color:var(--bad)}
+  .scroll{overflow-x:auto;border:1px solid var(--line);border-radius:11px;background:var(--panel);margin:14px 0}
+  table{border-collapse:collapse;width:100%;font-size:13.4px;min-width:560px}
+  th,td{border-bottom:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:var(--code-bg);font-weight:600;white-space:nowrap}
+  tbody tr:last-child td{border-bottom:none}
+  td code{font-size:12.2px}
+  ol{padding-left:22px;margin:10px 0}
+  ol li{margin:7px 0}
+  ul{padding-left:20px;margin:8px 0}
+  ul li{margin:5px 0}
+  .exp{display:block;margin-top:3px;font-size:13px;color:var(--muted)}
+  .exp b{color:var(--ok)}
+  nav.toc{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin:18px 0 6px}
+  nav.toc h2{border:none;margin:0 0 8px;padding:0;font-size:15px}
+  nav.toc ol{margin:0;padding-left:20px;font-size:13.8px}
+  nav.toc ol ol{padding-left:18px;margin:3px 0}
+  nav.toc li{margin:3px 0}
+  footer.doc{margin-top:44px;border-top:1px solid var(--line);padding-top:14px;color:var(--muted);font-size:12.6px}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  h2 a.self,h3 a.self{color:var(--muted);text-decoration:none;font-size:13px;margin-left:6px;opacity:.5}
+  h2 a.self:hover,h3 a.self:hover{opacity:1}
+  @media print{ body{background:#fff} .page{max-width:none} nav.toc{break-inside:avoid} h2{break-after:avoid} }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="doc">
+  <h1>留影 MuseFrame · 运营后台使用指南</h1>
+  <p class="sub">
+    适用版本：生产镜像 <code>20260912T095922Z-g5e30737e</code> ·
+    后台地址 <code>https://museframe.lenscript.cn/admin.html</code><br>
+    本文内容逐条取自 <code>server-go/</code> 源码、<code>web/admin.html</code>、<code>server-go/README.md</code>、
+    平台交接文档《交接-服务器统一重构-20260912》与生产服务器只读核对。<br>
+    <b>本文不包含任何口令、令牌、密钥的值</b>，只写它们的存放路径与读取命令。
+  </p>
+</header>
+
+<nav class="toc">
+  <h2>目录</h2>
+  <ol>
+    <li><a href="#s1">登录</a>
+      <ol>
+        <li><a href="#s1-1">地址与入口</a></li>
+        <li><a href="#s1-2">凭据在哪里</a></li>
+        <li><a href="#s1-3">会话时长与登出</a></li>
+        <li><a href="#s1-4">安全说明</a></li>
+      </ol>
+    </li>
+    <li><a href="#s2">首页导航与每个视图</a>
+      <ol>
+        <li><a href="#s2-1">九个标签页</a></li>
+        <li><a href="#s2-2">每个视图一句说明</a></li>
+        <li><a href="#s2-3">时区与脱敏的统一口径</a></li>
+      </ol>
+    </li>
+    <li><a href="#s3">日常任务（逐步骤 + 预期结果）</a>
+      <ol>
+        <li><a href="#s3-1">优惠码 / 注册码：MuseFrame 没有这条路</a></li>
+        <li><a href="#s3-2">账号：查看 / 禁用 / 发额度 / 撤销 / 删号</a></li>
+        <li><a href="#s3-3">反馈与来信：处理与回复</a></li>
+        <li><a href="#s3-4">任务重试与购买重验</a></li>
+        <li><a href="#s3-5">风格编辑与紧急下架</a></li>
+        <li><a href="#s3-6">商品与价格编辑</a></li>
+        <li><a href="#s3-7">热配置：改与恢复（哪些只能改 app.env）</a></li>
+        <li><a href="#s3-8">测试邮件</a></li>
+        <li><a href="#s3-9">导出 CSV</a></li>
+        <li><a href="#s3-10">接口健康与运行状态怎么读</a></li>
+        <li><a href="#s3-11">AIGC 标识开关（本晚新增，尚未发版）</a></li>
+      </ol>
+    </li>
+    <li><a href="#s4">配置项字典</a>
+      <ol>
+        <li><a href="#s4-1">热键字典（按分组）</a></li>
+        <li><a href="#s4-2">只读 / 需重启项</a></li>
+        <li><a href="#s4-3">只能改 app.env + 重新 deploy 的项</a></li>
+      </ol>
+    </li>
+    <li><a href="#s5">故障排查</a>
+      <ol>
+        <li><a href="#s5-1">登录不上</a></li>
+        <li><a href="#s5-2">状态码含义（401 / 409 / 413 / 422 / 429）</a></li>
+        <li><a href="#s5-3">数据显示「—」或空的原因</a></li>
+      </ol>
+    </li>
+    <li><a href="#s6">发版与回滚</a></li>
+    <li><a href="#s7">数据与备份位置</a></li>
+  </ol>
+</nav>
+
+<!-- ===================== 1 登录 ===================== -->
+<h2 id="s1">1 · 登录<a class="self" href="#s1">#</a></h2>
+
+<h3 id="s1-1">1.1 地址与入口<a class="self" href="#s1-1">#</a></h3>
+<div class="scroll"><table>
+<thead><tr><th>项</th><th>值</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>后台地址</td><td><code>https://museframe.lenscript.cn/admin.html</code></td><td>公网经 Cloudflare → OpenResty 反代到容器</td></tr>
+<tr><td>页面来源</td><td>宿主机静态文件 <code>/srv/platform/apps/museframe/data/web/admin.html</code>（只读挂进容器）</td><td><b>后台页面不在镜像里</b>，换页面与换后端是两件事（见 <a href="#s6">第 6 节</a>）</td></tr>
+<tr><td>容器监听</td><td><code>127.0.0.1:18787</code>（容器 <code>museframe-api-go</code>）</td><td>不对公网直接开放</td></tr>
+<tr><td>管理接口前缀</td><td><code>/v1/admin/…</code>，共 <b>34 条</b></td><td>全部要求管理员令牌</td></tr>
+</tbody></table></div>
+
+<h3 id="s1-2">1.2 凭据在哪里<a class="self" href="#s1-2">#</a></h3>
+<p>后台只有<strong>一个</strong>凭据：<code>ADMIN_TOKEN</code>。它唯一的存放处是生产机上的 <code>app.env</code>（权限 600）。读取命令：</p>
+<pre><code>ssh prodsrv "sudo grep ^ADMIN_TOKEN= /srv/platform/apps/museframe/app.env"</code></pre>
+<div class="bad"><b>纪律</b>：令牌值不要贴进聊天窗口、工单、文档或截图。只确认「配了没有」用这条：
+<pre><code>ssh prodsrv "sudo grep -c ^ADMIN_TOKEN= /srv/platform/apps/museframe/app.env"   # 回 1 = 已配置</code></pre></div>
+<p>登录框里粘进令牌点「进入」即可。令牌作为请求头 <code>X-Admin-Token</code> 发送，服务端用<strong>恒定时间比对</strong>。</p>
+<div class="warn"><b>令牌不进 URL。</b> 页面上的 CSV 导出与图片预览都走 <code>fetch</code> + blob，不用 <code>&lt;a download&gt;</code> 或 <code>window.open</code>——浏览器发起的导航带不上请求头，那样的链接一律回 401。所以<b>不要把管理接口地址直接粘到浏览器地址栏</b>，那样永远是 401。</div>
+
+<h3 id="s1-3">1.3 会话时长与登出<a class="self" href="#s1-3">#</a></h3>
+<div class="scroll"><table>
+<thead><tr><th>项</th><th>值</th></tr></thead>
+<tbody>
+<tr><td>凭据存放</td><td>浏览器 <code>sessionStorage</code>（键 <code>mf.admin</code>），<b>按标签页隔离</b></td></tr>
+<tr><td>有效期</td><td>服务端<b>不发会话票</b>，所以「会话」就是这个标签页的寿命：<b>关掉标签页 / 关掉浏览器即失效</b></td></tr>
+<tr><td>历史遗留</td><td>页面启动时会主动清掉旧版写在 <code>localStorage</code> 里的持久副本（持久保存过的令牌是个风险面）</td></tr>
+<tr><td>登出</td><td>关掉标签页；或任何接口回 401 时页面会自动清掉令牌并弹回登录框，提示「令牌不正确或已过期」</td></tr>
+<tr><td>换令牌的副作用</td><td>改 <code>ADMIN_TOKEN</code> 并重新 deploy 之后，所有打开着的后台标签页下一次请求即 401</td></tr>
+</tbody></table></div>
+
+<h3 id="s1-4">1.4 安全说明<a class="self" href="#s1-4">#</a></h3>
+<ol>
+  <li><b>管理接口限频 120 次 / 分钟</b>（按 <code>/v1/admin/</code> 前缀整体计）。超了回 429。</li>
+  <li><b>后台没有任何密钥写入口。</b> <code>image_provider_api_key</code> 与 <code>smtp_pass</code> 在配置页只显示掩码，<b>写它们直接回 422</b>——这是对 Node 版「从后台设一次上游密钥，密钥就明文躺进数据库并随每日备份落盘」那个问题的修复，属有意的行为变更。</li>
+  <li><b>数据库浏览页只读</b>：查询台只接受单条 <code>SELECT</code> / <code>WITH</code>，密钥列已脱敏，部分表不可查。</li>
+  <li><b>CSV 导出一律脱敏</b>（邮箱打码、id 只给前 8 位），理由是导出文件会离开这台机器。</li>
+  <li><b>每一次写操作都落审计</b>（改配置 / 改商品 / 改风格 / 禁用启用用户 / 发额度 / 重试 / 重验 / 标已处理）。</li>
+</ol>
+
+<!-- ===================== 2 导航 ===================== -->
+<h2 id="s2">2 · 首页导航与每个视图<a class="self" href="#s2">#</a></h2>
+
+<h3 id="s2-1">2.1 九个标签页<a class="self" href="#s2-1">#</a></h3>
+<p>顶部是一条标签栏，URL 里的 <code>#hash</code> 就是当前标签（可直接收藏，例如 <code>admin.html#config</code>）。右上角「刷新」只重载当前标签。</p>
+<div class="scroll"><table>
+<thead><tr><th>锚点</th><th>标签</th><th>能写吗</th></tr></thead>
+<tbody>
+<tr><td><a href="#tab-overview">#tab-overview</a></td><td>概览</td><td>读 + 任务重试 / 购买重验 / 反馈标已处理</td></tr>
+<tr><td><a href="#tab-users">#tab-users</a></td><td>用户</td><td>读 + 手动发额度 + 禁用 / 启用</td></tr>
+<tr><td><a href="#tab-stats">#tab-stats</a></td><td>统计</td><td>只读</td></tr>
+<tr><td><a href="#tab-events">#tab-events</a></td><td>埋点</td><td>只读</td></tr>
+<tr><td><a href="#tab-assets">#tab-assets</a></td><td>资产</td><td>只读</td></tr>
+<tr><td><a href="#tab-health">#tab-health</a></td><td>健康</td><td>只读</td></tr>
+<tr><td><a href="#tab-ops">#tab-ops</a></td><td>运营</td><td>读 + 风格编辑 / 上下架 + 商品与价格编辑</td></tr>
+<tr><td><a href="#tab-db">#tab-db</a></td><td>数据库</td><td><b>只读</b></td></tr>
+<tr><td><a href="#tab-config">#tab-config</a></td><td>配置</td><td>读 + 热改 41 个键 + 发测试邮件</td></tr>
+</tbody></table></div>
+
+<h3 id="s2-2">2.2 每个视图一句说明<a class="self" href="#s2-2">#</a></h3>
+
+<h4 id="tab-overview">概览 <span class="mono">#overview</span></h4>
+<ul>
+  <li><b>顶部两条横幅</b>：① 生成链路——<b>现在到底能不能产出一张图</b>，判据是最近真实上游调用的结果，不是「配置齐不齐」；② 反白嫖闸——免费额度的 IP / 全站日配额有没有被顶到。</li>
+  <li><b>卡片</b>：累计用户、累计收入等盘子数。</li>
+  <li><b>生成任务</b>：可按状态（<code>queued</code> / <code>running</code> / <code>quality_check</code> / <code>succeeded</code> / <code>failed</code> / <code>cancelled</code>）、时间窗、用户 ID 前 8 位筛；带生成参数与上游返回摘要；失败 / 取消的行上有「重试」。</li>
+  <li><b>购买记录</b>：平台 / 交易号 / 金额 / 入账额度，可按状态（<b>只有 <code>pending</code> 与 <code>verified</code> 两个值</b>）与平台筛；<code>verified</code> 的行上有「重验」。</li>
+  <li><b>用户反馈</b>：含<b>用户写的正文</b>，可按好评 / 差评与处理状态筛，行上有「标已处理」。</li>
+</ul>
+
+<h4 id="tab-users">用户 <span class="mono">#users</span></h4>
+<ul>
+  <li><b>手动加额度</b>：按发件邮箱或完整用户 ID 充值，走正规账本（<code>source_type = manual</code>），备注可在数据库页的 <code>manual_grants</code> 表里查。</li>
+  <li><b>状态分布卡片</b>：各状态账号数、会话有效期、「禁用拦住了什么」。</li>
+  <li><b>用户列表</b>：可按邮箱 / 显示名 / ID 搜（搜索串按字符截到 120），每行可禁用 / 启用，可点开<b>单用户纵向详情</b>（额度账本 / 购买 / 项目 / 任务 / 资产 / 会话六块）。</li>
+</ul>
+
+<h4 id="tab-stats">统计 <span class="mono">#stats</span></h4>
+<p>按天趋势：每日生成（成功/失败）、每日新增用户、每日收入（按购买记录的 <code>amount_minor</code> 汇总，美分），以及<b>风格排行</b>（按累计生成次数）——用它决定下架谁、把谁挪到展架前面。</p>
+
+<h4 id="tab-events">埋点 <span class="mono">#events</span></h4>
+<p>App 的 <code>POST /v1/events</code> 上报。四块：按事件名、按 App 版本、按天、原始样本。窗口 7/30/90 天（上限 90）。
+<b>「按 App 版本」正常结果是一行「(未上报)」</b>——App 当前的 <code>track()</code> 不带版本字段，这一行就是这件事的唯一可见处（后端已兼容 <code>appVersion</code>/<code>app_version</code>/<code>version</code> 三种键，App 哪天开始报都会自动分开）。
+审计与发信记录也住在 <code>events</code> 表里，但<b>埋点视图把这两类行排掉了</b>，否则运营自己改一次配置都会在「用户行为」里多一行。</p>
+
+<h4 id="tab-assets">资产 <span class="mono">#assets</span></h4>
+<p>App 上传的源图与产出文件。可按类型（<code>source</code> / <code>candidate</code> / <code>thumbnail</code> / <code>export</code>）、状态（<code>pending</code> / <code>ready</code> / <code>quarantined</code> / <code>deleted</code>）、用户 ID 前 8 位筛；带字节数 / 宽高 / sha256；顶部是合计卡片。图片预览走短时图片令牌，<b>管理员令牌不进 URL</b>。</p>
+
+<h4 id="tab-health">健康 <span class="mono">#health</span></h4>
+<ul>
+  <li><b>接口健康</b>：窗口可选，上限 24 小时。详见 <a href="#s3-10">3.10</a>。</li>
+  <li><b>邮件发送记录</b>：验证码信与后台测试邮件的发送台账，地址打码。<b>刻意不记主题与正文</b>——验证码信的主题以明文验证码开头，记下来等于一条账号接管旁路。</li>
+  <li><b>验证码签发台账</b>：签发了哪些码（不回哈希）。</li>
+</ul>
+
+<h4 id="tab-ops">运营 <span class="mono">#ops</span></h4>
+<ul>
+  <li><b>风格管理</b>：用户在 App 首页看到的那张卡片（名称 / 副标题 / 主题 / 是否付费专属 / 位次 / 标签 / 状态）。行序就是用户看到的顺序。<b>「App 可见」列比「状态」更重要</b>。</li>
+  <li><b>商品与价格</b>：改价与上下架立刻反映到 <code>/v1/products</code>，不需要发版。</li>
+  <li><b>反馈原因码</b>：这是<b>观测</b>不是配置——原因码是 App 里写死的四个差评芯片，服务端不做枚举校验，App 也不读服务端字典。要增删原因码得发 App 版本。</li>
+  <li><b>操作审计</b>：后台每一次写操作一行。<b>审计住在 <code>events</code> 表里，会被保留期清理一起删</b>（天数见 <a href="#s4-1">4.1</a> 的 <code>event_retention_days</code>，下界刻意是 7 天）。</li>
+</ul>
+
+<h4 id="tab-db">数据库 <span class="mono">#db</span></h4>
+<p>只读翻库：左侧选表分页浏览，下面的查询台只接受单条 <code>SELECT</code> / <code>WITH</code>。密钥列已脱敏。
+<b>这一页是全后台唯一展示 UTC 的地方</b>（显示库里原始列值，ISO-8601 带 Z）；其余页面一律北京时间 UTC+8。这里改不了任何数据——要改去对应功能页，那样才有审计。</p>
+
+<h4 id="tab-config">配置 <span class="mono">#config</span></h4>
+<ul>
+  <li>顶部重复那两条横幅（生成链路 / 反白嫖闸）。</li>
+  <li><b>运行状态</b>：七张只读卡片，详见 <a href="#s3-10">3.10 B</a>。</li>
+  <li><b>系统配置</b>：41 个热键按 8 个分组渲染，每组顶上一句说明；每项标来源徽章（<span class="tag">db 覆盖</span> / <span class="tag">env</span> / <span class="tag">默认</span>）、是否<span class="tag env">需重启</span>、是否<span class="tag ro">只读</span>。</li>
+  <li><b>邮件测试</b>：发一封自检信，结果留在页面上。</li>
+</ul>
+
+<h3 id="s2-3">2.3 时区与脱敏的统一口径<a class="self" href="#s2-3">#</a></h3>
+<div class="scroll"><table>
+<thead><tr><th>口径</th><th>内容</th></tr></thead>
+<tbody>
+<tr><td>时区</td><td>后端一切时间戳是 UTC；<b>除「数据库」页外，所有页面统一换算成北京时间（UTC+8）展示</b>并标出来</td></tr>
+<tr><td>用户 ID</td><td>列表里只显示前 8 位。多数筛选框接受 8 位前缀；<b>前缀撞车时接口回 409 <code>AMBIGUOUS</code></b>，这时要填完整 id</td></tr>
+<tr><td>邮箱</td><td>列表页显示完整（只有持令牌的人打得开）；<b>CSV 导出一律打码</b>，脱敏点只有一处</td></tr>
+<tr><td>密钥</td><td>任何页面只给「已配置 / 未配置」或掩码</td></tr>
+</tbody></table></div>
+
+<!-- ===================== 3 日常任务 ===================== -->
+<h2 id="s3">3 · 日常任务（逐步骤 + 预期结果）<a class="self" href="#s3">#</a></h2>
+
+<h3 id="s3-1">3.1 优惠码 / 注册码：MuseFrame 没有这条路<a class="self" href="#s3-1">#</a></h3>
+<div class="bad"><b>MuseFrame 后端与后台<u>没有</u>注册码 / 优惠码 / 兑换码功能</b>，34 条管理路由里没有任何一条与码有关。不要在面板上找它，也不要答应用户「给你发个码」。</div>
+<p>等价的运营动作是<strong>手动发额度</strong>（见 <a href="#s3-2">3.2 C</a>）：它走正规额度账本，可填备注与有效期，并落审计。需要「码」这种离线可发货的形态时，那是掌镜 Zlens 的能力，不是 MuseFrame 的。</p>
+
+<h3 id="s3-2">3.2 账号：查看 / 禁用 / 发额度 / 撤销 / 删号<a class="self" href="#s3-2">#</a></h3>
+
+<h4>A. 查看一个用户的全部事实</h4>
+<ol>
+  <li>进 <a href="#tab-users">用户</a> → 搜索框填邮箱 / 显示名 / ID → 回车。</li>
+  <li>点这一行进「单用户纵向详情」。
+    <span class="exp"><b>预期结果</b>：一页里给出六块——额度账本、购买、项目（含软删行）、任务、资产、会话。</span></li>
+</ol>
+<p>用 8 位前缀查就够了；撞前缀时回 409 <code>AMBIGUOUS</code>，这时填完整 ID。</p>
+
+<h4>B. 禁用 / 启用一个账号</h4>
+<ol>
+  <li><a href="#tab-users">用户</a> 列表里点这一行的「禁用」。</li>
+  <li><b>必须填原因</b>（≤300 字）。
+    <span class="exp">没有原因的封禁在三个月后等于「不知道为什么这个人进不来」，而客服收到的投诉里只有一句「我登不上」。</span></li>
+  <li>提交。<span class="exp"><b>预期结果</b>：该账号的所有令牌立刻按「未登录」处理，<b>任何接口回 401</b>；<a href="#tab-ops">运营 · 操作审计</a> 多一行（含从什么状态改到什么状态 + 原因）。</span></li>
+  <li>撤销：点「启用」。
+    <span class="exp"><b>预期结果</b>：会话行没删过，<b>原令牌立刻恢复可用</b>；作品与额度台账一律没动——这是个可逆动作。</span></li>
+</ol>
+<div class="scroll"><table>
+<thead><tr><th>异常返回</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>422</code>「禁用账号必须填写原因」</td><td>原因留空了</td></tr>
+<tr><td><code>422</code>「status 只能是 active 或 suspended」</td><td>请求被改过，刷新页面重试</td></tr>
+<tr><td><code>404</code> Unknown user</td><td>id 不存在或已软删</td></tr>
+</tbody></table></div>
+
+<h4>C. 手动发额度（客服最常做的动作）</h4>
+<ol>
+  <li>进 <a href="#tab-users">用户</a> → 顶部「手动加额度」。</li>
+  <li>填<b>邮箱或完整用户 ID</b>（用户额度用完时 App 会展示客服邮箱，也就是配置里的 <code>support_email</code>，所以你通常手上有的是他的发件邮箱）。</li>
+  <li>填<b>张数</b>：<code>1..10000</code>。</li>
+  <li><b>有效期（天）</b>可空 = 不过期；填则 <code>1..3650</code>。</li>
+  <li>填<b>备注</b>（≤300 字，例如「微信转账 ¥xx / 邮件日期」）。</li>
+  <li>提交。<span class="exp"><b>预期结果</b>：页面回显发放结果与该用户的新可用余额；账本里多一笔 <code>source_type = manual</code>；数据库页 <code>manual_grants</code> 表能查到备注；审计多一行。</span></li>
+</ol>
+<div class="scroll"><table>
+<thead><tr><th>异常返回</th><th>含义 / 处置</th></tr></thead>
+<tbody>
+<tr><td><code>422</code> units must be an integer between 1 and 10000</td><td>张数越界</td></tr>
+<tr><td><code>422</code> expiresInDays must be … 1 and 3650</td><td>有效期越界；要「不过期」请<b>留空</b>而不是填 0</td></tr>
+<tr><td><code>422</code> Provide userId or email</td><td>两个都空</td></tr>
+<tr><td><code>409</code> <code>AMBIGUOUS</code></td><td>ID 前缀撞车，填完整 ID</td></tr>
+<tr><td><code>409</code> 幂等键不匹配</td><td>同一个幂等键上次发的是别的内容。换一个键或确认上次是否已成功</td></tr>
+</tbody></table></div>
+
+<h4>D. 撤销额度 / 删号</h4>
+<div class="warn">后台<b>没有</b>「撤销额度」与「删号」按钮。额度账本是只增的分录式台账（发放 / 预留 / 释放都是独立分录），所以「撤销」的正确做法是记清原因后<b>不再发放</b>，或由开发按分录补一笔——不要去数据库页手改（那里改不了，也不该改：直接改库没有审计）。账号注销需求请走开发，当前没有自助入口。</div>
+
+<h3 id="s3-3">3.3 反馈与来信：处理与回复<a class="self" href="#s3-3">#</a></h3>
+<div class="bad"><b>后台不代发邮件。</b> SMTP 那条路只用于发登录验证码与后台测试信。回复用户要用你自己的邮箱；后台这里做的是<b>标记与登记</b>。</div>
+<ol>
+  <li>进 <a href="#tab-overview">概览</a> → 「用户反馈」，筛「处理状态 = 未处理」。旁边有未处理条数。</li>
+  <li>读正文（用户真的写了什么）与评价（👍/👎）。差评带原因码时一并看。</li>
+  <li>需要联系用户：去 <a href="#tab-users">用户</a> 按 id 查出邮箱，用自己的邮箱回信。</li>
+  <li>回到这一行点「标已处理」，填备注（你做了什么 / 回了什么）。
+    <span class="exp"><b>预期结果</b>：该行 <code>handled_at</code> / <code>handled_note</code> 有值，从「未处理」筛选里消失；审计多一行。</span></li>
+  <li>标错了就再点一次取消。
+    <span class="exp"><b>注意</b>：撤销标记会把<b>备注一起清掉</b>——留着上一次的备注会让下一个人看到「未处理」却带着一条「已退额度」的备注，而这两件事里只有一件是真的。</span></li>
+</ol>
+<div class="scroll"><table>
+<thead><tr><th>异常返回</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>422</code>「handled 必填」/「handled 必须是布尔值」</td><td>请求被改过，刷新重试</td></tr>
+<tr><td><code>404</code> Unknown feedback row</td><td>这条反馈已被保留期清理或 id 不对</td></tr>
+</tbody></table></div>
+<div class="note"><b>崩溃 / 日志上报这一页不存在</b>，因为 App 里没有任何崩溃上报调用，后端也没有对应路由。做一页空表会让人以为「没崩过」。同理 App 不上报版本号，所以埋点的版本维度只有「(未上报)」。</div>
+
+<h3 id="s3-4">3.4 任务重试与购买重验<a class="self" href="#s3-4">#</a></h3>
+
+<h4>A. 重试一个失败的生成任务</h4>
+<ol>
+  <li>进 <a href="#tab-overview">概览</a> → 「生成任务」，状态筛 <code>failed</code>（或 <code>cancelled</code>）。</li>
+  <li>先看这一行的错误信息与上游返回摘要——<b>如果是上游挂了，重试只会再花一次钱</b>。先看 <a href="#tab-config">配置 · 运行状态</a> 的「上游图像供应」卡片。</li>
+  <li>点「重试」。
+    <span class="exp"><b>预期结果</b>：接口回新任务 id、父任务 id、本次预留张数与该用户剩余可用额度；列表里多<b>一条新任务</b>（状态 <code>queued</code>），旧那条<b>原样保留</b>为 <code>failed</code>；审计多一行。</span></li>
+</ol>
+<div class="warn"><b>重试是「新建一条任务」而不是「把原任务改回 queued」</b>，这是刻意的：失败时额度走的是补偿分录（钱已经退给用户了），原地重排会让两个守卫都放行而一分不扣，净结果是一张<b>免费的图</b>，且额度对账表上看不出任何异常。<br>
+用户不会被重复扣钱：失败退过一次、重试扣回来，净额仍是「成功一张扣一份」。新任务的 <code>parent_job_id</code> 指向被重试那条，列表上的「重试次数」就是数它。</div>
+<div class="scroll"><table>
+<thead><tr><th>异常返回</th><th>含义 / 处置</th></tr></thead>
+<tbody>
+<tr><td><code>409</code>「只有 failed / cancelled 的任务能重试（当前：…）」</td><td>这条还在跑。重试在跑的任务会变成两个任务抢同一个项目的结果，而运营看不出哪个赢了</td></tr>
+<tr><td><code>409</code> <code>INSUFFICIENT_ENTITLEMENT</code></td><td>这个用户额度不够。<b>先去 <a href="#s3-2">3.2 C</a> 发额度再重试</b>——悄悄跳过扣减就等于回到那张免费图</td></tr>
+<tr><td><code>404</code> Unknown job</td><td>id 不对</td></tr>
+</tbody></table></div>
+
+<h4>B. 重验一笔购买（用户说「我付了钱但张数没到」）</h4>
+<ol>
+  <li>进 <a href="#tab-overview">概览</a> → 「购买记录」，按平台或交易号找到那一笔。</li>
+  <li>确认它的状态是 <code>verified</code>。</li>
+  <li>点「重验」。
+    <span class="exp"><b>预期结果</b>：缺失的额度被补发（幂等，重复点不会多发）；用户详情里的额度账本多一笔；审计多一行。如果额度本来就发过了，返回会说明没有需要补发的东西。</span></li>
+</ol>
+<div class="warn"><b>「重验」不会重新向商店要收据。</b> <code>purchaseToken</code> 只存在于 App 那一次请求里，从不落库，所以「重新找 Google/Apple 验一次」在服务端做不到。它做的是对着幂等键 <code>grant:purchase:&lt;purchaseId&gt;</code> 先查再发。<br>
+<code>purchases.status</code> 的词汇表<b>只有 <code>pending</code> 与 <code>verified</code></b>，没有 <code>active</code>。状态是 <code>pending</code> 的那笔钱没验过，重验对它不生效。</div>
+
+<h3 id="s3-5">3.5 风格编辑与紧急下架<a class="self" href="#s3-5">#</a></h3>
+<h4>A. 改一个风格的可运营字段</h4>
+<ol>
+  <li>进 <a href="#tab-ops">运营</a> → 「风格管理」。行序就是用户在 App 首页看到的顺序（排序键 = 展览 <code>editorial_rank</code> + 位次）。</li>
+  <li>可改的字段只有这几个：
+    <div class="scroll"><table>
+      <thead><tr><th>字段</th><th>限制</th><th>说明</th></tr></thead>
+      <tbody>
+      <tr><td>名称 <code>name</code></td><td>非空，≤80 字</td><td><b>只有一列（<code>public_name</code>），没有多语言列</b>——要给中文用户看中文就直接改成中文</td></tr>
+      <tr><td>副标题 <code>shortCaption</code></td><td>≤140 字，<b>可为空</b></td><td>目录卡片上的一行副标题，留空是合法的排版选择</td></tr>
+      <tr><td>主题 <code>theme</code></td><td>非空，≤40 字</td><td>—</td></tr>
+      <tr><td>付费专属 <code>premium</code></td><td>布尔</td><td>—</td></tr>
+      <tr><td>位次 <code>position</code></td><td>0–9999</td><td>决定在展架里的排位</td></tr>
+      <tr><td>标签 <code>tags</code></td><td>字符串数组，每项 ≤40 字，有个数上限</td><td>空串项被忽略、重复项去重</td></tr>
+      <tr><td>状态 <code>status</code></td><td><code>published</code> / <code>disabled</code></td><td>与下面的上下架按钮写同一列</td></tr>
+      </tbody></table></div>
+  </li>
+  <li>保存。<span class="exp"><b>预期结果</b>：接口回更新后的整行，页面就地刷新；审计里记下<b>改了哪几个字段</b>。</span></li>
+</ol>
+<div class="warn"><b>「App 可见」那一列比「状态」更重要</b>：状态是 <code>published</code> 但没有已发布版本、或者没挂在任何展览上，App 里一样看不到它。改完名字发现用户还看不见，先看这一列。<br>
+<b>封面不是数据库列</b>，它是文件 <code>web/covers/&lt;internal_key&gt;.jpg</code>，所以后台只能预览不能上传——换封面要换宿主机上的文件（见 <a href="#s6">第 6 节</a>）。</div>
+
+<h4>B. 紧急下架 / 重新上架</h4>
+<ol>
+  <li>同一页，点这一行的「下架」（或「上架」）。这是一个<b>单独的单动作入口</b>，刻意和上面那张七个输入框的表单分开——着急的时候不该顺手把别的字段一起带上。</li>
+  <li><span class="exp"><b>预期结果</b>：目录查询只取 <code>status='published'</code>，所以 <code>disabled</code> <b>立刻在所有地方隐藏该风格</b>（<code>/v1/discover</code>、<code>/v1/styles</code>）；审计多一行。</span></li>
+</ol>
+
+<h3 id="s3-6">3.6 商品与价格编辑<a class="self" href="#s3-6">#</a></h3>
+<ol>
+  <li>进 <a href="#tab-ops">运营</a> → 「商品与价格」。</li>
+  <li>可改字段：
+    <div class="scroll"><table>
+      <thead><tr><th>字段</th><th>范围</th><th>说明</th></tr></thead>
+      <tbody>
+      <tr><td>显示名 <code>displayName</code></td><td>非空，≤80 字</td><td>—</td></tr>
+      <tr><td>发放张数 <code>grantedUnits</code></td><td>0–100000</td><td>上限是防手滑多打几个 0 等于白送</td></tr>
+      <tr><td>美元价 <code>priceMinor</code></td><td>0–10000000（<b>minor 单位</b>）</td><td><code>599</code> = $5.99。上限 1000 万 minor</td></tr>
+      <tr><td>人民币价 <code>priceCnyMinor</code></td><td>同上，<b>或 null</b></td><td><b>🔴 留空 / 清成 null = 这个商品对所有中文用户整条消失</b>（App 过滤掉没有人民币价的行），不是「退回显示美元价」</td></tr>
+      <tr><td>Google SKU <code>googleProductId</code></td><td>≤120 字，可清空</td><td>Play 后台配的商品 id，App 拿它发起内购；<b>填错的表现是「点了购买没反应」</b></td></tr>
+      <tr><td>Apple SKU <code>appleProductId</code></td><td>同上</td><td>同上</td></tr>
+      <tr><td>上下架 <code>active</code></td><td>布尔</td><td>—</td></tr>
+      </tbody></table></div>
+  </li>
+  <li>保存。<span class="exp"><b>预期结果</b>：改动<b>立刻</b>反映到 <code>/v1/products</code>，不需要发版；审计里<b>同时记下旧值</b>（「谁把 pack_100 从 29.99 改成 2.99」是复盘的第一个问题）。</span></li>
+</ol>
+<div class="note">价格单位一律是 minor（美分 / 人民币分），<code>currency</code> 列只描述美元价——人民币价的币种是隐含的 CNY，没有对应列，所以<b>任何「按 currency 换算」的算法都会把人民币价当美元算</b>。每次生成恒定扣 1 张，没有按风格定价。</div>
+
+<h3 id="s3-7">3.7 热配置：改与恢复<a class="self" href="#s3-7">#</a></h3>
+<h4>A. 三级优先级</h4>
+<p><b>数据库覆盖 &gt; 环境变量 &gt; 代码默认值</b>（密钥项除外，见下）。配置页每一项都带来源徽章，所以「这个值现在从哪来」是看得见的。</p>
+
+<h4>B. 改一项</h4>
+<ol>
+  <li>进 <a href="#tab-config">配置</a> → 「系统配置」→ 找到分组里那一项，读它的说明与合法区间。</li>
+  <li>改值 → 保存。
+    <span class="exp"><b>预期结果</b>：来源徽章变成 <span class="tag">db 覆盖</span>；页面重新拉一遍运行状态；审计里记下「从什么改成什么」。</span></li>
+  <li>生效时机：绝大多数键<b>下一次使用即生效</b>（并发数下一次 pump、模型名下一个任务、验证码有效期下一封信、保留期下一次清理任务、会话有效期只影响此后签发/续期的会话）。带 <span class="tag env">⚠需重启</span> 的项改了不会立刻生效。</li>
+</ol>
+
+<h4>C. 恢复成 env / 默认值</h4>
+<ol>
+  <li>把那一项<b>清空</b>（页面提交 <code>value: null</code>）后保存。</li>
+  <li><span class="exp"><b>预期结果</b>：数据库覆盖被清掉，来源回到 <span class="tag">env</span> 或 <span class="tag">默认</span>，页面显示回退后的值；审计里这一条带 <code>cleared</code> 标记。</span></li>
+</ol>
+<div class="warn"><b>越界的值会被拒绝保存（422）而不是悄悄夹一下</b>，错误信息里写着合法区间。读的一侧还会再夹一次——所以即使库里躺着 Node 版写下的越界行，服务也不会被打死，但那一项会在页面上挂一个 warning 提示「这个值被夹过」。看到 warning 就去把它改成区间内的值。</div>
+
+<h4>D. 哪些只能改 app.env + 重新 deploy</h4>
+<ol>
+  <li>改文件（权限保持 600）：<pre><code>ssh prodsrv
+sudo nano /srv/platform/apps/museframe/app.env</code></pre></li>
+  <li>重新部署当前版本让容器重新读 env：<pre><code>sudo /srv/platform/scripts/platformctl deploy museframe --tag &lt;当前生产 tag&gt;</code></pre></li>
+  <li>核对：<pre><code>sudo /srv/platform/scripts/platformctl status museframe</code></pre>
+    <span class="exp"><b>预期结果</b>：容器 healthy；配置页「后端版本 / 启动时间」卡片显示新的启动时间。</span></li>
+</ol>
+<div class="bad"><b>改 <code>app.env</code> 不重启不会生效</b>；而 <code>project.env</code> / <code>.env</code> <b>只参与 compose 变量插值，不注入容器</b>——容器环境严格由 compose 的 <code>environment:</code> 与经 <code>env_file</code> 载入的 <code>app.env</code> 决定。换版本、换密钥是两处要改的东西。</div>
+
+<h3 id="s3-8">3.8 测试邮件<a class="self" href="#s3-8">#</a></h3>
+<ol>
+  <li>进 <a href="#tab-config">配置</a> → 底部「邮件测试」→ 填一个你能收到的邮箱 → 「发送测试邮件」。</li>
+  <li><span class="exp"><b>预期结果</b>：结果<b>留在页面上</b>（不是 3 秒就消失的提示——「发了没有 / 为什么失败」是要拿去对照 SMTP 服务商后台的东西）；<a href="#tab-health">健康 · 邮件发送记录</a> 多一行（<code>kind = 后台测试</code>）；「运行状态」的邮件卡片更新「最近一次发送」。</span></li>
+</ol>
+<div class="scroll"><table>
+<thead><tr><th>返回</th><th>含义 / 处置</th></tr></thead>
+<tbody>
+<tr><td><code>422</code>「请输入有效的收件邮箱」</td><td>地址格式不对</td></tr>
+<tr><td><code>400</code> <code>SMTP_NOT_CONFIGURED</code></td><td>SMTP 没配齐。运行状态卡片会列出缺哪个（<code>smtp_host</code> / <code>smtp_user</code> / <code>SMTP_PASS</code>）；<b><code>SMTP_PASS</code> 只能改 <code>app.env</code></b></td></tr>
+<tr><td><code>502</code> <code>EMAIL_SEND_FAILED</code></td><td>上游 SMTP 拒了。错误原因会显示出来，拿它去对照服务商后台</td></tr>
+</tbody></table></div>
+<div class="note">测试信发成功但用户收不到验证码时，还要确认 <code>email_login_enabled</code> 是开的——SMTP 配齐 + 这个开关同时成立，App 那一侧才显示邮箱登录。</div>
+
+<h3 id="s3-9">3.9 导出 CSV<a class="self" href="#s3-9">#</a></h3>
+<p>六类数据各自的表头上都有「导出 CSV」按钮：<code>users</code> · <code>jobs</code> · <code>purchases</code> · <code>feedback</code> · <code>events</code> · <code>assets</code>。</p>
+<ol>
+  <li>先把这张表的筛选条件调好（状态 / 平台 / 时间窗 / 用户 ID 前缀 / 事件名）。</li>
+  <li>点「导出 CSV」。<span class="exp"><b>预期结果</b>：浏览器下载文件；响应头 <code>X-Row-Count</code> 给出数据行数，便于不解析 CSV 就核对。</span></li>
+</ol>
+<div class="scroll"><table>
+<thead><tr><th>口径</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>脱敏</td><td><b>一律脱敏</b>：邮箱打码、id 只给前 8 位。理由是导出文件会离开这台机器（下载目录、微信、某个表格）——页面上显示完整邮箱还能靠「只有持令牌的人打得开」兜住，躺在下载目录里的 CSV 兜不住</td></tr>
+<tr><td>编码</td><td>带 UTF-8 BOM，否则中文列在 Excel 里是乱码</td></tr>
+<tr><td>自由文本</td><td>换行被压成空格（不依赖下游正确处理多行 CSV 字段）</td></tr>
+<tr><td>为什么不能直接粘地址栏</td><td>管理员令牌走请求头，浏览器发起的导航带不上头 → 一律 401。导出必须从页面按钮走</td></tr>
+</tbody></table></div>
+
+<h3 id="s3-10">3.10 接口健康与运行状态怎么读<a class="self" href="#s3-10">#</a></h3>
+
+<h4>A. 接口健康（<a href="#tab-health">健康</a> 页顶部）</h4>
+<div class="scroll"><table>
+<thead><tr><th>项</th><th>怎么读</th></tr></thead>
+<tbody>
+<tr><td>窗口</td><td>可选，<b>上限 24 小时</b></td></tr>
+<tr><td>统计范围</td><td><b>进程内的</b>：重启清零、多副本各算各的，<b>不是全站统计</b></td></tr>
+<tr><td>P95</td><td>从固定延迟直方图算（5/10/25/50/100/250/500/1000/2500/5000/10000ms），<b>精度到桶边界</b>；标 <code>&gt;</code> 的表示落在最后一个开口桶里</td></tr>
+<tr><td>限流的 429</td><td><b>在路由循环之前返回，不进计数器</b>——所以被限流打回的请求在这张表里看不到</td></tr>
+<tr><td>未匹配路由的请求</td><td>扫描器、静态文件<b>一律不计</b>。这是刻意的：按 <code>r.URL.Path</code> 分组会让表的行数变成请求方可控的</td></tr>
+</tbody></table></div>
+
+<h4>B. 运行状态七张卡片（<a href="#tab-config">配置</a> 页上半截）</h4>
+<div class="scroll"><table>
+<thead><tr><th>卡片</th><th>它回答的问题</th><th>不正常时</th></tr></thead>
+<tbody>
+<tr><td><b>后端版本 / 启动时间</b></td><td>跑的是哪个构建、起来多久了，「改完配置到底重启没重启」</td><td>启动时间还是发版前的 → deploy 没真换容器</td></tr>
+<tr><td><b>数据库 / 连接池</b></td><td>库通不通、占了几条</td><td><b>「某个列表一直转圈」最常见的真因是池子被占满</b>，不是慢查询。统一 PG 实例 <code>max_connections=50</code>，本项目 app 角色只有 5 个槽、池子硬顶 4。卡片占满时变黄</td></tr>
+<tr><td><b>邮件通道 / 最近一次发送</b></td><td>验证码发得出去吗、上一封成功还是失败</td><td>列出缺哪个配置项；最近一次失败时带原因。<b>验证码发不出去此前只在一行日志里留痕，面板上一片祥和</b></td></tr>
+<tr><td><b>上游图像供应</b></td><td>现在能不能产出一张图</td><td>判据与 <code>/v1/health</code> 同源（最近 20 次真实调用 + 轻量探针）。熔断中会显示出来</td></tr>
+<tr><td><b>生成队列</b></td><td>堵没堵、并发多少</td><td>排队长期不降 → 看上游卡片与 <code>worker_concurrency</code></td></tr>
+<tr><td><b>最近 24 小时</b></td><td>今天的盘子</td><td>—</td></tr>
+<tr><td><b>求助入口（展示给用户）</b></td><td>额度用完时用户看到的客服邮箱 / QQ 群是什么</td><td>与 <code>support_email</code> / <code>support_qq_group</code> 同源</td></tr>
+</tbody></table></div>
+<p><a href="#tab-overview">概览</a> 与 <a href="#tab-config">配置</a> 两页顶部还各有两条横幅：<b>生成链路</b>（能不能产图，判据是真实上游调用结果而不是「配置齐不齐」）与<b>反白嫖闸</b>（免费额度的 IP / 全站日配额有没有被顶到）。</p>
+<p>支付侧另有几张卡片：Google Play 收据校验是否接通、Apple 收据校验（当前<b>未接通</b>）、加购额度有效期、<b>演示购买开关</b>（生产必须关，开着时卡片变红）、每次生成扣除张数（恒定 1 张）。</p>
+
+<h3 id="s3-11">3.11 AIGC 标识开关 <span class="tag warn" style="border-color:var(--warn);color:var(--warn)">本晚新增 · 尚未发版</span><a class="self" href="#s3-11">#</a></h3>
+<div class="warn"><b>状态（务必先读）</b>：AI 生成内容标识在 <b>2026-09-12 当晚实现并进了 <code>server-go/</code> 仓库</b>，但<b>当前生产镜像 <code>20260912T095922Z-g5e30737e</code> 还不包含它</b>——它随<b>下一次 <code>platformctl deploy museframe</code></b> 才会出现在后台上。<br>
+在那之前：配置页没有「AI 生成内容标识」这一组，资产页没有「AI 标识」列，产出的图上也没有水印。<b>没看到这一组不是故障。</b><br>
+另外它<b>需要一次库迁移</b>（<code>migrations/004_aigc_label.sql</code>，给 <code>assets</code> 加 <code>aigc_label</code> 列，幂等、可重复执行），迁移没跑的话资产页那一列取不到值。</div>
+
+<h4>A. 它做了什么（发版后）</h4>
+<div class="scroll"><table>
+<thead><tr><th>标识</th><th>在哪</th><th>有没有开关</th></tr></thead>
+<tbody>
+<tr><td><b>显式标识</b></td><td>画在成品像素上的角落文字（默认「AI 生成 · 留影」）</td><td><b>有</b>：<code>aigc_label_enabled</code></td></tr>
+<tr><td><b>隐式标识</b></td><td>写进文件元数据（EXIF / XMP 的 GB 45438-2025 结构）</td><td><b>没有开关，每一张新成品都写</b></td></tr>
+</tbody></table></div>
+<div class="bad"><b>关掉 <code>aigc_label_enabled</code> 是有法律后果的动作</b>：《人工智能生成合成内容标识办法》（2025-09-01 施行）要求生成服务在产出上加标识。关掉之后新产出的图上不会有任何<b>可见</b>标识（隐式元数据仍然写）。不要为了「图好看一点」去动它。</div>
+
+<h4>B. 改标识样式（发版后）</h4>
+<ol>
+  <li>进 <a href="#tab-config">配置</a> → 「AI 生成内容标识（合规）」分组。</li>
+  <li>改文案 / 位置 / 不透明度 / 字号 → 保存。
+    <span class="exp"><b>预期结果</b>：改完对<b>下一个任务</b>生效，不需要发版也不需要重启；审计多一行。</span></li>
+  <li><b>不回溯历史成品</b>：本版之前产出的图与全部源图一律保持「未标识」。回溯要重编码已经交付给用户的图，是一次不可逆的画质损失。</li>
+</ol>
+<div class="warn"><b>水印文案有一道会当场拒绝的闸</b>：内嵌字体是 ASCII + GB2312 子集，含子集外字符（生僻字 / 韩文 / emoji）的文案<b>保存时就被拒绝并列出是哪几个字</b>——否则线上水印里那个字会是一片空白，而后台显示「已保存」。文案最多 40 字（超了水印会横穿整张画面）。</div>
+
+<h4>C. 查「哪些成品标了什么」</h4>
+<p>发版后 <a href="#tab-assets">资产</a> 页多一列「AI 标识」，逐行可查，取值三档：</p>
+<div class="scroll"><table>
+<thead><tr><th>值</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td>空 / 未标识</td><td><b>历史成品</b>（本版之前产出的）与<b>全部源图</b>都在这一档</td></tr>
+<tr><td><code>meta</code>（仅元数据）</td><td>运营把 <code>aigc_label_enabled</code> 关掉了，只剩隐式标识</td></tr>
+<tr><td><code>visible+meta</code></td><td>显式水印 + 隐式元数据，两样都有（<b>默认路径</b>）</td></tr>
+</tbody></table></div>
+
+<!-- ===================== 4 配置字典 ===================== -->
+<h2 id="s4">4 · 配置项字典<a class="self" href="#s4">#</a></h2>
+
+<h3 id="s4-1">4.1 41 个热键 <span class="tag hot">后台可改</span><a class="self" href="#s4-1">#</a></h3>
+<p>来源优先级 <b>db &gt; env &gt; 默认</b>；清空 = 清掉 db 覆盖、回退 env / 默认。区间与白名单<b>写死在代码里</b>（它们是安全 / 可用性边界，不是口味问题），越界回 422。未特别注明的「改后何时生效」都是<b>下一次使用即生效，不需要重启</b>。</p>
+
+<h4>生成与上游 <span class="mono">generation</span></h4>
+<div class="scroll"><table>
+<thead><tr><th>键</th><th>含义</th><th>范围</th><th>默认</th><th>env 来源</th><th>改后何时生效</th></tr></thead>
+<tbody>
+<tr><td><code>image_provider_base_url</code></td><td>图像模型接口地址</td><td>自由文本</td><td>空</td><td><code>IMAGE_PROVIDER_BASE_URL</code></td><td>下一个任务</td></tr>
+<tr><td><code>image_provider_api_key</code> <span class="tag danger">密钥</span></td><td>图像模型 API 密钥</td><td>—</td><td>空</td><td><code>IMAGE_PROVIDER_API_KEY</code></td><td><b>后台改不了（写入回 422）</b>，只读 env；只能改 <code>app.env</code> 后重新 deploy</td></tr>
+<tr><td><code>image_provider_model</code></td><td>标准档模型名</td><td>自由文本</td><td><code>gpt-image-2</code></td><td><code>IMAGE_PROVIDER_MODEL</code></td><td>下一个任务</td></tr>
+<tr><td><code>prompt_compiler_model</code></td><td>提示词编译模型（设计型风格才调它，<b>每次失败也已计费</b>）</td><td>自由文本</td><td><code>gpt-5.4-mini</code></td><td><code>PROMPT_COMPILER_MODEL</code></td><td>下一个任务</td></tr>
+<tr><td><code>image_quality_standard</code></td><td>标准档输出质量。<b>App 固定只请求标准档，所以这一项决定所有用户拿到的画质</b></td><td><code>low</code>/<code>medium</code>/<code>high</code>/<code>auto</code></td><td><code>medium</code></td><td><code>IMAGE_QUALITY_STANDARD</code></td><td>下一个任务</td></tr>
+<tr><td><code>image_quality_high</code></td><td>高清档输出质量。⚠ App 把 <code>qualityTier</code> 写死成 standard，<b>这一项暂时没有任何请求会命中</b></td><td>同上</td><td><code>high</code></td><td><code>IMAGE_QUALITY_HIGH</code></td><td>下一个任务</td></tr>
+<tr><td><code>image_provider_model_high</code></td><td>高清档模型（留空 = 同标准档）。⚠ 同上，当前不命中</td><td>自由文本</td><td>空</td><td><code>IMAGE_PROVIDER_MODEL_HIGH</code></td><td>下一个任务</td></tr>
+<tr><td><code>image_provider_timeout_ms</code></td><td>上游请求超时（毫秒）</td><td>1000–900000</td><td>420000</td><td><code>IMAGE_PROVIDER_TIMEOUT_MS</code></td><td>下一个任务</td></tr>
+<tr><td><code>image_size_square</code></td><td>方图发给上游的 size（<b>直接决定每张图单价与分辨率</b>）</td><td><code>1024x1024</code>/<code>1536x1024</code>/<code>1024x1536</code>/<code>auto</code></td><td><code>1024x1024</code></td><td><code>IMAGE_SIZE_SQUARE</code></td><td>下一个任务</td></tr>
+<tr><td><code>image_size_landscape</code></td><td>横图 size</td><td>同上</td><td><code>1536x1024</code></td><td><code>IMAGE_SIZE_LANDSCAPE</code></td><td>下一个任务</td></tr>
+<tr><td><code>image_size_portrait</code></td><td>竖图 size。<b>App 默认比例是 4:5，所以这一项命中最多</b></td><td>同上</td><td><code>1024x1536</code></td><td><code>IMAGE_SIZE_PORTRAIT</code></td><td>下一个任务</td></tr>
+<tr><td><code>max_job_attempts</code></td><td>单任务最多尝试几次（含首次）。<b>每一次都是一笔真实上游调用</b>，上游计费炸了就压到 1</td><td>1–10</td><td>3</td><td><code>MAX_JOB_ATTEMPTS</code></td><td>下一个任务</td></tr>
+<tr><td><code>provider_breaker_streak</code></td><td>连续多少次「上游供给类失败」后熔断（熔断期内快速失败，不打上游、不付编译钱）</td><td>1–20</td><td>3</td><td><code>PROVIDER_BREAKER_STREAK</code></td><td>立刻</td></tr>
+<tr><td><code>provider_breaker_cooldown_seconds</code></td><td>熔断冷却秒数。冷却一过自动放一个任务探路（半开），<b>上游恢复不需要人工动作</b></td><td>5–3600</td><td>60</td><td><code>PROVIDER_BREAKER_COOLDOWN_SECONDS</code></td><td>立刻</td></tr>
+<tr><td><code>local_engine_fallback</code></td><td>远程生成失败时回落本地像素引擎（默认关：回落产出的不是模型结果）</td><td>布尔</td><td><code>false</code></td><td><code>LOCAL_ENGINE_FALLBACK</code></td><td>下一个任务</td></tr>
+<tr><td><code>worker_concurrency</code></td><td>生成任务并发数</td><td>1–8</td><td>3</td><td><code>WORKER_CONCURRENCY</code></td><td><b>下一次 pump 即生效</b>。存成 0 会静默冻结队列，所以下界是 1</td></tr>
+</tbody></table></div>
+
+<h4>额度与发放 <span class="mono">credits</span></h4>
+<div class="scroll"><table>
+<thead><tr><th>键</th><th>含义</th><th>范围</th><th>默认</th><th>env 来源</th><th>生效</th></tr></thead>
+<tbody>
+<tr><td><code>free_units</code></td><td>注册用户免费生成张数（<b>App 的免费额度文案全部读这一项</b>）</td><td>0–1000</td><td>3</td><td><code>FREE_UNITS</code></td><td>下一次发放</td></tr>
+<tr><td><code>free_grants_per_ip_day</code></td><td>每 IP 每 24 小时最多发放几次免费额度（0 = 停发）</td><td>0–10000</td><td>3</td><td><code>FREE_GRANTS_PER_IP_DAY</code></td><td>立刻</td></tr>
+<tr><td><code>free_grants_per_day</code></td><td>全站每 24 小时免费额度发放上限（0 = 停发）</td><td>0–1000000</td><td>50</td><td><code>FREE_GRANTS_PER_DAY</code></td><td>立刻</td></tr>
+<tr><td><code>free_requires_auth</code></td><td>免费额度需登录后发放。当前 App 不读这个开关，<b>发放闸在服务端</b></td><td>布尔</td><td><code>true</code></td><td><code>FREE_REQUIRES_AUTH</code></td><td>立刻</td></tr>
+<tr><td><code>allow_guest</code></td><td>兼容旧客户端的游客令牌（默认关；不能访问作品 / 图片 / 额度 / 生成）。当前 App 不读，服务端照样按它放行/拒绝</td><td>布尔</td><td><code>false</code></td><td><code>ALLOW_GUEST</code></td><td>立刻</td></tr>
+<tr><td><code>pack_credit_expiry_days</code></td><td>加购包额度有效期天数，<b>0 = 永不过期</b></td><td>0–3650</td><td>90（<b>生产现已设 0 以对齐 App「永不过期」文案</b>）</td><td><code>PACK_CREDIT_EXPIRY_DAYS</code></td><td>此后<b>新发放</b>的额度；已发的不变</td></tr>
+<tr><td><code>free_credit_expiry_days</code></td><td>免费额度有效期天数，0 = 永不过期（当前行为）</td><td>0–3650</td><td>0</td><td><code>FREE_CREDIT_EXPIRY_DAYS</code></td><td>同上</td></tr>
+</tbody></table></div>
+
+<h4>登录与支付 <span class="mono">auth</span></h4>
+<div class="scroll"><table>
+<thead><tr><th>键</th><th>含义</th><th>范围</th><th>默认</th><th>env 来源</th><th>生效</th></tr></thead>
+<tbody>
+<tr><td><code>email_login_enabled</code></td><td>开启邮箱验证码登录（<b>同时要求 SMTP 已配置</b>，否则 App 仍显示「未启用」）</td><td>布尔</td><td><code>false</code></td><td><code>EMAIL_LOGIN_ENABLED</code></td><td>立刻</td></tr>
+<tr><td><code>google_client_ids</code></td><td>Google 登录 OAuth Client IDs（逗号分隔）。<b>非空 = App 显示「使用 Google 登录」</b></td><td>自由文本</td><td>空</td><td><code>GOOGLE_CLIENT_IDS</code></td><td>立刻</td></tr>
+<tr><td><code>apple_bundle_ids</code></td><td>Apple 登录 Bundle IDs（逗号分隔）。非空 = iOS 版显示 Apple 登录</td><td>自由文本</td><td>空</td><td><code>APPLE_BUNDLE_IDS</code></td><td>立刻</td></tr>
+<tr><td><code>google_package_name</code></td><td>Google Play 包名（收据校验用）</td><td>自由文本</td><td><code>com.museframe.app</code></td><td><code>GOOGLE_PACKAGE_NAME</code></td><td>下一次校验</td></tr>
+</tbody></table></div>
+
+<h4>邮件通道与验证码 <span class="mono">email</span></h4>
+<div class="scroll"><table>
+<thead><tr><th>键</th><th>含义</th><th>范围</th><th>默认</th><th>env 来源</th><th>生效</th></tr></thead>
+<tbody>
+<tr><td><code>smtp_host</code></td><td>SMTP 服务器地址</td><td>自由文本</td><td>空</td><td><code>SMTP_HOST</code></td><td>下一封信</td></tr>
+<tr><td><code>smtp_port</code></td><td>SMTP 端口</td><td>1–65535</td><td>587</td><td><code>SMTP_PORT</code></td><td>下一封信</td></tr>
+<tr><td><code>smtp_user</code></td><td>SMTP 登录用户名</td><td>自由文本</td><td>空</td><td><code>SMTP_USER</code></td><td>下一封信</td></tr>
+<tr><td><code>smtp_pass</code> <span class="tag danger">密钥</span></td><td>SMTP 口令</td><td>—</td><td>空</td><td><code>SMTP_PASS</code></td><td><b>后台改不了（422）</b>，只能改 <code>app.env</code> 后重新 deploy</td></tr>
+<tr><td><code>smtp_from</code></td><td>发件人地址</td><td>自由文本</td><td><code>MuseFrame &lt;no-reply@lenscript.cn&gt;</code></td><td><code>SMTP_FROM</code></td><td>下一封信</td></tr>
+<tr><td><code>email_code_ttl_seconds</code></td><td>邮箱验证码有效期（秒），<b>同时也是重发窗口</b>。它是唯一真相源：接口回参、纯文本正文、HTML 正文四处都读它</td><td>60–3600</td><td>600</td><td><code>EMAIL_CODE_TTL_SECONDS</code></td><td>下一封信</td></tr>
+<tr><td><code>email_code_max_attempts</code></td><td>同一个验证码最多可猜几次（猜满即锁，需重新获取）</td><td>1–10</td><td>5</td><td><code>EMAIL_CODE_MAX_ATTEMPTS</code></td><td>立刻</td></tr>
+<tr><td><code>email_code_max_issues_per_window</code></td><td>同一邮箱一个窗口内最多签发几个码（越小越抗刷；被刷码时可立刻压到 1）</td><td>1–20</td><td>5</td><td><code>EMAIL_CODE_MAX_ISSUES_PER_WINDOW</code></td><td>立刻</td></tr>
+</tbody></table></div>
+
+<h4>AI 生成内容标识 <span class="mono">aigc</span> <span class="tag warn" style="border-color:var(--warn);color:var(--warn)">本晚新增 · 随下次发版出现</span></h4>
+<p>这一组共 6 键（加上后注册表是 47 键）。<b>只管显式标识</b>；隐式元数据标识没有开关，每张新成品都写。全部只对<b>此后</b>产出的成品生效，<b>不回溯历史图</b>。详见 <a href="#s3-11">3.11</a>。</p>
+<div class="scroll"><table>
+<thead><tr><th>键</th><th>含义</th><th>范围</th><th>默认</th><th>env 来源</th><th>生效</th></tr></thead>
+<tbody>
+<tr><td><code>aigc_label_enabled</code></td><td>在成品上画「AI 生成」显式标识。<b>🔴 关掉是有法律后果的动作</b></td><td>布尔</td><td><code>true</code></td><td><code>AIGC_LABEL_ENABLED</code></td><td>下一个任务</td></tr>
+<tr><td><code>aigc_label_text</code></td><td>显式标识的文字。含内嵌字体子集外字符（生僻字 / 韩文 / emoji）时<b>保存即被拒并列出那些字</b></td><td>≤40 字</td><td><code>AI 生成 · 留影</code></td><td><code>AIGC_LABEL_TEXT</code></td><td>下一个任务</td></tr>
+<tr><td><code>aigc_label_position</code></td><td>显式标识的位置</td><td><code>bottom-right</code> / <code>bottom-left</code> / <code>top-right</code> / <code>top-left</code> / <code>bottom-center</code></td><td><code>bottom-right</code></td><td><code>AIGC_LABEL_POSITION</code></td><td>下一个任务</td></tr>
+<tr><td><code>aigc_label_opacity</code></td><td>显式标识不透明度。<b>下界不是 0</b>：调到几乎透明会产出一张「自称已标识」却看不见标识的图，要关请用上面那个开关</td><td>0.05–1</td><td>0.85</td><td><code>AIGC_LABEL_OPACITY</code></td><td>下一个任务</td></tr>
+<tr><td><code>aigc_label_size_pct</code></td><td>字号，占图像<b>短边</b>的百分比（跟短边走，1024 的图和 4000 的图上看起来一样大）</td><td>1–10</td><td>3.2</td><td><code>AIGC_LABEL_SIZE_PCT</code></td><td>下一个任务</td></tr>
+<tr><td><code>aigc_content_producer</code></td><td>隐式标识里的「内容制作服务提供者」（GB 45438-2025 附录A 的 ContentProducer），核验方用它判断这张图出自谁家。填正式名称</td><td>自由文本</td><td><code>留影 MuseFrame（lenscript.cn）</code></td><td><code>AIGC_CONTENT_PRODUCER</code></td><td>下一个任务</td></tr>
+</tbody></table></div>
+
+<h4>存储 <span class="mono">storage</span> · 客服 <span class="mono">support</span> · 数据保留与会话 <span class="mono">retention</span></h4>
+<div class="scroll"><table>
+<thead><tr><th>键</th><th>含义</th><th>范围</th><th>默认</th><th>env 来源</th><th>生效</th></tr></thead>
+<tbody>
+<tr><td><code>max_user_storage_bytes</code></td><td>每账号原图存储上限（字节），<b>超过即拒绝上传并回 413</b>。磁盘快满时可立刻压下去</td><td>1 MiB – 8 GiB</td><td>256 MiB</td><td><code>MAX_USER_STORAGE_BYTES</code></td><td>下一次上传</td></tr>
+<tr><td><code>support_email</code></td><td>客服 / 加购联系邮箱（额度用完时展示给用户）</td><td>自由文本</td><td>见运行状态卡片</td><td><code>SUPPORT_EMAIL</code></td><td>立刻</td></tr>
+<tr><td><code>support_qq_group</code></td><td>客服 QQ 群号（购买额度的主要入口，留空则不展示）</td><td>自由文本</td><td>见运行状态卡片</td><td><code>SUPPORT_QQ_GROUP</code></td><td>立刻</td></tr>
+<tr><td><code>event_retention_days</code></td><td><code>events</code> 表保留天数。<b>🔴 后台操作审计与发信记录也住在这张表里</b>，压太短会把审计一起删掉（下界因此是 7）</td><td>7–3650</td><td>90</td><td><code>EVENT_RETENTION_DAYS</code></td><td>下一次每日清理；<b>往小调是不可逆删除</b></td></tr>
+<tr><td><code>idempotency_retention_days</code></td><td>幂等记录保留天数（太短会让超期重放变成重复下单）</td><td>1–365</td><td>30</td><td><code>IDEMPOTENCY_RETENTION_DAYS</code></td><td>下一次每日清理</td></tr>
+<tr><td><code>session_ttl_days</code></td><td>登录会话有效期天数。只影响<b>此后签发/续期</b>的会话；已有会话在下次活动时被续到新期限</td><td>1–1825</td><td>90</td><td><code>SESSION_TTL_DAYS</code></td><td>下一次签发/续期</td></tr>
+</tbody></table></div>
+
+<h3 id="s4-2">4.2 只读 / 需重启项 <span class="tag ro">只读</span><a class="self" href="#s4-2">#</a></h3>
+<p>配置页末尾还会列出一批<b>部署级</b>值的只读视图。它们进程启动时读一次就固化了（连接池、盐、目录这类东西没法热换），所以前端<b>不渲染保存按钮</b>——「后台能改的假象」比看不见更糟（改完没生效，而页面显示「已保存」）。把它们搬到后台来的理由是：「为什么用户 91 天后被登出了」「为什么三个月前的事件没了」这类问题，此前唯一的查法是 SSH 上服务器读 <code>project.env</code>，而运营没有那台机器的权限。</p>
+<div class="scroll"><table>
+<thead><tr><th>只读项</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>allow_mock_purchases</code></td><td>演示购买开关。<b>生产环境必须为 false</b>（开着时运行状态卡片变红）</td></tr>
+<tr><td><code>play_billing_configured</code></td><td>Google Play 收据校验服务账号是否已配置（只给布尔，不给内容）</td></tr>
+<tr><td>其余部署级值</td><td>会话/保留/存储上限的部署侧取值、图像引擎走远端还是本地、是否信任 <code>CF-Connecting-IP</code>、测试登录逃生口、资产与 web 目录等。<b>密钥一律只给「已配置 / 未配置」</b>：<code>ADMIN_TOKEN</code>、<code>IP_HASH_SALT</code>、<code>GOOGLE_SERVICE_ACCOUNT_JSON</code>、数据库连接串的值一个字节都不进响应</td></tr>
+</tbody></table></div>
+
+<h3 id="s4-3">4.3 只能改 <code>app.env</code> + 重新 deploy <span class="tag env">需发版</span><a class="self" href="#s4-3">#</a></h3>
+<p>文件：<code>/srv/platform/apps/museframe/app.env</code>（600）。列出生产机上实际配置的键名（<b>只看键名，不看值</b>）：</p>
+<pre><code>ssh prodsrv "sudo grep -oE '^[A-Z0-9_]+=' /srv/platform/apps/museframe/app.env | tr -d ="</code></pre>
+<div class="scroll"><table>
+<thead><tr><th>键</th><th>含义</th><th>为什么不能在后台改</th></tr></thead>
+<tbody>
+<tr><td><code>ADMIN_TOKEN</code></td><td>后台唯一凭据</td><td>鉴权</td></tr>
+<tr><td><code>IMAGE_PROVIDER_API_KEY</code> · <code>SMTP_PASS</code></td><td>上游密钥与邮件口令</td><td><b>secret 键的 DB 路径被整条拆掉</b>：库里的 secret 行不进缓存、读只读 env、写回 422。这是对 Node 版密钥明文进库的修复</td></tr>
+<tr><td><code>IP_HASH_SALT</code></td><td>IP 哈希盐</td><td>密钥；换它会让历史 IP 维度对不上</td></tr>
+<tr><td><code>GOOGLE_SERVICE_ACCOUNT_JSON</code></td><td>Play 收据校验服务账号</td><td>密钥</td></tr>
+<tr><td><code>MUSEFRAME_DATABASE_URL</code> · <code>MUSEFRAME_DATABASE_POOL_MAX_CONNS</code></td><td>库连接串与池上限</td><td>连接池启动时建好</td></tr>
+<tr><td><code>MUSEFRAME_ASSET_DIR</code> · <code>MUSEFRAME_WEB_DIR</code></td><td>资产目录与 web 目录</td><td>路径，启动时固化</td></tr>
+<tr><td><code>TRUSTED_PROXY</code> · <code>TRUST_CF_CONNECTING_IP</code> · <code>RATE_LIMIT_MAX_KEYS</code></td><td>真实 IP 判据与限流表上限</td><td>安全边界：它错了所有限流都按错的 IP 分桶</td></tr>
+<tr><td><code>ALLOW_MOCK_PURCHASES</code> · <code>ALLOW_TEST_LOGIN</code></td><td>演示购买 / 测试登录逃生口</td><td><b>生产必须关</b>；做成热键等于给自己留一个可远程打开的后门</td></tr>
+<tr><td><code>PORT</code> · <code>HOST</code> · <code>SHUTDOWN_GRACE_SECONDS</code></td><td>监听与优雅停机</td><td>进程级</td></tr>
+<tr><td><code>EVENT_RETENTION_DAYS</code> · <code>IDEMPOTENCY_RETENTION_DAYS</code> · <code>SESSION_TTL_DAYS</code> · <code>MAX_USER_STORAGE_BYTES</code> 等</td><td>这些<b>同时</b>是热键的 env 回退值</td><td>改 env 只影响「db 里没有覆盖」时的取值。优先在后台改（立刻生效）；改 env 要重新 deploy</td></tr>
+</tbody></table></div>
+
+<!-- ===================== 5 故障排查 ===================== -->
+<h2 id="s5">5 · 故障排查<a class="self" href="#s5">#</a></h2>
+
+<h3 id="s5-1">5.1 登录不上<a class="self" href="#s5-1">#</a></h3>
+<div class="scroll"><table>
+<thead><tr><th>现象</th><th>最可能的原因</th><th>怎么确认 / 处置</th></tr></thead>
+<tbody>
+<tr><td>输令牌回「令牌不正确或已过期」</td><td>令牌不对，或复制时带了行尾 / 空格</td><td>按 <a href="#s1-2">1.2</a> 重新读一次</td></tr>
+<tr><td>昨天还能进，今天不行</td><td>① 标签页关过（令牌存在 <code>sessionStorage</code>，<b>关掉即失效</b>）；② 令牌被换过并 deploy 了</td><td>重新粘一次令牌；仍然不行就重新读一次文件</td></tr>
+<tr><td>页面一直「加载中…」，控制台一片 401</td><td>同上</td><td>重新登录</td></tr>
+<tr><td>频繁 429</td><td>管理接口 120 次/分钟；同一出口 IP 下有人跑脚本，或你在疯狂点刷新</td><td>等一分钟</td></tr>
+<tr><td>直接把接口地址粘地址栏，永远 401</td><td><b>令牌走请求头，浏览器导航带不上</b></td><td>不要这样用。导出和预览都从页面按钮走</td></tr>
+<tr><td><code>admin.html</code> 404</td><td>宿主机 web 目录里的文件没了 / 路径不对</td><td><code>ssh prodsrv "sudo ls /srv/platform/apps/museframe/data/web/admin.html"</code></td></tr>
+</tbody></table></div>
+
+<h3 id="s5-2">5.2 状态码含义<a class="self" href="#s5-2">#</a></h3>
+<div class="scroll"><table>
+<thead><tr><th>码</th><th>含义</th><th>典型场景与处置</th></tr></thead>
+<tbody>
+<tr><td><b>401</b></td><td>缺令牌 / 令牌错（<code>AUTH_REQUIRED</code>）</td><td>所有 34 条管理路由无凭据一律 401。页面收到 401 会清掉令牌并弹回登录框。<b>用它也能判断路由存不存在</b>：401 = 路由存在，404 = 没这条路由</td></tr>
+<tr><td><b>404</b></td><td>对象不存在，或路径不在路由表里</td><td>Unknown user / job / purchase / style / product / feedback row。也可能是这条记录已被保留期清理</td></tr>
+<tr><td><b>409</b></td><td>冲突，操作已放弃</td><td>① <code>AMBIGUOUS</code>：8 位 id 前缀撞车 → 填完整 id；② 任务状态不允许重试（只有 failed / cancelled 能重试）；③ <code>INSUFFICIENT_ENTITLEMENT</code>：额度不够重试 → 先发额度；④ 幂等键不匹配</td></tr>
+<tr><td><b>413</b></td><td>超出单账号存储上限</td><td>这是 App 侧上传时会遇到的码，判据是 <code>max_user_storage_bytes</code>。用户报「上传失败」先看资产页的该用户合计字节</td></tr>
+<tr><td><b>422</b></td><td>入参不合法（<code>VALIDATION</code>）</td><td>后台里<b>最常见</b>的拒绝码：数值越界、枚举不在白名单、必填留空、<b>写密钥键</b>、SQL 查询台不是单条 SELECT/WITH。错误消息里写着合法区间或原因，照着改</td></tr>
+<tr><td><b>429</b></td><td>请求过快</td><td>管理接口 120 次/分钟。<b>限流的 429 在路由循环之前返回，所以不会出现在接口健康表里</b></td></tr>
+<tr><td><b>502</b></td><td>上游失败</td><td><code>EMAIL_SEND_FAILED</code>（SMTP 拒了）；生成链路的上游失败在任务行与运行状态卡片里看</td></tr>
+<tr><td><b>412</b></td><td><b>MuseFrame 后端不会回这个码</b></td><td>看到 412 说明请求没走到应用（边缘 / CDN 层的条件请求）。先确认访问的是正式域名</td></tr>
+</tbody></table></div>
+
+<h3 id="s5-3">5.3 数据显示「—」或空的原因<a class="self" href="#s5-3">#</a></h3>
+<div class="scroll"><table>
+<thead><tr><th>在哪看到</th><th>含义</th><th>不是什么</th></tr></thead>
+<tbody>
+<tr><td>接口健康表全是 0 / 空</td><td><b>进程内计数，重启即清零</b>。刚发过版就是这样</td><td>不是「没有流量」也不是「没有错误」</td></tr>
+<tr><td>接口健康里没有某条路径</td><td>限流打回的请求不计；未匹配路由表的请求（扫描器、静态文件）一律不计</td><td>不是漏了</td></tr>
+<tr><td>P95 带 <code>&gt;</code></td><td>落在最后一个开口桶里（精度到桶边界）</td><td>不是精确值</td></tr>
+<tr><td>「最近一次发送」显示「本进程还没发过信」</td><td>重启后还没发过</td><td>不是邮件坏了</td></tr>
+<tr><td>埋点「按 App 版本」只有「(未上报)」</td><td><b>App 的 <code>track()</code> 不带版本字段</b>，这一行就是这件事的唯一可见处</td><td>不是数据丢了</td></tr>
+<tr><td>反馈原因码里有「未知码」</td><td>通常来自老版本客户端（服务端不做枚举校验）</td><td>不是脏数据要清</td></tr>
+<tr><td>风格「状态 = published」但「App 可见 = 否」</td><td>没有已发布版本，或没挂在任何展览上</td><td>不是后台没保存成功</td></tr>
+<tr><td>风格封面是空图</td><td>封面是文件 <code>web/covers/&lt;internal_key&gt;.jpg</code>，不是数据库列</td><td>不是数据缺列</td></tr>
+<tr><td>商品在 App 里整条不见</td><td><b>人民币价是 null</b>（App 过滤掉没有人民币价的行）</td><td>不是「退回显示美元价」</td></tr>
+<tr><td>审计里查不到上个季度的记录</td><td>审计住在 <code>events</code> 表里，<b>会被 <code>event_retention_days</code> 清掉</b></td><td>不是审计坏了。要留更久就把这个键调大（下界 7 天就是为这件事设的）</td></tr>
+<tr><td>资产页 <code>storage/</code> 目录 0 文件</td><td>这是实测结果（2026-09-11 核对）</td><td>不是探测失败</td></tr>
+<tr><td>某个列表一直转圈</td><td>先看运行状态的「数据库 / 连接池」卡片，<b>池满（4/4）时请求变慢而不是报错</b></td><td>多数情况下不是慢查询</td></tr>
+<tr><td>生成全部失败</td><td>看「上游图像供应」卡片与熔断状态。<code>gpt.lenscript.cn</code> 这条上游 9/5 起曾持续不可用，9/12 观测到变成 400 参数错，<b>疑似恢复但未端到端实测确认</b></td><td>不一定是本服务的问题</td></tr>
+</tbody></table></div>
+<div class="warn">通用纪律：<b>「没拿到数据」≠「数据是空的」</b>。面板上每一处「—」「未配置」「本进程还没…」都是在区分这两件事，读的时候不要自己把它读成好消息。</div>
+
+<!-- ===================== 6 发版与回滚 ===================== -->
+<h2 id="s6">6 · 发版与回滚<a class="self" href="#s6">#</a></h2>
+<pre><code># 0) 先看现状（退出码 0 = 全绿）
+ssh prodsrv
+sudo /srv/platform/scripts/platformctl status museframe
+sudo /srv/platform/scripts/platformctl status all      # 五个项目一屏
+
+# 1) 发版到新 tag
+sudo /srv/platform/scripts/platformctl deploy museframe --tag &lt;新tag&gt;
+
+# 2) 验证
+sudo /srv/platform/scripts/platformctl status museframe
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18787/v1/health            # 200
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18787/v1/admin/overview    # 401（无凭据）
+curl -s localhost:18787/v1/products | head -c 200                                    # 商品表拉得出来
+# 后台「配置 · 运行状态」应显示新的版本号与启动时间
+
+# 3) 回滚
+sudo /srv/platform/scripts/platformctl rollback museframe
+# 或显式指定旧 tag 重新 deploy：
+sudo /srv/platform/scripts/platformctl deploy museframe --tag &lt;旧tag&gt;
+
+# 日志
+sudo /srv/platform/scripts/platformctl logs museframe</code></pre>
+<div class="scroll"><table>
+<thead><tr><th>项</th><th>值</th></tr></thead>
+<tbody>
+<tr><td>配置三件套</td><td><code>/srv/platform/apps/museframe/{docker-compose.yml, project.env, app.env}</code></td></tr>
+<tr><td>当前生产 tag 记在</td><td><code>project.env</code> 的 <code>IMAGE_TAG=</code>（2026-09-12 为 <code>20260912T095922Z-g5e30737e</code>）</td></tr>
+<tr><td>栈名 / 容器名</td><td><code>museframe-go</code> / <code>museframe-api-go</code>（⚠ compose 里<b>服务名是 <code>api</code></b>，<code>--force-recreate museframe-api</code> 会报 no such service）</td></tr>
+<tr><td>监听</td><td>仅 <code>127.0.0.1:18787</code></td></tr>
+<tr><td><b>后台页面怎么换</b></td><td><code>admin.html</code> 是宿主机文件 <code>/srv/platform/apps/museframe/data/web/admin.html</code>（只读挂进容器）。换它<b>不需要发版</b>：备份旧文件（目录里已有多份 <code>admin.html.bak-&lt;时间戳&gt;</code> 惯例）→ 放新文件 → 浏览器强制刷新。风格封面同理，在同目录的 <code>covers/</code> 下</td></tr>
+<tr><td>镜像层提示</td><td>历史发版一直是「FROM 当前生产镜像 + COPY 二进制」，每版叠一层。<b>下次发版改用仓库 <code>deploy/Dockerfile</code> 的 distroless 基底</b>（本机拉不到 gcr.io 时可用 <code>docker save</code> 取生产镜像首层作基底）</td></tr>
+</tbody></table></div>
+<div class="bad">紧急停机回旧 Node 栈的路还在（Go 版<b>不写 SQLite</b>，旧栈数据文件在切换期间原封不动），但<b>窗口期内在 PG 侧产生的新数据不会回流 SQLite</b>——回滚后必须按 <code>created_at &gt; 切换时刻</code> 导出人工补录。旧 Node 容器 <code>museframe-api</code> 已停，观察期到 <b>2026-10-11</b>。</div>
+
+<!-- ===================== 7 数据与备份 ===================== -->
+<h2 id="s7">7 · 数据与备份位置<a class="self" href="#s7">#</a></h2>
+<div class="scroll"><table>
+<thead><tr><th>类别</th><th>位置</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>业务数据库</td><td>统一 PostgreSQL 容器 <code>platform-postgres</code>，库名 <code>museframe</code></td><td>24 张表；三级角色，运行角色无 DDL 权；连接池硬顶 4</td></tr>
+<tr><td>图片与产出资产</td><td><code>/srv/platform/apps/museframe/data/assets</code>（挂到容器 <code>/var/lib/museframe/assets</code>）</td><td>源图 / 候选 / 缩略图 / 导出都在这里</td></tr>
+<tr><td>前端与后台静态文件</td><td><code>/srv/platform/apps/museframe/data/web</code>（只读挂到容器 <code>/var/lib/museframe/web</code>）</td><td>含 <code>admin.html</code> 与 30 张风格封面；<b>封面是 <code>/v1/styles</code> / <code>/v1/discover</code> 的 <code>coverUrl</code> 能否非 null 的硬依赖</b></td></tr>
+<tr><td>每日库备份</td><td><code>/srv/platform/backups/db/museframe/</code>（另有 <code>globals/</code> 存角色）</td><td>每日 <b>02:13 UTC</b>：<code>pg_dump -Fc -Z6</code> + SHA-256 立即校验 + 先验后删清理</td></tr>
+<tr><td>文件资产备份</td><td><code>/srv/platform/backups/files/museframe/</code>（<code>assets</code> 与 <code>web</code> 两个子目录）</td><td>每日 <b>02:33 UTC</b>；硬链接增量（<code>rsync --link-dest</code>）</td></tr>
+<tr><td>配置备份</td><td><code>/srv/platform/backups/files/config/</code></td><td><b><code>app.env</code>（密钥唯一存放处）已纳入 CONFIG 备份</b>，不再是备份空白</td></tr>
+<tr><td>额度有效期改动的还原 SQL</td><td><code>/srv/platform/backups/museframe-credit-expiry-rollback-20260912T110042Z.sql</code></td><td>2026-09-12 把加购额度改成「永不过期」（<code>pack_credit_expiry_days=0</code>，历史 1 桶到期置空）时留的回滚脚本</td></tr>
+<tr><td>备份脚本</td><td><code>/srv/platform/scripts/backup-db.sh</code> · <code>backup-files.sh</code></td><td>cron 在 <code>/etc/cron.d/platform</code>（由 <code>install-cron.sh</code> 幂等生成，<b>不要手工编辑</b>）</td></tr>
+<tr><td>恢复演练</td><td><code>/srv/platform/scripts/restore-verify.sh --all</code></td><td>每周日 <b>07:08 UTC</b> 自动跑，日志 <code>/var/log/platform-restore-drill.log</code></td></tr>
+<tr><td>备份日志</td><td><code>/var/log/platform-backup.log</code></td><td>守护脚本日志 <code>/var/log/platform-guard.log</code></td></tr>
+</tbody></table></div>
+<div class="note"><b>保留期会删东西，别把后台当档案馆</b>：<code>events</code> 表（含后台操作审计与发信记录）按 <code>event_retention_days</code> 清理，幂等记录按 <code>idempotency_retention_days</code> 清理。需要长期留存的结论请导出 CSV 或写进文档。</div>
+
+<footer class="doc">
+  留影 MuseFrame 运营后台使用指南 · 编写于 2026-09-12 ·
+  对应生产镜像 <code>20260912T095922Z-g5e30737e</code><br>
+  核对依据：<code>server-go/internal/httpapi/routes_admin.go</code>（34 条管理路由）、
+  <code>server-go/internal/httpapi/admin_{config,ops,actions,grant,visibility}.go</code>（写入口语义与状态码）、
+  <code>server-go/internal/cfgstore/cfgstore.go</code>（41 个配置键的类型·env·默认·区间·白名单·分组与 secret 规则）、
+  <code>server-go/internal/httpapi/auth.go</code> 与 <code>app.go</code>（<code>X-Admin-Token</code> 恒定时间比对、<code>/v1/admin/</code> 120 次/分钟限流）、
+  <code>web/admin.html</code>（9 个标签页、运行状态七卡片、CSV 走 fetch+blob、令牌存 <code>sessionStorage</code>）、
+  <code>server-go/README.md</code>、平台文档《交接-服务器统一重构-20260912》与 <code>PROGRESS.md</code>，
+  以及对生产服务器的只读核对（34 条管理路由逐条探测：已注册路由回 401、未注册回 404；<code>app.env</code> 只列键名不读值；compose 的卷与 <code>IMAGE_TAG</code>）。<br>
+  AIGC 标识一节依据本晚新增的 <code>server-go/internal/aigc/</code>、<code>migrations/004_aigc_label.sql</code>、<code>internal/cfgstore</code> 新增 6 键与 <code>web/admin.html</code> 的分组文案写成；该功能<b>尚未进入当前生产镜像</b>，文中已标注（见 <a href="#s3-11">3.11</a>）。
+  本文不含任何口令 / 令牌 / 密钥的值。
+</footer>
+
+</div>
+</body>
+</html>
