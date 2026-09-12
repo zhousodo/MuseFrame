@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"museframe-api/internal/aigc"
 	"museframe-api/internal/store"
 )
 
@@ -17,7 +18,7 @@ func TestSmokeAllRoutes(t *testing.T) {
 
 	// 造一个候选，让 feedback / export / job 详情都有真数据。
 	candAsset := e.nextID()
-	if err := store.InsertCandidateAsset(ctx, e.st.Q(), candAsset, uid, pid, candAsset+".jpg", 1000, 800, 1000, e.now); err != nil {
+	if err := store.InsertCandidateAsset(ctx, e.st.Q(), candAsset, uid, pid, candAsset+".jpg", 1000, 800, 1000, aigc.MarkVisibleMeta, e.now); err != nil {
 		t.Fatal(err)
 	}
 	jobID := "job-smoke"

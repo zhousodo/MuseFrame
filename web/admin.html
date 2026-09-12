@@ -1239,6 +1239,7 @@ const CFG_GROUPS = [
   ['email', '邮件通道与验证码', 'SMTP 连接参数与验证码策略。验证码有效期同时也是重发窗口；被刷码攻击时把「每窗口签发次数」压到 1 是最快的止血动作。改完用下面的「邮件测试」验证，别等真实用户来报。'],
   ['storage', '存储与上传', '每个账号的原图存储上限。数据盘快满时压这一项立刻生效（超限的上传回 413），不需要重启。'],
   ['support', '客服与联系方式', '额度用完时 App 会把这里的邮箱与 QQ 群展示给用户 —— 当前这是主要的加购入口，留空等于这条路断掉。'],
+  ['aigc', 'AI 生成内容标识（合规）', '《人工智能生成合成内容标识办法》（2025-09-01 施行）要求生成服务在产出上同时加<b>显式标识</b>（画在像素上的角标）与<b>隐式标识</b>（写进文件 EXIF/XMP 的 GB 45438-2025 字段）。<b>这一节只管显式标识；隐式标识没有开关，每一张新成品都写</b>。🔴 把 <code>aigc_label_enabled</code> 关掉是有法律后果的动作，此后新产出的图上不会有任何可见标识。改完对<b>下一个任务</b>生效，<b>不回溯历史成品</b>（回溯要重编码已经交付给用户的图）。水印文字用的是内嵌的 GB2312 子集字体，生僻字 / 韩文 / emoji 会被当场拒绝 —— 不然线上水印里那个字会是一片空白。每张成品标了什么，在「资产」页的「AI 标识」列逐行可查。'],
   ['deploy', '部署级（只读）', '这些值在进程启动时就固化了（连接池、盐、目录、逃生口），后台只能看不能改：要改就改 project.env 再重启容器。密钥一律只显示「已配置 / 未配置」，值一个字节都不出现在响应里。'],
 ];
 
@@ -1793,6 +1794,20 @@ function fmtBytes(n){
   while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
   return (i === 0 ? v : v.toFixed(1)) + ' ' + u[i];
 }
+
+/* 🔴 资产行的「AI 标识」列。取值来自 assets.aigc_label：
+   'visible+meta' = 显式水印画进了像素 + 文件元数据里有 GB 45438-2025 的标识字段；
+   'meta'         = 运营把 aigc_label_enabled 关掉了，只剩隐式标识；
+   空             = 源图（本来就不需要标识），或本版之前产出的历史成品（刻意不回溯）。
+   源图和成品必须区别对待：把源图也标成红色的「未标识」，会让这一列每天都在
+   报一个不存在的故障，两周之内就没人再看它了。 */
+function aigcCell(a){
+  const v = a.aigcLabel || '';
+  if (v === 'visible+meta') return '<span class="badge badge-cobalt">水印+元数据</span>';
+  if (v === 'meta') return '<span class="badge badge-warn">仅元数据</span>';
+  if (a.kind !== 'candidate' && a.kind !== 'export') return '<span class="muted">—</span>';
+  return '<span class="badge badge-gray">未标识</span><br><span class="muted" style="font-size:10.5px">历史成品，不回溯</span>';
+}
 async function loadAssets(){
   await ensureImgTok();
   const q = new URLSearchParams(assetFilterParams());
@@ -1806,18 +1821,19 @@ async function loadAssets(){
         + `<span class="kv"><b>合计</b><br>${totals.reduce((a,t)=>a+t.count,0)} 个 · ${fmtBytes(totals.reduce((a,t)=>a+t.bytes,0))}</span>`
       : '<span class="kv muted">库里还没有资产</span>';
     const rows = r.assets || [];
-    $('assetsTable').innerHTML = '<tr><th>预览</th><th>类型</th><th>状态</th><th>尺寸</th><th>大小</th><th>sha256</th><th>归属</th><th>项目</th><th>创建 (UTC+8)</th></tr>' +
+    $('assetsTable').innerHTML = '<tr><th>预览</th><th>类型</th><th>状态</th><th>AI 标识</th><th>尺寸</th><th>大小</th><th>sha256</th><th>归属</th><th>项目</th><th>创建 (UTC+8)</th></tr>' +
       (rows.length ? rows.map(a => `<tr>
         <td>${thumb(a.id)}</td>
         <td>${escapeHtml(a.kind)}</td>
         <td class="${a.status==='ready'?'ok':a.status==='quarantined'?'bad':'muted'}">${escapeHtml(a.status)}${a.deletedAt?'<br><span class="badge badge-warn">已软删</span>':''}</td>
+        <td>${aigcCell(a)}</td>
         <td class="muted">${a.width && a.height ? a.width + '×' + a.height : '—'}</td>
         <td>${fmtBytes(a.byteSize)}</td>
         <td class="muted" style="font-size:11px">${a.sha256 ? escapeHtml(String(a.sha256).slice(0,12)) + '…' : '<span class="muted">未回填</span>'}</td>
         <td class="muted">${escapeHtml(a.email || a.user || '—')}<br><a href="#" onclick="openUserDetail('${escapeHtml(a.user)}');return false">${escapeHtml(a.user)}</a></td>
         <td class="muted" style="font-size:11px">${a.projectId ? escapeHtml(String(a.projectId).slice(0,8)) : '—'}</td>
         <td class="muted">${agoCell(a.createdAt)}</td></tr>`).join('')
-        : '<tr><td colspan=9 class=muted>没有符合条件的资产</td></tr>');
+        : '<tr><td colspan=10 class=muted>没有符合条件的资产</td></tr>');
   } catch(e) {
     if (e.status === 401) return;
     $('assetsTable').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;

@@ -94,6 +94,7 @@ go test ./... -count=1
 cmd/museframe-api       服务主程序（含 healthcheck 子命令）
 cmd/museframe-assets    资产迁移 + sha256 回填 + 四数字交叉校验
 internal/apierr         统一错误信封与 26 个错误码
+internal/aigc           AI 生成内容标识：显式水印（内嵌 GB2312 子集字体）+ 隐式 EXIF/XMP
 internal/cfgstore       运行时配置（🔴 密钥只走环境变量）
 internal/config         进程配置（环境变量，硬校验）
 internal/httpapi        路由表 + 横切中间层 + 全部 handler
@@ -110,7 +111,8 @@ internal/metrics        进程内每接口请求计数器（后台「接口健�
 internal/store          PostgreSQL 持久层 + 管理后台只读数据浏览
 internal/worker         生成队列
 migrations/             001_init.sql（24 表 / 58 索引）、002_grants.sql（角色授权）、
-                        003_feedback_handled.sql（反馈「已处理」两列 + 部分索引）
+                        003_feedback_handled.sql（反馈「已处理」两列 + 部分索引）、
+                        004_aigc_label.sql（assets.aigc_label 一列 + 未标识成品部分索引）
 deploy/                 Dockerfile、docker-compose.yml、project.env.example
 ```
 
@@ -344,6 +346,36 @@ P95 从固定延迟直方图算（5/10/25/50/100/250/500/1000/2500/5000/10000ms�
 响应头 `X-Row-Count` 给出数据行数，便于不解析 CSV 就核对。
 前端走 **fetch + blob**，不能用 `<a href download>` / `window.open`——
 管理员令牌走请求头，浏览器发起的导航带不上头，那样的链接一律回 401。
+
+## AI 生成内容标识（合规）
+
+《人工智能生成合成内容标识办法》（2025-09-01 施行）要求生成服务在产出上同时加
+**显式标识**与**隐式标识**。实现全在 `internal/aigc`，接进管线的位置只有一处：
+`internal/worker/run.go` 里质量闸之后、落盘之前的 `aigc.Apply`。
+
+| | 是什么 | 有没有开关 |
+|---|---|---|
+| 显式 | 画进像素的角标文字（默认「AI 生成 · 留影」） | `aigc_label_enabled`，默认**开** |
+| 隐式 | JPEG 的 EXIF（ImageDescription / Software / UserComment）+ XMP，携带 GB 45438-2025 附录A 的 `AIGC` 结构（`Label` / `ContentProducer` / `ProduceID` / `ReservedCode1` / `ContentPropagator` / `PropagateID`）、制作时间、成品 sha256，以及 IPTC 的 `DigitalSourceType=trainedAlgorithmicMedia` | **没有**。办法第五条是「应当」，一个开关的唯一用途是把自己关进违规状态 |
+
+四件容易搞错、已经在代码里写死的事：
+
+1. **标识发生在编码落盘那一步，不是下载/导出时。** 磁盘上躺着的那份就得是带标识的 ——
+   成品会经由 `/v1/assets/{id}/file` 被 `<img>`、分享、另存为各种路径拿走，
+   任何「导出时才加」的设计都必然有一条绕过它的路。
+2. **标识失败 = 任务失败退额。** 交付一张没有法定标识的成品是合规事故，而且一旦交付就收不回来。
+3. **不回溯历史成品。** 回溯要重编码已经交付给用户的图（不可逆的画质损失），
+   而办法约束的是此后的产出。历史行 `assets.aigc_label` 为 NULL，后台显示「未标识，历史成品」。
+4. **字体内嵌。** 运行镜像是 distroless static，里面一个字体文件都没有；水印默认含中文。
+   内嵌的是 Noto Sans CJK SC Bold 的 ASCII + GB2312 子集（1.5 MB，OFL-1.1，
+   见 `internal/aigc/fontdata/NOTICE.md`）。注册表在**写**的一侧逐字校验 `aigc_label_text`
+   的字形覆盖：子集外的字会画成空白，那是个后台显示「已保存」、线上每张图都缺半句话的隐形故障。
+
+落库在 `assets.aigc_label`（`004_aigc_label.sql`）：`'visible+meta'` / `'meta'` / NULL。
+App 读 `GET /v1/generation-jobs/{id}` 的 `candidate.aigcLabeled`，在结果页与作品墙上显示「AI 生成」角标；
+后台「资产」页有「AI 标识」列（CSV 导出同列），「配置」页有 `aigc` 分组的 6 个热键。
+
+核验一张成品：`exiftool -G -a -u <file>`，或 `aigc.ExtractJPEG`。
 
 ## 切换 runbook
 

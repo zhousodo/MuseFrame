@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"museframe-api/internal/aigc"
 	"museframe-api/internal/imaging"
 	"museframe-api/internal/ledger"
 	"museframe-api/internal/provider"
@@ -143,13 +144,35 @@ func (w *Worker) runJob(ctx context.Context, job *store.Job) error {
 		return nil
 	}
 
-	// 落盘先于写库（DB 行指向的就是这个文件）；随后任何一步 DB 写失败，
-	// 都把孤儿文件删掉并收口任务、退还预留，而不是留下一个用户已被扣费的半成品。
-	jpg, err := imaging.EncodeJPEG(res.Image, 90)
+	// AI 生成内容标识（《人工智能生成合成内容标识办法》第四、五条）。
+	//
+	// 🔴 标识必须发生在**这里** —— 编码成最终字节的那一步里，而不是下载或导出
+	// 的时候。理由有两条：
+	//   1. 磁盘上躺着的那份就得是带标识的。成品文件会经由 /v1/assets/{id}/file
+	//      被 <img>、分享、另存为各种路径拿走，任何一条「导出时才加标识」的设计
+	//      都必然有一条绕过它的路。
+	//   2. 显式水印必须画进像素。画在别处（比如前端叠一层）的东西是可以被
+	//      剥掉的装饰，不是标识。
+	//
+	// 标识失败 = 任务失败。用户会拿到一次退额和一条错误，这比交付一张
+	// **没有法定标识**的成品要好 —— 后者是合规事故，而且一旦交付就收不回来。
+	opts := w.rt.AIGCOptions(job.ID, w.now())
+	marked, err := aigc.Apply(
+		&aigc.Image{Data: res.Image.Data, Width: res.Image.Width, Height: res.Image.Height},
+		90, opts,
+		func(i *aigc.Image, q int) ([]byte, error) {
+			return imaging.EncodeJPEG(&imaging.RGBA{Data: i.Data, Width: i.Width, Height: i.Height}, q)
+		})
 	if err != nil {
+		w.lg.Warn("worker: AI 生成标识失败，任务收口退额（绝不交付未标识的成品）",
+			map[string]any{"jobId": job.ID, "error": err.Error()})
 		w.failJob(ctx, job, "INTERNAL_ERROR")
 		return nil
 	}
+	jpg := marked.JPEG
+
+	// 落盘先于写库（DB 行指向的就是这个文件）；随后任何一步 DB 写失败，
+	// 都把孤儿文件删掉并收口任务、退还预留，而不是留下一个用户已被扣费的半成品。
 	assetID := w.newID()
 	storageKey := assetID + ".jpg"
 	outPath := w.assetPath(storageKey)
@@ -161,7 +184,7 @@ func (w *Worker) runJob(ctx context.Context, job *store.Job) error {
 	candidateID := w.newID()
 	err = w.st.InTx(ctx, func(q store.Queryer) error {
 		if err := store.InsertCandidateAsset(ctx, q, assetID, job.UserID, job.ProjectID, storageKey,
-			int64(len(jpg)), res.Image.Width, res.Image.Height, t); err != nil {
+			int64(len(jpg)), res.Image.Width, res.Image.Height, marked.Mark, t); err != nil {
 			return err
 		}
 		if err := store.InsertCandidate(ctx, q, candidateID, job.ID, 0, assetID, t); err != nil {

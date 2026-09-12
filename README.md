@@ -36,6 +36,17 @@ halftone, weave, paper grain, bloom, chroma offset, vignette…) scaled by *stre
 identity blend by *fidelity* → quality gate (decodable, non-blank, sane dimensions) →
 one automatic retry → candidate asset. Worker queue survives restarts.
 
+**AI content labelling (中国《人工智能生成合成内容标识办法》, in force 2025-09-01)** —
+every newly produced artifact is labelled at encode time by the Go backend
+(`server-go/internal/aigc`): a burned-in「AI 生成」corner mark on the pixels
+(operator-tunable text / position / size / opacity, on by default) **and** an
+implicit label in the file metadata — JPEG EXIF + XMP carrying the GB 45438-2025
+`AIGC` structure (`Label` / `ContentProducer` / `ProduceID` / …), produce time,
+content hash and IPTC `DigitalSourceType=trainedAlgorithmicMedia`. The implicit
+label has no off switch; historical artifacts are deliberately not rewritten.
+The App shows an「AI 生成」badge driven by `candidate.aigcLabeled`, and the admin
+console exposes the per-asset label state. See `server-go/README.md`.
+
 **Billing (§13)** — append-only credit ledger with `reserve → commit / release`,
 earliest-expiring bucket first, unique reference keys; free first image; mock store
 (`/v1/purchases/verify`) with Mini Pack / Creator Monthly / Creator Annual; premium
