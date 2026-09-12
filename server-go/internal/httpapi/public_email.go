@@ -33,6 +33,15 @@ type EmailRequestResult struct {
 	DevCode          string `json:"devCode,omitempty"`
 }
 
+// loginCodeLogSubject 是发信记录里给验证码信记的主题。
+//
+// 🔴 刻意**不是**真实主题。真实主题是 `"123456 是你的 MuseFrame 登录验证码"`——
+// 以明文验证码开头（mailer.loginCodeBody）。发信记录是一张管理员能翻、
+// 能导出、随备份落盘的表，把真实主题写进去等于给任何读到它的人一条
+// 「这个邮箱最近的验证码是多少」的旁路，而那是账号接管。
+// 验证码本体一个字节都不入库这条红线，在这里的具体形态就是这个常量。
+const loginCodeLogSubject = "（验证码本体不入库）是你的 MuseFrame 登录验证码"
+
 // hEmailRequest 发一封 6 位验证码。
 func (a *App) hEmailRequest(c *Ctx) (any, error) {
 	ctx := c.R.Context()
@@ -90,7 +99,7 @@ func (a *App) hEmailRequest(c *Ctx) (any, error) {
 	sendErr := a.mailer.SendLoginCode(email, code)
 	// 每一次尝试都落一条记录（成功和失败都落）—— 后台的「邮件」页就是靠它
 	// 回答「用户说收不到验证码」。此前唯一的痕迹是一行进不了后台的 warn 日志。
-	a.recordEmailSend(ctx, "login_code", email, sendErr)
+	a.recordEmailSend(ctx, "login_code", email, loginCodeLogSubject, sendErr)
 	if err := sendErr; err != nil {
 		a.lg.Warn("email: 验证码发送失败", nil)
 		// 非测试模式下**在 upsert 之前**退出：发送失败还去覆盖存储的哈希，

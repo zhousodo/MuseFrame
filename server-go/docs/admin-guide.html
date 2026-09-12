@@ -103,7 +103,7 @@
       <ol>
         <li><a href="#s2-1">九个标签页</a></li>
         <li><a href="#s2-2">每个视图一句说明</a></li>
-        <li><a href="#s2-3">时区与脱敏的统一口径</a></li>
+        <li><a href="#s2-3">时区与显示口径</a></li>
       </ol>
     </li>
     <li><a href="#s3">日常任务（逐步骤 + 预期结果）</a>
@@ -176,8 +176,8 @@
 <ol>
   <li><b>管理接口限频 120 次 / 分钟</b>（按 <code>/v1/admin/</code> 前缀整体计）。超了回 429。</li>
   <li><b>后台没有任何密钥写入口。</b> <code>image_provider_api_key</code> 与 <code>smtp_pass</code> 在配置页只显示掩码，<b>写它们直接回 422</b>——这是对 Node 版「从后台设一次上游密钥，密钥就明文躺进数据库并随每日备份落盘」那个问题的修复，属有意的行为变更。</li>
-  <li><b>数据库浏览页只读</b>：查询台只接受单条 <code>SELECT</code> / <code>WITH</code>，密钥列已脱敏，部分表不可查。</li>
-  <li><b>CSV 导出一律脱敏</b>（邮箱打码、id 只给前 8 位），理由是导出文件会离开这台机器。</li>
+  <li><b>数据库浏览页只读</b>：查询台只接受单条 <code>SELECT</code> / <code>WITH</code>，<b>凭据列</b>（会话令牌 / 验证码哈希 / 幂等响应体 / 密钥）已脱敏，部分表不可查。</li>
+  <li><b>用户资料完整显示（管理员）</b>：邮箱、完整用户 id、交易号、客户端 IP 在页面与 CSV 导出里都是<b>完整值</b>（2026-09-12 起；此前被打码/截断）。这是一个只有管理员令牌打得开的自家后台，客服要拿邮箱联系用户、拿交易号对账、拿 IP 判断是不是同一个人在刷。仍然一个字节都不给的只有<b>凭据</b>：会话令牌、验证码（含其哈希）、SMTP 口令、上游密钥、<code>ADMIN_TOKEN</code>、<code>IP_HASH_SALT</code>、服务账号 JSON。</li>
   <li><b>每一次写操作都落审计</b>（改配置 / 改商品 / 改风格 / 禁用启用用户 / 发额度 / 重试 / 重验 / 标已处理）。</li>
 </ol>
 
@@ -206,7 +206,7 @@
 <ul>
   <li><b>顶部两条横幅</b>：① 生成链路——<b>现在到底能不能产出一张图</b>，判据是最近真实上游调用的结果，不是「配置齐不齐」；② 反白嫖闸——免费额度的 IP / 全站日配额有没有被顶到。</li>
   <li><b>卡片</b>：累计用户、累计收入等盘子数。</li>
-  <li><b>生成任务</b>：可按状态（<code>queued</code> / <code>running</code> / <code>quality_check</code> / <code>succeeded</code> / <code>failed</code> / <code>cancelled</code>）、时间窗、用户 ID 前 8 位筛；带生成参数与上游返回摘要；失败 / 取消的行上有「重试」。</li>
+  <li><b>生成任务</b>：可按状态（<code>queued</code> / <code>running</code> / <code>quality_check</code> / <code>succeeded</code> / <code>failed</code> / <code>cancelled</code>）、时间窗、用户 ID（完整或前缀）筛；带生成参数与上游返回摘要；失败 / 取消的行上有「重试」。每行的<b>「详情」</b>按钮列出这条任务的<b>全部候选</b>（按产出时间 <code>created_at</code> 升序，含质检未通过的那几张）与源图的画面分析——列表里只显示第一张候选，而「后面几张是不是也这样」是失败复盘的第一个问题。</li>
   <li><b>购买记录</b>：平台 / 交易号 / 金额 / 入账额度，可按状态（<b>只有 <code>pending</code> 与 <code>verified</code> 两个值</b>）与平台筛；<code>verified</code> 的行上有「重验」。</li>
   <li><b>用户反馈</b>：含<b>用户写的正文</b>，可按好评 / 差评与处理状态筛，行上有「标已处理」。</li>
 </ul>
@@ -227,25 +227,25 @@
 审计与发信记录也住在 <code>events</code> 表里，但<b>埋点视图把这两类行排掉了</b>，否则运营自己改一次配置都会在「用户行为」里多一行。</p>
 
 <h4 id="tab-assets">资产 <span class="mono">#assets</span></h4>
-<p>App 上传的源图与产出文件。可按类型（<code>source</code> / <code>candidate</code> / <code>thumbnail</code> / <code>export</code>）、状态（<code>pending</code> / <code>ready</code> / <code>quarantined</code> / <code>deleted</code>）、用户 ID 前 8 位筛；带字节数 / 宽高 / sha256；顶部是合计卡片。图片预览走短时图片令牌，<b>管理员令牌不进 URL</b>。<br><b>AI 标识</b>列是《人工智能生成合成内容标识办法》的标识状态：<b>水印+元数据</b> = 角标画进了像素、文件元数据里也有标识字段；<b>仅元数据</b> = 有人把 <code>aigc_label_enabled</code> 关掉了，只剩隐式标识；<b>未标识</b> = 源图（本来就不需要）或本版之前产出的历史成品（<b>刻意不回溯</b>，不是故障）。</p>
+<p>App 上传的源图与产出文件。可按类型（<code>source</code> / <code>candidate</code> / <code>thumbnail</code> / <code>export</code>）、状态（<code>pending</code> / <code>ready</code> / <code>quarantined</code> / <code>deleted</code>）、用户 ID（完整或前缀）筛；带字节数 / 宽高 / sha256；顶部是合计卡片。下方是<b>画面分析</b>（<code>photo_analyses</code>）：每张源图的主体类型 / 人数 / 清晰度 / 曝光，以及给用户的提示与建议原文、归属用户。图片预览走短时图片令牌，<b>管理员令牌不进 URL</b>。<br><b>AI 标识</b>列是《人工智能生成合成内容标识办法》的标识状态：<b>水印+元数据</b> = 角标画进了像素、文件元数据里也有标识字段；<b>仅元数据</b> = 有人把 <code>aigc_label_enabled</code> 关掉了，只剩隐式标识；<b>未标识</b> = 源图（本来就不需要）或本版之前产出的历史成品（<b>刻意不回溯</b>，不是故障）。</p>
 
 <h4 id="tab-health">健康 <span class="mono">#health</span></h4>
 <ul>
   <li><b>接口健康</b>：窗口可选，上限 24 小时。详见 <a href="#s3-10">3.10</a>。</li>
-  <li><b>邮件发送记录</b>：验证码信与后台测试邮件的发送台账，地址打码。<b>刻意不记主题与正文</b>——验证码信的主题以明文验证码开头，记下来等于一条账号接管旁路。</li>
-  <li><b>验证码签发台账</b>：签发了哪些码（不回哈希）。</li>
+  <li><b>邮件发送记录</b>：验证码信与后台测试邮件的发送台账，<b>完整收件地址 + 主题</b>。<b>刻意不记正文，而验证码信记的主题是一个不含验证码的常量</b>——真实主题以明文验证码开头，记下来等于一条账号接管旁路。本版之前落的记录没有主题，显示「未记录」。</li>
+  <li><b>验证码签发台账</b>：哪个邮箱签发过几次（邮箱完整，<b>哈希一个字节都不回</b>）。</li>
 </ul>
 
 <h4 id="tab-ops">运营 <span class="mono">#ops</span></h4>
 <ul>
-  <li><b>风格管理</b>：用户在 App 首页看到的那张卡片（名称 / 副标题 / 主题 / 是否付费专属 / 位次 / 标签 / 状态）。行序就是用户看到的顺序。<b>「App 可见」列比「状态」更重要</b>。</li>
+  <li><b>风格管理</b>：用户在 App 首页看到的那张卡片（名称 / 副标题 / 主题 / 是否付费专属 / 位次 / 标签 / 状态）。行序就是用户看到的顺序。<b>「App 可见」列比「状态」更重要</b>。每张卡片上的<b>「版本与 spec」</b>按钮打开该风格的全部版本与<b>完整 <code>style_versions.spec</code></b>（提示词模板 / 控件取值域 / 负面词）——<b>只读</b>，spec 改一个字就该是一个新版本。</li>
   <li><b>商品与价格</b>：改价与上下架立刻反映到 <code>/v1/products</code>，不需要发版。</li>
   <li><b>反馈原因码</b>：这是<b>观测</b>不是配置——原因码是 App 里写死的四个差评芯片，服务端不做枚举校验，App 也不读服务端字典。要增删原因码得发 App 版本。</li>
   <li><b>操作审计</b>：后台每一次写操作一行。<b>审计住在 <code>events</code> 表里，会被保留期清理一起删</b>（天数见 <a href="#s4-1">4.1</a> 的 <code>event_retention_days</code>，下界刻意是 7 天）。</li>
 </ul>
 
 <h4 id="tab-db">数据库 <span class="mono">#db</span></h4>
-<p>只读翻库：左侧选表分页浏览，下面的查询台只接受单条 <code>SELECT</code> / <code>WITH</code>。密钥列已脱敏。
+<p>只读翻库：左侧选表分页浏览，下面的查询台只接受单条 <code>SELECT</code> / <code>WITH</code>。<b>凭据列</b>（会话令牌 / 验证码哈希 / 幂等响应体 / 密钥）已脱敏；用户资料（邮箱、<code>provider_subject</code>、交易号、设备与 IP）<b>完整显示</b>。
 <b>这一页是全后台唯一展示 UTC 的地方</b>（显示库里原始列值，ISO-8601 带 Z）；其余页面一律北京时间 UTC+8。这里改不了任何数据——要改去对应功能页，那样才有审计。</p>
 
 <h4 id="tab-config">配置 <span class="mono">#config</span></h4>
@@ -256,14 +256,15 @@
   <li><b>邮件测试</b>：发一封自检信，结果留在页面上。</li>
 </ul>
 
-<h3 id="s2-3">2.3 时区与脱敏的统一口径<a class="self" href="#s2-3">#</a></h3>
+<h3 id="s2-3">2.3 时区与显示口径<a class="self" href="#s2-3">#</a></h3>
 <div class="scroll"><table>
 <thead><tr><th>口径</th><th>内容</th></tr></thead>
 <tbody>
 <tr><td>时区</td><td>后端一切时间戳是 UTC；<b>除「数据库」页外，所有页面统一换算成北京时间（UTC+8）展示</b>并标出来</td></tr>
-<tr><td>用户 ID</td><td>列表里只显示前 8 位。多数筛选框接受 8 位前缀；<b>前缀撞车时接口回 409 <code>AMBIGUOUS</code></b>，这时要填完整 id</td></tr>
-<tr><td>邮箱</td><td>列表页显示完整（只有持令牌的人打得开）；<b>CSV 导出一律打码</b>，脱敏点只有一处</td></tr>
-<tr><td>密钥</td><td>任何页面只给「已配置 / 未配置」或掩码</td></tr>
+<tr><td>用户 ID</td><td><b>完整显示（管理员）</b>：接口回完整 id，窄列里由 CSS 省略号收尾，悬停看全文、旁边一键复制。筛选框接受任意长度的前缀；<b>前缀撞车时接口回 409 <code>AMBIGUOUS</code></b>，这时要填更长的 id</td></tr>
+<tr><td>邮箱</td><td><b>完整显示（管理员）</b>：列表、用户详情、发信记录、验证码台账、CSV 导出一律完整。客服回信靠的就是这一个地址</td></tr>
+<tr><td>交易号 / 设备 / IP</td><td><b>完整显示（管理员）</b>：交易号拿去商店后台对账；<code>free_grants.ip</code> 是明文客户端地址（005 迁移新增），判断「这一批账号是不是同一个人」只有它答得了</td></tr>
+<tr><td>凭据</td><td>任何页面一个字节都不给：会话令牌、验证码与其哈希、SMTP 口令、上游密钥、<code>ADMIN_TOKEN</code>、<code>IP_HASH_SALT</code>、服务账号 JSON。密钥项只给「已配置 / 未配置」或固定掩码</td></tr>
 </tbody></table></div>
 
 <!-- ===================== 3 日常任务 ===================== -->
@@ -470,7 +471,7 @@ sudo nano /srv/platform/apps/museframe/app.env</code></pre></li>
 <div class="scroll"><table>
 <thead><tr><th>口径</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td>脱敏</td><td><b>一律脱敏</b>：邮箱打码、id 只给前 8 位。理由是导出文件会离开这台机器（下载目录、微信、某个表格）——页面上显示完整邮箱还能靠「只有持令牌的人打得开」兜住，躺在下载目录里的 CSV 兜不住</td></tr>
+<tr><td>显示口径</td><td><b>完整显示（管理员）</b>：邮箱、用户 id、交易号与页面完全一致（同一个查询函数）。2026-09-12 起这条反过来了——此前一律打码，而打了码的邮箱没法对账、没法群发、没法联系用户，于是实际发生的事是有人绕开导出直接抄数据库。凭据从来不在这六类数据的任何一列里</td></tr>
 <tr><td>编码</td><td>带 UTF-8 BOM，否则中文列在 Excel 里是乱码</td></tr>
 <tr><td>自由文本</td><td>换行被压成空格（不依赖下游正确处理多行 CSV 字段）</td></tr>
 <tr><td>为什么不能直接粘地址栏</td><td>管理员令牌走请求头，浏览器发起的导航带不上头 → 一律 401。导出必须从页面按钮走</td></tr>

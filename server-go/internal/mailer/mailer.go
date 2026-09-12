@@ -28,12 +28,15 @@ var ErrNotConfigured = errors.New("SMTP_NOT_CONFIGURED")
 // 把它记进一个管理员接口返回的结构里，等于给任何拿到管理令牌（或任何能读到
 // 这个响应的中间环节）的人一条「最近这个邮箱的验证码是多少」的旁路。
 // 所以只记一个**类别**（login_code / manual），正文与主题一个字都不留。
+// （发信记录那张表里的 subject 是一个**不含验证码**的常量，见 httpapi 的
+// loginCodeLogSubject —— 两处的红线是同一条：验证码本体不落任何地方。）
 type SendStatus struct {
 	At   time.Time
 	OK   bool
 	Kind string // login_code | manual
-	// To 是**打码后**的收件地址（a***@example.com）。后台只需要知道
-	// 「刚才那封发给谁了」，不需要完整地址，也不该把用户邮箱摊在面板上。
+	// To 是**完整**收件地址（2026-09-12 起不再打码）。这个结构只出现在
+	// 管理员接口的出参里，而「刚才那封到底发给谁了」必须能和用户报的地址对上 ——
+	// a***@qq.com 对不上任何人。
 	To string
 	// Error 是失败原因，已过 logx.Redact 并按字符截断 300。
 	Error string
@@ -77,30 +80,13 @@ func (m *Mailer) LastSend() (SendStatus, bool) {
 }
 
 func (m *Mailer) record(to, kind string, err error) {
-	st := SendStatus{At: time.Now().UTC(), OK: err == nil, Kind: kind, To: MaskEmail(to)}
+	st := SendStatus{At: time.Now().UTC(), OK: err == nil, Kind: kind, To: strings.TrimSpace(to)}
 	if err != nil {
 		st.Error = truncRunes(logx.Redact(err.Error()), 300)
 	}
 	m.statusMu.Lock()
 	m.last = &st
 	m.statusMu.Unlock()
-}
-
-// MaskEmail 把收件地址打码成 a***@example.com。空串原样返回。
-//
-// 🔴 域名保留、本地部分只留首字符：后台要能区分「发到 qq.com 失败了」和
-// 「发到 gmail.com 失败了」（这是判断是不是被某个服务商拒收的关键），
-// 但不需要、也不该展示完整的用户邮箱。
-func MaskEmail(to string) string {
-	to = strings.TrimSpace(to)
-	i := strings.LastIndex(to, "@")
-	if i <= 0 {
-		if to == "" {
-			return ""
-		}
-		return "***"
-	}
-	return to[:1] + "***" + to[i:]
 }
 
 // truncRunes 按**字符**截断（不是字节）：SMTP 服务商的错误文本常含中文，

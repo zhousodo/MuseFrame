@@ -48,7 +48,8 @@ func (a *App) hAdminDBTables(c *Ctx) (any, error) {
 // hAdminDBTable 浏览单表。
 //
 // 🔴 安全问题 2 的修复面：白名单之外的表（server_secrets）一律 404；
-// 白名单内的表逐单元格过显式的列级脱敏清单。
+// 白名单内的表逐单元格过显式的列级脱敏清单（2026-09-12 起那张清单只挡凭据与密钥，
+// 邮箱 / 交易号 / 设备与 IP 哈希一律完整 —— 见 store.redactColumns）。
 func (a *App) hAdminDBTable(c *Ctx) (any, error) {
 	if err := a.requireAdmin(c); err != nil {
 		return nil, err

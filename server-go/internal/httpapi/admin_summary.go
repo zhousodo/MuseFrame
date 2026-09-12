@@ -102,7 +102,8 @@ type AdminConfigResult struct {
 //
 // 🔴 这一块是**纯只读遥测**：没有任何字段会被写回，也没有任何密钥值。
 //
-//	SMTP 口令只给「已配置」布尔，收件地址打码，错误文本过 logx.Redact。
+//	SMTP 口令只给「已配置」布尔，错误文本过 logx.Redact；收件地址完整
+//	（管理员要把它和用户报的地址对上，见 mailer.SendStatus）。
 type RuntimeSummary struct {
 	// Version 是构建版本（= 镜像 tag 里的 gitsha）。
 	Version       string            `json:"version"`

@@ -291,13 +291,21 @@ func derefStr(s *string) string {
 // 🔴 落库失败不能让发信这件事失败：验证码已经发出去了（或者已经失败了），
 // 把一条记录写不进去变成 500 会让用户收到了码却看到一个错误页。
 // 只记一行 warn。
-func (a *App) recordEmailSend(ctx context.Context, kind, to string, sendErr error) {
+//
+// 🔴 to 是**完整收件地址**（2026-09-12 起）：这张表回答的是「用户说他没收到
+// 验证码」，而打码之后客服没法确认这一行记的就是他报的那个地址。
+//
+// 🔴 subject 由调用方给，而且必须是一个**不含验证码**的主题：
+// 验证码信的真实主题以明文验证码开头（mailer.loginCodeBody），
+// 把它落库等于给任何能读到这张表的人一条「最近这个邮箱的码是多少」的旁路。
+// 见 loginCodeLogSubject。
+func (a *App) recordEmailSend(ctx context.Context, kind, to, subject string, sendErr error) {
 	errText := ""
 	if sendErr != nil {
 		errText = truncateRunes(sendErr.Error(), 300)
 	}
 	if err := store.InsertEmailSend(ctx, a.st.Q(), a.newID(), kind,
-		store.MaskEmail(to), sendErr == nil, errText, a.now()); err != nil {
+		to, subject, sendErr == nil, errText, a.now()); err != nil {
 		a.lg.Warn("email: 发送记录落库失败（邮件本身已处理）", map[string]any{
 			"kind": kind, "error": err.Error(),
 		})

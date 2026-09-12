@@ -314,7 +314,9 @@ func TestAdminHTMLHasNoFosterParentedLoadingText(t *testing.T) {
 	}{
 		{"recentJobs", "6"}, {"jobs", "11"}, {"purchases", "9"}, {"feedback", "9"},
 		{"usersTable", "10"}, {"assetsTable", "10"}, {"stylesRank", "9"},
-		{"healthTable", "7"}, {"emailSends", "5"}, {"emailCodes", "5"},
+		// emailSends 2026-09-12 起多一列「主题」（6 列）；画面分析是这一轮新增的表。
+		{"healthTable", "7"}, {"emailSends", "6"}, {"emailCodes", "5"},
+		{"photoAnalyses", "9"},
 	} {
 		ph := `<table id="` + want.id + `"><tbody><tr><td colspan="` + want.cols + `" class="loading">加载中…</td></tr></tbody></table>`
 		if !strings.Contains(code, ph) {
@@ -612,6 +614,72 @@ func TestAdminHTMLShowsNoTokenFragment(t *testing.T) {
 	// 那是一个会被客服直接转述给用户的错误答案。
 	if !strings.Contains(code, "if (!('expiresAt' in l)) return") {
 		t.Error("额度到期必须区分「没有到期时间」与「后端不回这个字段」")
+	}
+}
+
+// 🔴 2026-09-12 第七轮：页面上不许再有「打码 / 只给前 8 位」这类自我截断。
+//
+// 这是一个只有管理员令牌打得开的自家后台，客服要拿邮箱联系用户、拿完整 id
+// 粘进查询台和工单、拿 IP 判断是不是同一个人在刷。此前页面把这些都截了 ——
+// 代价不是更安全，而是有人改去 SSH 上 psql（那条路上什么都看得到）。
+func TestAdminHTMLShowsFullUserInfo(t *testing.T) {
+	code := adminCode(t)
+
+	// 用户 id 不许在**数据**层面被截断。uid.slice(0,8) 的后果是连复制按钮
+	// 复制出来的也只有 8 位（窄列的视觉省略号由 .idc code 的 CSS 负责，那是排版）。
+	if strings.Contains(code, "uid.slice(0,8)") || strings.Contains(code, "uid.slice(0, 8)") {
+		t.Error("userCell 又把用户 id 截成了 8 位")
+	}
+	if !strings.Contains(code, `<code>${escapeHtml(uid)}</code>`) {
+		t.Error("userCell 必须渲染完整用户 id")
+	}
+	// 页面文案不许再宣称打码 / 只给前 8 位。
+	for _, bad := range []string{"邮箱已打码", "邮箱(已打码)", "前 8 位即可", "只有前 8 位"} {
+		if strings.Contains(code, bad) {
+			t.Errorf("页面上仍写着 %q，而后端已经完整返回了", bad)
+		}
+	}
+	// 用户详情：完整邮箱、登录身份、免费额度发放的明文 IP。
+	for _, want := range []string{
+		"u.email ? escapeHtml(u.email)", "r.identities", "r.freeGrants",
+		"x.subject", "客户端 IP",
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("用户详情缺少 %q", want)
+		}
+	}
+	// 发信记录要显示主题（验证码信记的是不含码的常量，由后端保证）。
+	if !strings.Contains(code, "txt(x.subject,") {
+		t.Error("发信记录没有显示主题")
+	}
+}
+
+// 第七轮的三块只读视图必须都有入口：任务详情（全部候选）、画面分析、风格 spec。
+// 只加后端接口不加入口，等于这三块数据继续只能从数据库浏览器里翻。
+func TestAdminHTMLHasReadOnlyViewsForCandidatesAnalysesAndSpec(t *testing.T) {
+	code := adminCode(t)
+	for _, want := range []string{
+		// 任务详情
+		"async function openJobDetail(jobId){", "data-jobdetail=", "/v1/admin/job-detail?jobId=",
+		"全部候选", "c.qualityPassed", "r.sourceAnalysis",
+		// 画面分析
+		"async function loadPhotoAnalyses(){", "/v1/admin/photo-analyses", `id="photoAnalyses"`,
+		"a.subjectType", "a.personCount", "function scoreCell(v){", "function listCell(arr, emptyWord){",
+		// 风格版本与 spec
+		"async function openStyleVersions(styleId){", "/v1/admin/style-versions?styleId=",
+		"data-style-spec=", "v.spec",
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("缺少第七轮只读视图的一环：%s", want)
+		}
+	}
+	// spec 是一大段 JSON，必须自己滚 —— 直接铺开会把抽屉撑破。
+	if !strings.Contains(code, "pre.spec{") {
+		t.Error("spec 块缺少等宽 + 可滚动的样式")
+	}
+	// 🔴 spec 只读：风格抽屉里不许出现任何提交 spec 的写入口。
+	if strings.Contains(code, "spec:") || strings.Contains(code, "method:'PUT' }") {
+		t.Error("spec 必须只读 —— 改一个字就该是一个新版本")
 	}
 }
 

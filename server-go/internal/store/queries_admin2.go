@@ -57,7 +57,7 @@ type AdminPurchaseRow struct {
 // ListAdminPurchases 订单列表，ORDER BY purchased_at DESC LIMIT 100（硬编码）。
 func ListAdminPurchases(ctx context.Context, q Queryer) ([]AdminPurchaseRow, error) {
 	rows, err := q.Query(ctx, `
-		SELECT pu.amount_minor, pu.currency, pu.purchased_at, pu.status, p.display_name, substr(pu.user_id,1,8),
+		SELECT pu.amount_minor, pu.currency, pu.purchased_at, pu.status, p.display_name, pu.user_id,
 		       (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=pu.user_id AND ai.email_normalized IS NOT NULL LIMIT 1)
 		FROM purchases pu JOIN products p ON p.id=pu.product_id
 		ORDER BY pu.purchased_at DESC, pu.id ASC LIMIT 100`)
@@ -78,7 +78,12 @@ func ListAdminPurchases(ctx context.Context, q Queryer) ([]AdminPurchaseRow, err
 	return out, rows.Err()
 }
 
-// AdminUserRow 是 GET /v1/admin/users 的一行。id 只回前 8 位是脱敏契约。
+// AdminUserRow 是 GET /v1/admin/users 的一行。
+//
+// 🔴 2026-09-12 第七轮：userId 与 id 现在都是**完整 id**（此前 id 只回前 8 位）。
+// 这是一个只有管理员令牌打得开的自家后台：客服要把 id 粘进查询台、粘进工单，
+// 而「只给前 8 位」的实际后果是每个人都得先点进详情页再复制一次。
+// 两个字段都保留是为了旧页面（先于这一版的 admin.html）不至于拿到空列。
 type AdminUserRow struct {
 	UserID      string  `json:"userId"`
 	ID          string  `json:"id"`
@@ -99,7 +104,7 @@ type AdminUserRow struct {
 // 🔴 LIKE 必须带 ESCAPE 转义：漏掉就是 SQL 通配注入（一个 % 能把全表拉出来）。
 func ListAdminUsers(ctx context.Context, q Queryer, limit int, search string, tr TimeRange) ([]AdminUserRow, error) {
 	base := `
-		SELECT u.id, substr(u.id,1,8), u.display_name, u.is_guest, u.status, u.created_at,
+		SELECT u.id, u.id, u.display_name, u.is_guest, u.status, u.created_at,
 		       (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=u.id AND ai.email_normalized IS NOT NULL LIMIT 1),
 		       (SELECT string_agg(DISTINCT ai.provider, ',') FROM auth_identities ai WHERE ai.user_id=u.id),
 		       (SELECT COALESCE(SUM(l.units),0) FROM credit_ledger l WHERE l.user_id=u.id),

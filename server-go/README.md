@@ -112,7 +112,9 @@ internal/store          PostgreSQL 持久层 + 管理后台只读数据浏览
 internal/worker         生成队列
 migrations/             001_init.sql（24 表 / 58 索引）、002_grants.sql（角色授权）、
                         003_feedback_handled.sql（反馈「已处理」两列 + 部分索引）、
-                        004_aigc_label.sql（assets.aigc_label 一列 + 未标识成品部分索引）
+                        004_aigc_label.sql（assets.aigc_label 一列 + 未标识成品部分索引）、
+                        005_free_grant_ip.sql（free_grants.ip 明文客户端地址，可空、幂等、
+                        加一列对正在跑的旧镜像完全透明，可在发版前单独执行）
 deploy/                 Dockerfile、docker-compose.yml、project.env.example
 ```
 
@@ -179,17 +181,24 @@ Go 版改成**表白名单 + 显式列级脱敏清单**：
 - 时间列统一归一成 UTC ISO-8601 带 `Z`（pgx 扫出来的 `time.Time` 默认按**进程本地时区**
   序列化成 `+08:00`，这是重写里新引入的坑，已被测试钉死）
 
+🔴 **2026-09-12 第七轮：清单收窄到只挡凭据与密钥。**
+这是一个只有管理员令牌打得开的自家后台，所以**用户资料一律完整显示（管理员）**——
+邮箱、交易号、设备与 IP 哈希、幂等键此前都被打码，而那样做的实际代价不是「更安全」：
+客服照样要联系用户、照样要对账，于是真实发生的事是有人改去 SSH 上 `psql`
+（那条路上什么都看得到，还没有审计）。
+
 | 表 | 列 | 处理 |
 |---|---|---|
 | `server_secrets` | 整表 | 不在白名单，404 |
-| `sessions` | `token` / `device_id` | 前 6 位 + 省略号 / 整体掩码 |
-| `auth_identities` | `email_normalized` / `provider_subject` | 邮箱掩码 / 整体掩码 |
-| `email_codes` | `code_hash` | 整体掩码 |
-| `purchases` | `external_transaction_id` | 整体掩码 |
-| `idempotency_records` | `response_body` / `request_hash` | 整体掩码 |
-| `free_grants` | `device_hash` / `ip_hash` | 整体掩码 |
-| `manual_grants` | `idempotency_key` | 整体掩码 |
+| `sessions` | `token` | 前 6 位 + 省略号（令牌就是凭据本身） |
+| `email_codes` | `code_hash` | 整体掩码（一次性验证码的哈希 = 一个完整凭据） |
+| `idempotency_records` | `response_body` / `request_hash` | 整体掩码（响应体里嵌着刚签发的会话令牌） |
 | `app_config` | `value` | 该行 key 属于密钥项时 `••••(secret)` |
+| `auth_identities` | `email_normalized` / `provider_subject` | **完整显示（管理员）** |
+| `purchases` | `external_transaction_id` | **完整显示（管理员）**——拿它去商店后台对账 |
+| `free_grants` | `device_hash` / `ip_hash` / `ip` | **完整显示（管理员）**，`ip` 是 005 迁移新增的明文列 |
+| `sessions` | `device_id` | **完整显示（管理员）** |
+| `manual_grants` | `idempotency_key` | **完整显示（管理员）** |
 
 ### 3. 额度四道闸与消费侧 10 步
 
@@ -211,6 +220,7 @@ Go 版改成**表白名单 + 显式列级脱敏清单**：
 | B-7 | `POST /v1/candidates/{id}/export` 的两个写副作用放进**同一事务** | Node 版分开写；出参不变，原子性更强 | 否 |
 | B-8 | `?limit` 负数被夹到 1 | Node 版 `Math.min(200, -5) = -5` → SQL `LIMIT -5` = 无限制 | 否（修的是 bug） |
 | B-9 | `MUSEFRAME_WEB_DIR` 留空时非 `/v1/*` 一律 404 | 边缘代理托管静态资源时不该由后端返回软 404 的 200 HTML | 否 |
+| B-10 | 管理接口与 CSV 导出**完整显示**邮箱 / 用户 id / 交易号 / IP（2026-09-12 第七轮） | 自家后台、管理员令牌保护。打码的代价是客服改去 SSH 查库 | 是（已拍板） |
 
 **实现差异（出参应当等价，但机制不同）**：
 
@@ -283,19 +293,22 @@ Go 版改成**表白名单 + 显式列级脱敏清单**：
 | `GET /v1/admin/purchases` | 购买列表（平台 / 交易号 / 入账额度）。`?status=`、`?platform=` |
 | `POST /v1/admin/purchases/{id}/reverify` | 补发漏入账的额度（幂等）。只对 `verified` 生效 |
 | `GET /v1/admin/users` | 用户列表。`?q=`（邮箱 / 昵称 / id，按字符截到 120） |
-| `GET /v1/admin/user-detail` | **单用户纵向详情**。`?userId=`（8 位前缀即可；撞前缀回 409 `AMBIGUOUS`） |
+| `GET /v1/admin/user-detail` | **单用户纵向详情**（完整邮箱 + 登录身份 + 免费额度发放的明文 IP）。`?userId=`（完整 id 或任意长度前缀；撞前缀回 409 `AMBIGUOUS`） |
 | `POST /v1/admin/users/grant` | 手动发额度 |
 | `POST /v1/admin/users/{id}/status` | 禁用 / 启用 |
 | `GET /v1/admin/user-facts` | 状态分布 + 禁用语义说明 |
 | `GET /v1/admin/events` | **埋点**。`?days=`（≤90）、`?name=`（只筛样本）、`?limit=` |
 | `GET /v1/admin/assets` | **资产**。`?kind=`、`?status=`、`?userId=`、`?limit=` |
-| `GET /v1/admin/email-log` | **发信记录 + 验证码签发台账**（地址打码，不回哈希） |
+| `GET /v1/admin/email-log` | **发信记录 + 验证码签发台账**（完整地址 + 主题；验证码本体与哈希一个字节都不回） |
 | `GET /v1/admin/api-health` | **接口健康**。`?hours=`（≤24） |
 | `GET /v1/admin/export/{kind}.csv` | CSV 导出，`kind` ∈ users / jobs / purchases / feedback / events / assets |
 | `GET /v1/admin/img-token` | 短时图片令牌（管理员令牌不进 URL） |
 | `GET /v1/admin/assets/{id}/file` | 取资产文件（接受图片令牌或管理员令牌） |
 | `GET /v1/admin/stats/daily`、`/stats/styles` | 按天趋势、风格排行 |
-| `GET /v1/admin/db/tables`、`/db/table/{name}`、`POST /db/query` | 只读数据浏览（脱敏见上文） |
+| `GET /v1/admin/db/tables`、`/db/table/{name}`、`POST /db/query` | 只读数据浏览（列级清单见上文：只挡凭据与密钥） |
+| `GET /v1/admin/job-detail` | **任务详情**。`?jobId=`；列出**全部候选**（按 `created_at` 升序）+ 源图画面分析 |
+| `GET /v1/admin/photo-analyses` | **画面分析**（photo_analyses）。`?status=`、`?userId=`、`?assetId=`、`?limit=` |
+| `GET /v1/admin/style-versions` | **风格版本与完整 spec**（只读）。`?styleId=`、`?limit=` |
 | `GET`/`PUT /v1/admin/config` | 运行时热键（密钥只读） |
 | `GET /v1/admin/products-admin`、`PATCH .../{key}` | 商品与价格 |
 | `GET /v1/admin/styles-admin`、`PATCH .../{id}`、`POST .../{id}/status` | 风格完整编辑 |
@@ -339,9 +352,11 @@ P95 从固定延迟直方图算（5/10/25/50/100/250/500/1000/2500/5000/10000ms�
 
 ### CSV 导出
 
-导出一律**脱敏**（邮箱打码、id 只给前 8 位），脱敏点只有一处：`store.CSVMaskEmail` / `store.CSVText`。
-理由：导出文件会离开这台机器（下载目录、微信、某个表格），页面上显示完整邮箱还能靠
-「只有持令牌的人打得开」兜住，一个躺在下载目录里的 CSV 兜不住。
+导出**完整显示（管理员）**：邮箱、用户 id、交易号一律完整，和页面同一个口径（同一个 `store` 函数）。
+🔴 这一条在 2026-09-12 第七轮反过来了（此前是「一律打码 + id 只给前 8 位」）：
+导出的全部用处就是拿它去对账、群发、挨个联系用户，打了码一件也做不了——
+实际发生的事是有人绕开导出直接去抄数据库。凭据（会话令牌 / 验证码哈希 / 密钥）
+从来不在这六类数据的任何一列里，这一点靠「只导出这些列」保证，不靠打码。
 自由文本里的换行压成空格（不依赖下游正确处理多行 CSV 字段），文件带 UTF-8 BOM（否则中文列在 Excel 里全是乱码）。
 响应头 `X-Row-Count` 给出数据行数，便于不解析 CSV 就核对。
 前端走 **fetch + blob**，不能用 `<a href download>` / `window.open`——
@@ -386,6 +401,8 @@ App 读 `GET /v1/generation-jobs/{id}` 的 `candidate.aigcLabeled`，在结果�
 # 1. 建 schema（一次性 job，用 owner 角色；运行角色没有 DDL 权）
 psql "$OWNER_DSN" -v ON_ERROR_STOP=1 -f migrations/001_init.sql
 psql "$OWNER_DSN" -v ON_ERROR_STOP=1 -f migrations/002_grants.sql
+# 增量迁移（全部幂等，可重复执行；都只加可空列/索引，旧镜像照常跑）
+for f in migrations/00[345]_*.sql; do psql "$OWNER_DSN" -v ON_ERROR_STOP=1 -f "$f"; done
 # 自检：24 张表 / 58 个索引 / 2 个 CHECK / 11 个 UNIQUE / 24 个 PK
 psql "$OWNER_DSN" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE';"
 psql "$OWNER_DSN" -tAc "SELECT count(*) FROM pg_indexes WHERE schemaname='public';"

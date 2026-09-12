@@ -149,7 +149,7 @@ func ListAdminJobs(ctx context.Context, q Queryer, limit int) ([]AdminJobRow, er
 	rows, err := q.Query(ctx, `
 		SELECT j.id, j.status, j.stage, j.error_code, j.attempt_count, j.cost_minor, j.created_at,
 		       `+adminJobSecondsExpr+`,
-		       substr(j.user_id,1,8),
+		       j.user_id,
 		       (SELECT ai.email_normalized FROM auth_identities ai WHERE ai.user_id=j.user_id AND ai.email_normalized IS NOT NULL LIMIT 1),
 		       s.public_name, j.source_asset_id,
 		       (SELECT c.asset_id FROM generation_candidates c WHERE c.job_id=j.id ORDER BY c.candidate_index ASC, c.created_at ASC LIMIT 1)
