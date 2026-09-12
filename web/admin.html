@@ -166,7 +166,7 @@
       <label style="flex:0 0 150px"><span class="muted" style="font-size:11px">时间窗</span>
         <select id="jobSince"><option value="">不限</option><option value="1">近 1 小时</option><option value="24">近 24 小时</option><option value="168">近 7 天</option><option value="720">近 30 天</option></select></label>
       <label style="flex:0 0 180px"><span class="muted" style="font-size:11px">用户 ID（前 8 位即可）</span>
-        <input id="jobUser" placeholder="可空" autocomplete="off"></label>
+        <input id="jobUser" placeholder="可空，回车或离开输入框生效" autocomplete="off"></label>
       <button class="small ghost" id="jobsExport">导出 CSV</button>
     </div>
     <div class="wrap"><table id="jobs"></table></div>
@@ -207,7 +207,7 @@
 
     <div class="bar" style="margin-top:22px">
       <h2 style="margin:0">用户列表</h2>
-      <input id="userSearch" placeholder="按邮箱 / 显示名 / ID 搜索，回车" style="max-width:320px;padding:8px 10px;font-size:13px" onkeydown="if(event.key==='Enter')loadUsers()">
+      <input id="userSearch" placeholder="按邮箱 / 显示名 / ID 搜索，回车或离开输入框" style="max-width:320px;padding:8px 10px;font-size:13px">
       <button class="small ghost" id="usersExport">导出 CSV</button>
     </div>
     <p class="muted viewnote" id="usersNote"></p>
@@ -228,7 +228,7 @@
         <button class="small ghost" data-days="90">90 天</button>
       </div>
       <label style="flex:0 0 220px"><span class="muted" style="font-size:11px">只看某个事件的原始样本</span>
-        <input id="eventNameFilter" placeholder="如 generation_failed，回车" autocomplete="off"></label>
+        <input id="eventNameFilter" placeholder="如 generation_failed，回车或离开输入框" autocomplete="off"></label>
       <button class="small ghost" id="eventsExport">导出 CSV</button>
     </div>
     <h2>按事件名</h2>
@@ -249,23 +249,28 @@
       <label style="flex:0 0 150px"><span class="muted" style="font-size:11px">状态</span>
         <select id="assetStatus"><option value="">全部</option><option value="pending">pending</option><option value="ready">ready</option><option value="quarantined">quarantined</option><option value="deleted">deleted</option></select></label>
       <label style="flex:0 0 200px"><span class="muted" style="font-size:11px">用户 ID（前 8 位即可）</span>
-        <input id="assetUser" placeholder="可空" autocomplete="off"></label>
+        <input id="assetUser" placeholder="可空，回车或离开输入框生效" autocomplete="off"></label>
       <button class="small ghost" id="assetsExport">导出 CSV</button>
     </div>
     <div id="assetTotals" class="rtgrid" style="margin-top:10px"></div>
-    <div class="wrap" style="margin-top:10px"><table id="assetsTable">加载中…</table></div>
+    <!-- 🔴 占位文字必须包在 <tbody><tr><td> 里，不能直接写在 <table> 和 </table> 之间。
+         HTML 解析器对 table 里的裸文本做 foster parenting：把它挪到 <table> **前面**，
+         于是它成了 .wrap 的子节点 —— 渲染函数只改 table.innerHTML，永远碰不到它，
+         「加载中…」就永久钉在表头上方。包进 tbody 之后它是表的子节点，
+         第一次渲染的 innerHTML 赋值会把它整个换掉。 -->
+    <div class="wrap" style="margin-top:10px"><table id="assetsTable"><tbody><tr><td colspan="9" class="muted">加载中…</td></tr></tbody></table></div>
   </section>
 
   <section id="tab-health" class="tabpane" style="display:none">
     <h2 style="margin-top:20px">接口健康</h2>
     <p class="muted viewnote" id="healthNote">加载中…</p>
     <div id="healthCards" class="cards"></div>
-    <div class="wrap" style="margin-top:10px"><table id="healthTable">加载中…</table></div>
+    <div class="wrap" style="margin-top:10px"><table id="healthTable"><tbody><tr><td colspan="7" class="muted">加载中…</td></tr></tbody></table></div>
     <h2>邮件发送记录</h2>
     <p class="muted viewnote" id="emailLogNote">加载中…</p>
-    <div class="wrap"><table id="emailSends">加载中…</table></div>
+    <div class="wrap"><table id="emailSends"><tbody><tr><td colspan="5" class="muted">加载中…</td></tr></tbody></table></div>
     <h3 style="margin:16px 0 6px;font-size:14px">验证码签发台账</h3>
-    <div class="wrap"><table id="emailCodes">加载中…</table></div>
+    <div class="wrap"><table id="emailCodes"><tbody><tr><td colspan="5" class="muted">加载中…</td></tr></tbody></table></div>
   </section>
 
   <section id="tab-ops" class="tabpane" style="display:none">
@@ -669,7 +674,7 @@ async function markFeedback(id, handled, btn){
 
 /* ---------- 用户 ---------- */
 async function loadUsers(){
-  $('usersTable').innerHTML = '加载中…';
+  $('usersTable').innerHTML = '<tbody><tr><td colspan="10" class="muted">加载中…</td></tr></tbody>';
   try {
     const search = ($('userSearch').value || '').trim();
     const r = await api('/v1/admin/users' + (search ? '?q=' + encodeURIComponent(search) : ''));
@@ -1660,12 +1665,37 @@ async function loadConfig(){
   } catch(e) { if (e.status !== 401) { $('configForm').innerHTML = errHtml(e.message); $('runtimePanel').innerHTML = errHtml(e.message); } }
 }
 
+/* ---------- 自由文本筛选框 ----------
+   🔴 只绑 Enter 是不够的：「导出 CSV」读的是输入框的**当前值**，
+   所以「输入了用户 ID 但没按回车就去点导出」会拿到一份和表里不一致的 CSV
+   （表是全量，CSV 被筛过）。change/blur 一起补上，并在导出前强制同步。
+   去重是必需的：Enter 之后浏览器自己还会补一个 change，两个都绑就发两次请求。 */
+const filterApplies = [];
+function bindFilterInput(id, reload){
+  const el = $(id);
+  let applied = (el.value || '').trim();
+  const apply = () => {
+    const v = (el.value || '').trim();
+    if (v === applied) return false;
+    applied = v;
+    reload();
+    return true;
+  };
+  filterApplies.push(apply);
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') apply(); });
+  el.addEventListener('change', apply);
+  el.addEventListener('blur', apply);
+}
+// 导出前把所有还没生效的输入框应用一遍，保证 CSV 的口径就是表里那份口径。
+function syncFilterInputs(){ filterApplies.forEach(f => f()); }
+
 /* ---------- CSV 导出 ----------
    🔴 不能用 <a href download> 或 window.open：管理员令牌走请求头，
    浏览器发起的导航带不上头，那样的链接一律回 401。所以走 fetch 拿 blob
    再用一个临时的 object URL 触发下载 —— 令牌始终留在头里、不进 URL。 */
 async function exportCsv(kind, params){
-  const qs = new URLSearchParams(params || {});
+  syncFilterInputs();
+  const qs = new URLSearchParams((typeof params === 'function' ? params() : params) || {});
   for (const [k, v] of [...qs]) if (v === '' || v == null) qs.delete(k);
   const url = `/v1/admin/export/${encodeURIComponent(kind)}.csv` + (qs.toString() ? '?' + qs : '');
   try {
@@ -1841,7 +1871,11 @@ async function loadHealth(){
         <td>${x.attempts}</td><td>${x.issueCount}</td></tr>`).join('')
         : '<tr><td colspan=5 class=muted>暂无签发记录</td></tr>');
   } catch(e) {
-    if (e.status !== 401) $('emailSends').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
+    if (e.status !== 401) {
+      // 两张表都要落错误：只改一张，另一张会永久停在「加载中…」。
+      $('emailSends').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
+      $('emailCodes').innerHTML = `<tr><td>${errHtml(e.message)}</td></tr>`;
+    }
   }
 }
 
@@ -1942,20 +1976,24 @@ function bindStaticEvents(){
   $('sendTestEmail').addEventListener('click', sendTestEmail);
   document.querySelectorAll('#eventDaysBtns [data-days]').forEach(btn =>
     btn.addEventListener('click', () => { eventDays = Number(btn.dataset.days); loadEvents(); }));
-  $('eventNameFilter').addEventListener('keydown', e => { if (e.key === 'Enter') loadEvents(); });
+  bindFilterInput('eventNameFilter', loadEvents);
+  // 🔴 导出的筛选参数必须**在 syncFilterInputs() 之后**求值，所以这里传一个
+  // 惰性的取值函数 —— 写成 exportCsv('events', {...}) 的话，大括号里的
+  // $('…').value 在 click 那一刻就已经求完，同步与否都改不了它。
   $('eventsExport').addEventListener('click', () =>
-    exportCsv('events', { days: eventDays, name: ($('eventNameFilter').value||'').trim() }));
+    exportCsv('events', () => ({ days: eventDays, name: ($('eventNameFilter').value||'').trim() })));
   ['assetKind','assetStatus'].forEach(id => $(id).addEventListener('change', loadAssets));
-  $('assetUser').addEventListener('keydown', e => { if (e.key === 'Enter') loadAssets(); });
-  $('assetsExport').addEventListener('click', () => exportCsv('assets', assetFilterParams()));
+  bindFilterInput('assetUser', loadAssets);
+  $('assetsExport').addEventListener('click', () => exportCsv('assets', assetFilterParams));
   ['jobStatus','jobSince'].forEach(id => $(id).addEventListener('change', loadJobsTable));
-  $('jobUser').addEventListener('keydown', e => { if (e.key === 'Enter') loadJobsTable(); });
-  $('jobsExport').addEventListener('click', () => exportCsv('jobs', jobFilterParams()));
+  bindFilterInput('jobUser', loadJobsTable);
+  $('jobsExport').addEventListener('click', () => exportCsv('jobs', jobFilterParams));
   ['purchaseStatus','purchasePlatform'].forEach(id => $(id).addEventListener('change', loadPurchasesTable));
-  $('purchasesExport').addEventListener('click', () => exportCsv('purchases', purchaseFilterParams()));
+  $('purchasesExport').addEventListener('click', () => exportCsv('purchases', purchaseFilterParams));
   ['fbRating','fbHandled'].forEach(id => $(id).addEventListener('change', loadFeedbackTable));
-  $('feedbackExport').addEventListener('click', () => exportCsv('feedback', fbFilterParams()));
-  $('usersExport').addEventListener('click', () => exportCsv('users', { q: ($('userSearch').value||'').trim() }));
+  $('feedbackExport').addEventListener('click', () => exportCsv('feedback', fbFilterParams));
+  bindFilterInput('userSearch', loadUsers);
+  $('usersExport').addEventListener('click', () => exportCsv('users', () => ({ q: ($('userSearch').value||'').trim() })));
 }
 
 async function boot(){
