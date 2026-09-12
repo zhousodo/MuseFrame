@@ -80,7 +80,8 @@
 <header class="doc">
   <h1>留影 MuseFrame · 运营后台使用指南</h1>
   <p class="sub">
-    适用版本：生产镜像 <code>20260912T095922Z-g5e30737e</code> ·
+    适用版本：生产镜像 <code>museframe-api:20260912T145715Z-gbc3c8f0c</code>
+    （2026-09-12 发版，含<b>左侧导航改版</b>、<b>去掩码</b>、以及<b>任务详情 / 画面分析 / 风格版本</b>三条新接口）·
     后台地址 <code>https://museframe.lenscript.cn/admin.html</code><br>
     本文内容逐条取自 <code>server-go/</code> 源码、<code>web/admin.html</code>、<code>server-go/README.md</code>、
     平台交接文档《交接-服务器统一重构-20260912》与生产服务器只读核对。<br>
@@ -101,7 +102,7 @@
     </li>
     <li><a href="#s2">首页导航与每个视图</a>
       <ol>
-        <li><a href="#s2-1">九个标签页</a></li>
+        <li><a href="#s2-1">左侧导航：7 个分组 / 15 个视图</a></li>
         <li><a href="#s2-2">每个视图一句说明</a></li>
         <li><a href="#s2-3">时区与显示口径</a></li>
       </ol>
@@ -118,7 +119,7 @@
         <li><a href="#s3-8">测试邮件</a></li>
         <li><a href="#s3-9">导出 CSV</a></li>
         <li><a href="#s3-10">接口健康与运行状态怎么读</a></li>
-        <li><a href="#s3-11">AIGC 标识开关（本晚新增，尚未发版）</a></li>
+        <li><a href="#s3-11">AIGC 标识开关（已发版·线上可见）</a></li>
       </ol>
     </li>
     <li><a href="#s4">配置项字典</a>
@@ -150,7 +151,7 @@
 <tr><td>后台地址</td><td><code>https://museframe.lenscript.cn/admin.html</code></td><td>公网经 Cloudflare → OpenResty 反代到容器</td></tr>
 <tr><td>页面来源</td><td>宿主机静态文件 <code>/srv/platform/apps/museframe/data/web/admin.html</code>（只读挂进容器）</td><td><b>后台页面不在镜像里</b>，换页面与换后端是两件事（见 <a href="#s6">第 6 节</a>）</td></tr>
 <tr><td>容器监听</td><td><code>127.0.0.1:18787</code>（容器 <code>museframe-api-go</code>）</td><td>不对公网直接开放</td></tr>
-<tr><td>管理接口前缀</td><td><code>/v1/admin/…</code>，共 <b>34 条</b></td><td>全部要求管理员令牌</td></tr>
+<tr><td>管理接口前缀</td><td><code>/v1/admin/…</code>，共 <b>37 条</b></td><td>全部要求管理员令牌（唯一例外见下）</td></tr>
 </tbody></table></div>
 
 <h3 id="s1-2">1.2 凭据在哪里<a class="self" href="#s1-2">#</a></h3>
@@ -184,21 +185,44 @@
 <!-- ===================== 2 导航 ===================== -->
 <h2 id="s2">2 · 首页导航与每个视图<a class="self" href="#s2">#</a></h2>
 
-<h3 id="s2-1">2.1 九个标签页<a class="self" href="#s2-1">#</a></h3>
-<p>顶部是一条标签栏，URL 里的 <code>#hash</code> 就是当前标签（可直接收藏，例如 <code>admin.html#config</code>）。右上角「刷新」只重载当前标签。</p>
+<h3 id="s2-1">2.1 左侧导航：7 个分组 / 15 个视图<a class="self" href="#s2-1">#</a></h3>
+<p><b>2026-09-12 改版：顶部标签栏已换成左侧分组导航</b>（侧栏宽 220px，<code>≤768px</code> 收成抽屉 + 遮罩）。
+URL 里的 <code>#hash</code> 仍然是当前视图名（可直接收藏，例如 <code>admin.html#config</code>），右上角「刷新」仍只重载当前视图。
+视图数从 9 增加到 <b>15</b>。唯一真相源是 <code>web/admin.html</code> 里的侧栏标记与 <code>TABS</code> 数组。</p>
 <div class="scroll"><table>
-<thead><tr><th>锚点</th><th>标签</th><th>能写吗</th></tr></thead>
+<thead><tr><th>分组</th><th>锚点</th><th>标签</th><th>能写吗</th></tr></thead>
 <tbody>
-<tr><td><a href="#tab-overview">#tab-overview</a></td><td>概览</td><td>读 + 任务重试 / 购买重验 / 反馈标已处理</td></tr>
-<tr><td><a href="#tab-users">#tab-users</a></td><td>用户</td><td>读 + 手动发额度 + 禁用 / 启用</td></tr>
-<tr><td><a href="#tab-stats">#tab-stats</a></td><td>统计</td><td>只读</td></tr>
-<tr><td><a href="#tab-events">#tab-events</a></td><td>埋点</td><td>只读</td></tr>
-<tr><td><a href="#tab-assets">#tab-assets</a></td><td>资产</td><td>只读</td></tr>
-<tr><td><a href="#tab-health">#tab-health</a></td><td>健康</td><td>只读</td></tr>
-<tr><td><a href="#tab-ops">#tab-ops</a></td><td>运营</td><td>读 + 风格编辑 / 上下架 + 商品与价格编辑</td></tr>
-<tr><td><a href="#tab-db">#tab-db</a></td><td>数据库</td><td><b>只读</b></td></tr>
-<tr><td><a href="#tab-config">#tab-config</a></td><td>配置</td><td>读 + 热改 47 个键 + 发测试邮件</td></tr>
+<tr><td rowspan="2"><b>总览</b></td><td><a href="#tab-overview">#overview</a></td><td>概览</td><td>读 + 任务重试 / 购买重验 / 反馈标已处理</td></tr>
+<tr><td><a href="#tab-stats">#stats</a></td><td>统计趋势</td><td>只读</td></tr>
+<tr><td rowspan="2"><b>用户与订单</b></td><td><a href="#tab-users">#users</a></td><td>用户 <span class="tag">带待办徽章</span></td><td>读 + 手动发额度 + 禁用 / 启用</td></tr>
+<tr><td>#purchases</td><td>购买记录</td><td>读 + <b>重验</b>（仅 <code>verified</code> 的单子）</td></tr>
+<tr><td rowspan="2"><b>生成与资产</b></td><td>#jobs</td><td>生成任务 <span class="tag">带待办徽章</span></td><td>读 + <b>重试</b>（仅 <code>failed</code> / <code>cancelled</code>）</td></tr>
+<tr><td><a href="#tab-assets">#assets</a></td><td>图片资产</td><td><b>只读</b>（含「画面分析」子区块，没有删除/隔离入口）</td></tr>
+<tr><td rowspan="2"><b>内容</b></td><td>#styles</td><td>风格 <span class="tag">带待办徽章</span></td><td>读 + 风格编辑 / 紧急上下架</td></tr>
+<tr><td>#products</td><td>商品与价格</td><td>读 + 商品与价格编辑</td></tr>
+<tr><td rowspan="3"><b>运营</b></td><td>#feedback</td><td>用户反馈 <span class="tag">带待办徽章</span></td><td>读 + 标/取消标「已处理」</td></tr>
+<tr><td><a href="#tab-events">#events</a></td><td>埋点</td><td>只读</td></tr>
+<tr><td>#email</td><td>发信记录</td><td>读 + <b>发测试邮件</b>（子区块）</td></tr>
+<tr><td><b>配置</b></td><td><a href="#tab-config">#config</a></td><td>系统配置 <span class="tag">带待办徽章</span></td><td>读 + 热改 47 个键（「运行状态」是本页顶部的只读子区块）</td></tr>
+<tr><td rowspan="3"><b>系统</b></td><td><a href="#tab-health">#health</a></td><td>接口健康</td><td>只读</td></tr>
+<tr><td>#audit</td><td>操作审计</td><td>只读</td></tr>
+<tr><td><a href="#tab-db">#db</a></td><td>数据库浏览</td><td><b>只读</b></td></tr>
 </tbody></table></div>
+<div class="note"><b>旧书签仍然有效。</b>改版保留了两个别名：<code>#ops</code> → <b>风格</b>（<code>#styles</code>）、
+<code>#db-browser</code> → <b>数据库浏览</b>（<code>#db</code>）。
+注意<b>「运营」这个词的含义变了</b>：旧的 <code>#ops</code> 标签装的是风格 + 商品，
+现在「运营」是一个<b>分组</b>（反馈 / 埋点 / 发信记录），风格与商品移到了<b>「内容」</b>分组下。</div>
+<div class="note"><b>四样东西不是导航项，别在侧栏里找：</b>
+① <b>画面分析</b>（<code>photo_analyses</code>）是<b>图片资产</b>页里的一个子区块，随资产一起加载；
+② <b>发送测试邮件</b>是<b>发信记录</b>页里的子区块；
+③ <b>运行状态</b>（版本 / 启动时间 / 邮件通道）是<b>系统配置</b>页顶部的子区块；
+④ <b>任务详情</b> / <b>用户详情</b> / <b>风格版本</b>是页内<b>弹窗</b>（点表格行打开），不是独立页面。</div>
+<div class="note"><b>三条 2026-09-12 新增的只读接口</b>（就是上面那三个弹窗与画面分析子区块背后的数据源，
+路由总数也因此从 34 变 37）：
+<code>GET /v1/admin/job-detail?jobId=</code>（任务行 + <b>全部</b>候选图，按 <code>created_at</code> 升序 + 来源 <code>photo_analysis</code>）、
+<code>GET /v1/admin/photo-analyses</code>（可按 <code>status</code> / <code>userId</code> / <code>assetId</code> / 时间筛，带 <code>statusCounts</code>）、
+<code>GET /v1/admin/style-versions?styleId=</code>（该风格的<b>全部版本</b>及其完整不可变 <code>spec</code>，纯只读）。
+三条都没有 CSV 出口。</div>
 
 <h3 id="s2-2">2.2 每个视图一句说明<a class="self" href="#s2-2">#</a></h3>
 
@@ -271,7 +295,7 @@
 <h2 id="s3">3 · 日常任务（逐步骤 + 预期结果）<a class="self" href="#s3">#</a></h2>
 
 <h3 id="s3-1">3.1 优惠码 / 注册码：MuseFrame 没有这条路<a class="self" href="#s3-1">#</a></h3>
-<div class="bad"><b>MuseFrame 后端与后台<u>没有</u>注册码 / 优惠码 / 兑换码功能</b>，34 条管理路由里没有任何一条与码有关。不要在面板上找它，也不要答应用户「给你发个码」。</div>
+<div class="bad"><b>MuseFrame 后端与后台<u>没有</u>注册码 / 优惠码 / 兑换码功能</b>，37 条管理路由里没有任何一条与码有关。不要在面板上找它，也不要答应用户「给你发个码」。</div>
 <p>等价的运营动作是<strong>手动发额度</strong>（见 <a href="#s3-2">3.2 C</a>）：它走正规额度账本，可填备注与有效期，并落审计。需要「码」这种离线可发货的形态时，那是掌镜 Zlens 的能力，不是 MuseFrame 的。</p>
 
 <h3 id="s3-2">3.2 账号：查看 / 禁用 / 发额度 / 撤销 / 删号<a class="self" href="#s3-2">#</a></h3>
@@ -505,12 +529,21 @@ sudo nano /srv/platform/apps/museframe/app.env</code></pre></li>
 <p><a href="#tab-overview">概览</a> 与 <a href="#tab-config">配置</a> 两页顶部还各有两条横幅：<b>生成链路</b>（能不能产图，判据是真实上游调用结果而不是「配置齐不齐」）与<b>反白嫖闸</b>（免费额度的 IP / 全站日配额有没有被顶到）。</p>
 <p>支付侧另有几张卡片：Google Play 收据校验是否接通、Apple 收据校验（当前<b>未接通</b>）、加购额度有效期、<b>演示购买开关</b>（生产必须关，开着时卡片变红）、每次生成扣除张数（恒定 1 张）。</p>
 
-<h3 id="s3-11">3.11 AIGC 标识开关 <span class="tag warn" style="border-color:var(--warn);color:var(--warn)">本晚新增 · 尚未发版</span><a class="self" href="#s3-11">#</a></h3>
-<div class="warn"><b>状态（务必先读）</b>：AI 生成内容标识在 <b>2026-09-12 当晚实现并进了 <code>server-go/</code> 仓库</b>，但<b>当前生产镜像 <code>20260912T095922Z-g5e30737e</code> 还不包含它</b>——它随<b>下一次 <code>platformctl deploy museframe</code></b> 才会出现在后台上。<br>
-在那之前：配置页没有「AI 生成内容标识」这一组，资产页没有「AI 标识」列，产出的图上也没有水印。<b>没看到这一组不是故障。</b><br>
-另外它<b>需要一次库迁移</b>（<code>migrations/004_aigc_label.sql</code>，给 <code>assets</code> 加 <code>aigc_label</code> 列，幂等、可重复执行），迁移没跑的话资产页那一列取不到值。</div>
+<h3 id="s3-11">3.11 AIGC 标识开关 <span class="tag hot">已发版 · 线上可见</span><a class="self" href="#s3-11">#</a></h3>
+<div class="ok"><b>状态：已随 <code>20260912T145715Z-gbc3c8f0c</code> 发到生产。</b>
+2026-09-13 服务器侧实测 <code>GET /v1/admin/config</code> 共 <b>59</b> 项，其中 <code>aigc</code> 组 <b>6 个键全在</b>，
+来源均为 <code>default</code>（即还没人在后台改过，走的是内置默认值）：<br>
+<code>aigc_label_enabled=true</code> · <code>aigc_label_text=AI 生成 · 留影</code> ·
+<code>aigc_label_position=bottom-right</code> · <code>aigc_label_opacity=0.85</code> ·
+<code>aigc_label_size_pct=3.2</code> · <code>aigc_content_producer=留影 MuseFrame（lenscript.cn）</code>。<br>
+所以：配置页<b>有</b>「AI 生成内容标识（合规）」这一组，资产页<b>有</b>「AI 标识」列。</div>
+<div class="note"><b>配套的库迁移必须已经跑过</b>：<code>migrations/004_aigc_label.sql</code>
+（给 <code>assets</code> 加 <code>aigc_label</code> 列 + 一个部分索引；幂等、可重复执行、只加可空列，所以对旧镜像透明）。
+迁移没跑的话资产页那一列取不到值 —— 那是<b>库</b>的问题，不是镜像的问题。<br>
+资产页那一列的四种取值：<code>水印+元数据</code>（<code>'visible+meta'</code>）/ <code>仅元数据</code>（<code>'meta'</code>）/
+<code>源图不需标识</code> / <code>未标识</code>（<code>NULL</code>，并注明「历史成品，不回溯」）。</div>
 
-<h4>A. 它做了什么（发版后）</h4>
+<h4>A. 它做了什么</h4>
 <div class="scroll"><table>
 <thead><tr><th>标识</th><th>在哪</th><th>有没有开关</th></tr></thead>
 <tbody>
@@ -519,7 +552,7 @@ sudo nano /srv/platform/apps/museframe/app.env</code></pre></li>
 </tbody></table></div>
 <div class="bad"><b>关掉 <code>aigc_label_enabled</code> 是有法律后果的动作</b>：《人工智能生成合成内容标识办法》（2025-09-01 施行）要求生成服务在产出上加标识。关掉之后新产出的图上不会有任何<b>可见</b>标识（隐式元数据仍然写）。不要为了「图好看一点」去动它。</div>
 
-<h4>B. 改标识样式（发版后）</h4>
+<h4>B. 改标识样式</h4>
 <ol>
   <li>进 <a href="#tab-config">配置</a> → 「AI 生成内容标识（合规）」分组。</li>
   <li>改文案 / 位置 / 不透明度 / 字号 → 保存。
@@ -529,7 +562,7 @@ sudo nano /srv/platform/apps/museframe/app.env</code></pre></li>
 <div class="warn"><b>水印文案有一道会当场拒绝的闸</b>：内嵌字体是 ASCII + GB2312 子集，含子集外字符（生僻字 / 韩文 / emoji）的文案<b>保存时就被拒绝并列出是哪几个字</b>——否则线上水印里那个字会是一片空白，而后台显示「已保存」。文案最多 40 字（超了水印会横穿整张画面）。</div>
 
 <h4>C. 查「哪些成品标了什么」</h4>
-<p>发版后 <a href="#tab-assets">资产</a> 页多一列「AI 标识」，逐行可查，取值三档：</p>
+<p><a href="#tab-assets">图片资产</a> 页有一列「AI 标识」，逐行可查（同一列也在 assets CSV 与任务详情弹窗的候选图表里），取值：</p>
 <div class="scroll"><table>
 <thead><tr><th>值</th><th>含义</th></tr></thead>
 <tbody>
@@ -688,7 +721,7 @@ sudo nano /srv/platform/apps/museframe/app.env</code></pre></li>
 <div class="scroll"><table>
 <thead><tr><th>码</th><th>含义</th><th>典型场景与处置</th></tr></thead>
 <tbody>
-<tr><td><b>401</b></td><td>缺令牌 / 令牌错（<code>AUTH_REQUIRED</code>）</td><td>所有 34 条管理路由无凭据一律 401。页面收到 401 会清掉令牌并弹回登录框。<b>用它也能判断路由存不存在</b>：401 = 路由存在，404 = 没这条路由</td></tr>
+<tr><td><b>401</b></td><td>缺令牌 / 令牌错（<code>AUTH_REQUIRED</code>）</td><td>37 条管理路由里有 36 条无凭据一律 401；唯一例外是 <code>GET /v1/admin/assets/{id}/file</code>，它也接受短时效的 <code>?img_token=</code>（这样管理令牌就不必进 URL）。页面收到 401 会清掉令牌并弹回登录框。<b>用它也能判断路由存不存在</b>：401 = 路由存在，404 = 没这条路由</td></tr>
 <tr><td><b>404</b></td><td>对象不存在，或路径不在路由表里</td><td>Unknown user / job / purchase / style / product / feedback row。也可能是这条记录已被保留期清理</td></tr>
 <tr><td><b>409</b></td><td>冲突，操作已放弃</td><td>① <code>AMBIGUOUS</code>：8 位 id 前缀撞车 → 填完整 id；② 任务状态不允许重试（只有 failed / cancelled 能重试）；③ <code>INSUFFICIENT_ENTITLEMENT</code>：额度不够重试 → 先发额度；④ 幂等键不匹配</td></tr>
 <tr><td><b>413</b></td><td>超出单账号存储上限</td><td>这是 App 侧上传时会遇到的码，判据是 <code>max_user_storage_bytes</code>。用户报「上传失败」先看资产页的该用户合计字节</td></tr>
@@ -775,13 +808,18 @@ sudo /srv/platform/scripts/platformctl logs museframe</code></pre>
 <footer class="doc">
   留影 MuseFrame 运营后台使用指南 · 编写于 2026-09-12 ·
   对应生产镜像 <code>20260912T095922Z-g5e30737e</code><br>
-  核对依据：<code>server-go/internal/httpapi/routes_admin.go</code>（34 条管理路由）、
+  核对依据：<code>server-go/internal/httpapi/routes_admin.go</code>（<b>37</b> 条管理路由）、
+  <code>web/admin.html</code>（侧栏 7 分组 / <code>TABS</code> 15 项 / <code>TAB_ALIASES</code>）、
   <code>server-go/internal/httpapi/admin_{config,ops,actions,grant,visibility}.go</code>（写入口语义与状态码）、
   <code>server-go/internal/cfgstore/cfgstore.go</code>（47 个配置键的类型·env·默认·区间·白名单·分组与 secret 规则）、
   <code>server-go/internal/httpapi/auth.go</code> 与 <code>app.go</code>（<code>X-Admin-Token</code> 恒定时间比对、<code>/v1/admin/</code> 120 次/分钟限流）、
   <code>web/admin.html</code>（9 个标签页、运行状态七卡片、CSV 走 fetch+blob、令牌存 <code>sessionStorage</code>）、
   <code>server-go/README.md</code>、平台文档《交接-服务器统一重构-20260912》与 <code>PROGRESS.md</code>，
-  以及对生产服务器的只读核对（34 条管理路由逐条探测：已注册路由回 401、未注册回 404；<code>app.env</code> 只列键名不读值；compose 的卷与 <code>IMAGE_TAG</code>）。<br>
+  以及对生产服务器的只读核对（管理路由逐条探测：已注册路由回 401、未注册回 404；<code>app.env</code> 只列键名不读值；compose 的卷与 <code>IMAGE_TAG</code>）。<br>
+  <b>2026-09-13 复核</b>：线上运行镜像 <code>museframe-api:20260912T145715Z-gbc3c8f0c</code>；
+  宿主机上那份 <code>admin.html</code>（<code>/srv/platform/apps/museframe/data/web/admin.html</code>）
+  与本仓库 <code>web/admin.html</code> 的 <b>sha256 逐字节一致</b>，所以本文描述的导航就是线上那一份；
+  <code>/v1/admin/overview</code> 无凭据实测回 <b>401</b>。<br>
   AIGC 标识一节依据本晚新增的 <code>server-go/internal/aigc/</code>、<code>migrations/004_aigc_label.sql</code>、<code>internal/cfgstore</code> 新增 6 键与 <code>web/admin.html</code> 的分组文案写成；该功能<b>尚未进入当前生产镜像</b>，文中已标注（见 <a href="#s3-11">3.11</a>）。
   本文不含任何口令 / 令牌 / 密钥的值。
 </footer>
