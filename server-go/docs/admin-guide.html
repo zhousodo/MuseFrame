@@ -197,7 +197,7 @@
 <tr><td><a href="#tab-health">#tab-health</a></td><td>健康</td><td>只读</td></tr>
 <tr><td><a href="#tab-ops">#tab-ops</a></td><td>运营</td><td>读 + 风格编辑 / 上下架 + 商品与价格编辑</td></tr>
 <tr><td><a href="#tab-db">#tab-db</a></td><td>数据库</td><td><b>只读</b></td></tr>
-<tr><td><a href="#tab-config">#tab-config</a></td><td>配置</td><td>读 + 热改 41 个键 + 发测试邮件</td></tr>
+<tr><td><a href="#tab-config">#tab-config</a></td><td>配置</td><td>读 + 热改 47 个键 + 发测试邮件</td></tr>
 </tbody></table></div>
 
 <h3 id="s2-2">2.2 每个视图一句说明<a class="self" href="#s2-2">#</a></h3>
@@ -227,7 +227,7 @@
 审计与发信记录也住在 <code>events</code> 表里，但<b>埋点视图把这两类行排掉了</b>，否则运营自己改一次配置都会在「用户行为」里多一行。</p>
 
 <h4 id="tab-assets">资产 <span class="mono">#assets</span></h4>
-<p>App 上传的源图与产出文件。可按类型（<code>source</code> / <code>candidate</code> / <code>thumbnail</code> / <code>export</code>）、状态（<code>pending</code> / <code>ready</code> / <code>quarantined</code> / <code>deleted</code>）、用户 ID 前 8 位筛；带字节数 / 宽高 / sha256；顶部是合计卡片。图片预览走短时图片令牌，<b>管理员令牌不进 URL</b>。</p>
+<p>App 上传的源图与产出文件。可按类型（<code>source</code> / <code>candidate</code> / <code>thumbnail</code> / <code>export</code>）、状态（<code>pending</code> / <code>ready</code> / <code>quarantined</code> / <code>deleted</code>）、用户 ID 前 8 位筛；带字节数 / 宽高 / sha256；顶部是合计卡片。图片预览走短时图片令牌，<b>管理员令牌不进 URL</b>。<br><b>AI 标识</b>列是《人工智能生成合成内容标识办法》的标识状态：<b>水印+元数据</b> = 角标画进了像素、文件元数据里也有标识字段；<b>仅元数据</b> = 有人把 <code>aigc_label_enabled</code> 关掉了，只剩隐式标识；<b>未标识</b> = 源图（本来就不需要）或本版之前产出的历史成品（<b>刻意不回溯</b>，不是故障）。</p>
 
 <h4 id="tab-health">健康 <span class="mono">#health</span></h4>
 <ul>
@@ -252,7 +252,7 @@
 <ul>
   <li>顶部重复那两条横幅（生成链路 / 反白嫖闸）。</li>
   <li><b>运行状态</b>：七张只读卡片，详见 <a href="#s3-10">3.10 B</a>。</li>
-  <li><b>系统配置</b>：41 个热键按 8 个分组渲染，每组顶上一句说明；每项标来源徽章（<span class="tag">db 覆盖</span> / <span class="tag">env</span> / <span class="tag">默认</span>）、是否<span class="tag env">需重启</span>、是否<span class="tag ro">只读</span>。</li>
+  <li><b>系统配置</b>：47 个热键按 9 个分组渲染，每组顶上一句说明；每项标来源徽章（<span class="tag">db 覆盖</span> / <span class="tag">env</span> / <span class="tag">默认</span>）、是否<span class="tag env">需重启</span>、是否<span class="tag ro">只读</span>。</li>
   <li><b>邮件测试</b>：发一封自检信，结果留在页面上。</li>
 </ul>
 
@@ -540,7 +540,7 @@ sudo nano /srv/platform/apps/museframe/app.env</code></pre></li>
 <!-- ===================== 4 配置字典 ===================== -->
 <h2 id="s4">4 · 配置项字典<a class="self" href="#s4">#</a></h2>
 
-<h3 id="s4-1">4.1 41 个热键 <span class="tag hot">后台可改</span><a class="self" href="#s4-1">#</a></h3>
+<h3 id="s4-1">4.1 47 个热键 <span class="tag hot">后台可改</span><a class="self" href="#s4-1">#</a></h3>
 <p>来源优先级 <b>db &gt; env &gt; 默认</b>；清空 = 清掉 db 覆盖、回退 env / 默认。区间与白名单<b>写死在代码里</b>（它们是安全 / 可用性边界，不是口味问题），越界回 422。未特别注明的「改后何时生效」都是<b>下一次使用即生效，不需要重启</b>。</p>
 
 <h4>生成与上游 <span class="mono">generation</span></h4>
@@ -625,6 +625,19 @@ sudo nano /srv/platform/apps/museframe/app.env</code></pre></li>
 <tr><td><code>event_retention_days</code></td><td><code>events</code> 表保留天数。<b>🔴 后台操作审计与发信记录也住在这张表里</b>，压太短会把审计一起删掉（下界因此是 7）</td><td>7–3650</td><td>90</td><td><code>EVENT_RETENTION_DAYS</code></td><td>下一次每日清理；<b>往小调是不可逆删除</b></td></tr>
 <tr><td><code>idempotency_retention_days</code></td><td>幂等记录保留天数（太短会让超期重放变成重复下单）</td><td>1–365</td><td>30</td><td><code>IDEMPOTENCY_RETENTION_DAYS</code></td><td>下一次每日清理</td></tr>
 <tr><td><code>session_ttl_days</code></td><td>登录会话有效期天数。只影响<b>此后签发/续期</b>的会话；已有会话在下次活动时被续到新期限</td><td>1–1825</td><td>90</td><td><code>SESSION_TTL_DAYS</code></td><td>下一次签发/续期</td></tr>
+</tbody></table></div>
+
+<h4>AI 生成内容标识 <span class="mono">aigc</span></h4>
+<p>《人工智能生成合成内容标识办法》（2025-09-01 施行）要求生成服务在产出上同时加<b>显式标识</b>（画在像素上的角标）与<b>隐式标识</b>（写进文件 EXIF/XMP 的 GB 45438-2025 字段）。<b>这一组只管显式标识；隐式标识没有开关，每一张新成品都写。</b>六项改完都对<b>下一个任务</b>生效，<b>不回溯历史成品</b>（回溯要重编码已经交付给用户的图）。每张成品到底标了什么，在「资产」页的<b>AI 标识</b>列逐行可查，CSV 导出也有这一列。</p>
+<div class="scroll"><table>
+<thead><tr><th>键</th><th>含义</th><th>范围</th><th>默认</th><th>env 来源</th><th>生效</th></tr></thead>
+<tbody>
+<tr><td><code>aigc_label_enabled</code></td><td>在成品上画「AI 生成」角标。<b>🔴 关掉是有法律后果的动作</b>：此后新产出的图上不会有任何可见标识（隐式元数据不受影响，照写）</td><td>开 / 关</td><td>开</td><td><code>AIGC_LABEL_ENABLED</code></td><td>下一个任务</td></tr>
+<tr><td><code>aigc_label_text</code></td><td>角标文字。内嵌字体是 ASCII + GB2312 子集，<b>含生僻字 / 韩文 / emoji 的文案会被当场拒绝并列出那些字</b>——否则线上水印里那个字是一片空白，而这里显示「已保存」</td><td>1–40 字</td><td><code>AI 生成 · 留影</code></td><td><code>AIGC_LABEL_TEXT</code></td><td>下一个任务</td></tr>
+<tr><td><code>aigc_label_position</code></td><td>角标位置</td><td>bottom-right / bottom-left / top-right / top-left / bottom-center</td><td>bottom-right</td><td><code>AIGC_LABEL_POSITION</code></td><td>下一个任务</td></tr>
+<tr><td><code>aigc_label_opacity</code></td><td>角标不透明度。<b>🔴 下界不是 0</b>：想去掉水印请用上面的开关，调到几乎透明会产出一张「自称已标识」却看不见标识的图</td><td>0.05–1</td><td>0.85</td><td><code>AIGC_LABEL_OPACITY</code></td><td>下一个任务</td></tr>
+<tr><td><code>aigc_label_size_pct</code></td><td>角标字号占图像<b>短边</b>的百分比（跟短边走，1024 的图和 4000 的图上看起来一样大）</td><td>1–10</td><td>3.2</td><td><code>AIGC_LABEL_SIZE_PCT</code></td><td>下一个任务</td></tr>
+<tr><td><code>aigc_content_producer</code></td><td>隐式标识里的「内容制作服务提供者」（GB 45438-2025 的 <code>ContentProducer</code>）。核验方靠它判断这张图出自谁家，填正式名称</td><td>自由文本</td><td><code>留影 MuseFrame（lenscript.cn）</code></td><td><code>AIGC_CONTENT_PRODUCER</code></td><td>下一个任务</td></tr>
 </tbody></table></div>
 
 <h3 id="s4-2">4.2 只读 / 需重启项 <span class="tag ro">只读</span><a class="self" href="#s4-2">#</a></h3>
@@ -763,7 +776,7 @@ sudo /srv/platform/scripts/platformctl logs museframe</code></pre>
   对应生产镜像 <code>20260912T095922Z-g5e30737e</code><br>
   核对依据：<code>server-go/internal/httpapi/routes_admin.go</code>（34 条管理路由）、
   <code>server-go/internal/httpapi/admin_{config,ops,actions,grant,visibility}.go</code>（写入口语义与状态码）、
-  <code>server-go/internal/cfgstore/cfgstore.go</code>（41 个配置键的类型·env·默认·区间·白名单·分组与 secret 规则）、
+  <code>server-go/internal/cfgstore/cfgstore.go</code>（47 个配置键的类型·env·默认·区间·白名单·分组与 secret 规则）、
   <code>server-go/internal/httpapi/auth.go</code> 与 <code>app.go</code>（<code>X-Admin-Token</code> 恒定时间比对、<code>/v1/admin/</code> 120 次/分钟限流）、
   <code>web/admin.html</code>（9 个标签页、运行状态七卡片、CSV 走 fetch+blob、令牌存 <code>sessionStorage</code>）、
   <code>server-go/README.md</code>、平台文档《交接-服务器统一重构-20260912》与 <code>PROGRESS.md</code>，
