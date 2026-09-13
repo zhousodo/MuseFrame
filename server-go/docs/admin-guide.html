@@ -290,9 +290,18 @@ URL 里的 <code>#hash</code> 仍然是当前视图名（可直接收藏，例�
   <li><b>验证码签发台账</b>：哪个邮箱签发过几次（邮箱完整，<b>哈希一个字节都不回</b>）。</li>
   <li><b>发送测试邮件</b>（本页最下面的子区块，<b>不在配置页</b>）：见 <a href="#s3-8">3.8</a>。</li>
 </ul>
-<div class="bad">🔴 <b>2026-09-13 实测这一页是空的</b>（<code>GET /v1/admin/email-log</code> 回 <code>sends: 0</code>）——
-也就是说邮箱验证码登录这条路<b>在生产上一次都没走通过</b>。这是切换 Go 版时留下的阻塞门禁 <b>U-2</b>，
-先按 <a href="#s3-8">3.8</a> 发一封测试邮件把它走通，再去谈邮箱登录能不能开给用户。</div>
+<div class="ok">✅ <b>2026-09-13 已实测走通（U-2 关闭）</b>。生产对 Brevo（<code>smtp-relay.brevo.com:587</code> STARTTLS）
+实发两封并都落了账：后台测试邮件（<code>kind = admin_test</code>，<code>ok = true</code>）与一封<b>真实登录验证码</b>
+（<code>kind = login_code</code>，<code>ok = true</code>），<code>GET /v1/admin/email-log</code> 的 <code>sends</code> 从 <code>0</code> 变成 <code>2</code>。
+在此之前这一页空着<b>并不是发信坏了</b>——发送台账是 2026-09-12 才加的，而那之后没有人再发过信，
+所以 <code>sends: 0</code> 的准确含义是「这一版上线后还没发过」，不是「发过但失败了」。</div>
+<div class="note"><b>这一页空着怎么读。</b> 发信失败也会落一行（<code>ok = false</code> 带错误原因），
+所以<b>有行而 <code>ok = false</code></b> 才是发信坏了；<b>一行都没有</b>只说明这一版上线后还没发过信——
+先按 <a href="#s3-8">3.8</a> 发一封测试邮件，再根据落下来的那一行判断。<br>
+另外两个会让台账<b>一行都不落</b>的前置门槛（它们在调用 SMTP <b>之前</b>就把请求挡回去了，因此无错误记录）：
+<code>email_login_enabled</code> 关着 → <code>501 PROVIDER_NOT_CONFIGURED</code>；
+<code>smtp_host</code> / <code>smtp_user</code> / <code>SMTP_PASS</code> 缺任一 → 同样 501（后台测试邮件则是 <code>400 SMTP_NOT_CONFIGURED</code>）。
+「运行状态」的邮件卡片会直接告诉你缺哪个。</div>
 
 <h4 id="tab-config">系统配置 <span class="mono">#config</span> <span class="tag">配置组</span></h4>
 <ul>

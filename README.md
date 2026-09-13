@@ -76,12 +76,22 @@ go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
 - 容器纵深加固：生产实测 `User=1000:1000`、`ReadonlyRootfs=true`、`CapDrop=[ALL]`、
   `no-new-privileges:true`、`PidsLimit=128`、`mem_limit 512m`。
 - 畸形 `Host` 导致进程崩溃：Node 版的 `new URL(Host)` 路径在 Go 版不存在（`net/http` 自己解析请求行）。
+- **U-2 SMTP 实打实发信（2026-09-13 关闭）**：生产对 Brevo（`smtp-relay.brevo.com:587` STARTTLS，
+  发件人 `no-reply@lenscript.cn`）实发两封并都落账——后台测试邮件（`kind = admin_test`）与一封**真实登录验证码**
+  （`kind = login_code`），两行 `ok = true`，`GET /v1/admin/email-log` 的 `sends` 由 `0` 变 `2`。
+  **此前的 `sends: 0` 是误读**：发送台账 2026-09-12 才加，那之后无人发信，所以它的含义是
+  「这一版上线后还没发过」而非「发过但失败了」——发信代码与配置一直是好的，无需改动。
+  排障口径：失败也会落行（`ok = false` 带原因），**一行都没有**只说明还没发过；
+  `email_login_enabled` 关着或 SMTP 三项缺任一会在调用 SMTP **之前**回 501，因此同样一行不落。
+  手工验证挡不住以后改坏，所以同时补了 `internal/mailer` 的**会话级**测试（假 SMTP 服务端）：
+  信封发件人必须是裸地址（生产 `smtp_from` 是显示名形态，整串塞进 `MAIL FROM` 会被 Brevo 501 退回）、
+  纯文本 + HTML 两份正文都在信里、非 ASCII 主题走 RFC 2047、465 走隐式 TLS、端口缺省落 587，
+  以及**服务端不广播 STARTTLS 时口令绝不明文上线**。
 
 **🔴 仍是待办**
 
 | # | 项 | 说明 |
 |---|---|---|
-| U-2 | **SMTP 从未对 Brevo 实打实发过一封信** | `internal/mailer` 没有自动化测试。生产 `GET /v1/admin/email-log` 实测 `sends: 0` ——邮箱验证码登录这条路**在生产上一次都没走通过**。发一封：后台「运营 · 发信记录 → 发送测试邮件」 |
 | U-1 | **`internal/oidc`（Google/Apple ID Token）与 `internal/play`（Play 收据）从未对真实端点跑过** | 生产三个凭据当前全空，这两条路径现在回 501 `PROVIDER_NOT_CONFIGURED`。**启用任何一个之前必须先端到端联调** |
 | U-3 | `seedCatalog` / `seedProducts` 刻意未实现 | 目录数据只由数据迁移管。**需拍板**：补一次性 seed 工具，还是接受「目录只由 DB 管」 |
 | U-5 | 三个带 prompt compiler 的风格没做过真实生成的人工对比 | `press_cover_story_01` / `press_reportage_wash_01` / `press_zine_poster_01` |
