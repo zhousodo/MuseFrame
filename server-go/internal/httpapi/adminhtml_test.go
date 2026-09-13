@@ -447,20 +447,25 @@ func TestAdminHTMLRequestsDownscaledThumbnails(t *testing.T) {
 	}
 }
 
-// 统一视觉规范的骨架：左侧固定导航 220px、顶部栏（产品名 + 环境 + 登出）、
-// 内容区 ≤1280px、≤768px 抽屉式导航。
+// 统一视觉规范的骨架：左侧固定导航 240px、顶部栏（产品名 + 环境 + 登出）、
+// 内容区 ≤1440px、≤768px 抽屉式导航。
+// 这条守卫是「防止有人偷偷改掉共享规范」用的 —— 钉子只许往新值上挪，不许拔。
 func TestAdminHTMLFollowsSharedLayoutSpec(t *testing.T) {
 	code := adminCode(t)
 	for _, want := range []string{
-		"--nav-w:220px",
-		"--content:1280px",
-		"--primary:#2563eb",
+		"--nav-w:240px",     // 2026-09-14 视觉规范 v2，与光轴脚本 / 掌镜 Zlens / 拍搭同步
+		"--content:1440px",  // 2026-09-14 视觉规范 v2，与光轴脚本 / 掌镜 Zlens / 拍搭同步
+		"--primary:#4F46E5", // 2026-09-14 视觉规范 v2，与光轴脚本 / 掌镜 Zlens / 拍搭同步
+		// 状态四色与边框色是跨后台契约，v2 没动，断言原样保留（含小写）。
 		"--ok:#16a34a",
 		"--warn:#d97706",
 		"--err:#dc2626",
 		"--muted:#6b7280",
 		"--line:#e5e7eb",
-		`-apple-system,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","Segoe UI",sans-serif`,
+		// 旧主色 #2563eb 没有消失，降级成信息色，继续守着。
+		"--info:#2563eb",
+		"--top-h:64px",
+		`Inter,-apple-system,"PingFang SC","Microsoft YaHei","Noto Sans SC","Noto Sans CJK SC","Segoe UI",sans-serif`, // 2026-09-14 视觉规范 v2，与光轴脚本 / 掌镜 Zlens / 拍搭同步
 		"@media (max-width:768px)",
 		"body.navopen .nav",
 		`id="logoutBtn"`,
