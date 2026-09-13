@@ -16,16 +16,17 @@
 
 **源目录在 30 天观察期内不删**。观察期内两边若都要改，**以 `server-go/` 为准**，源目录只读。
 
-## 与现役旧实现（`server/`）的关系
+## 与旧实现（`server/`）的关系 —— 🟢 已切换（2026-09-12）
 
-| | `server/`（现役） | `server-go/`（本目录） |
+| | `server/`（Node） | `server-go/`（本目录） |
 |---|---|---|
 | 实现 | Node.js 零框架 `node:http` + SQLite | Go 1.26 + PostgreSQL + pgx/v5 v5.9.2 |
-| 线上状态 | 🟢 **正在生产跑**，承接全部流量 | 🔴 **未上线**，从未接过真实流量 |
-| 处置 | 30 天观察期内**原封不动**（回滚兜底） | 门禁全绿后才切 |
+| 线上状态 | 🔴 **已退役**，容器 `museframe-api` 已停 | 🟢 **正在生产跑**，容器 `museframe-api-go` 承接全部流量 |
+| 处置 | **只停不删**，镜像与数据保留到 **2026-10-11** 作回滚兜底 | 所有后端改动写在这里 |
 
-🔴 **`server-go/` 不覆盖、不替换 `server/`。** 仓库根的 `Dockerfile` / `docker-compose.yml` /
-`data/` 都还属于 Node 实现，本次一个字节都没动。切换是一次单独的、需要拍板的动作。
+切换已经发生：2026-09-12 起公网 `https://museframe.lenscript.cn` 的回源就是本目录的镜像。
+**新功能一律进 `server-go/`**；往 `server/` 里加代码等于往一个不接流量的进程里加代码。
+仓库根的 `Dockerfile` / `docker-compose.yml` / `package.json` 仍属于退役的 Node 栈，同样保留到 10-11。
 
 ## 部署方式
 
@@ -34,59 +35,96 @@ server-go/deploy/
 ├── Dockerfile            museframe-api 交叉编译 + distroless
 ├── Dockerfile.migrate    一次性迁移 job
 ├── docker-compose.yml    接统一 PG 实例 platform-postgres
-└── project.env.example   配置样例（🔴 真正的 project.env 与 .env 永不入库）
+└── project.env.example   配置样例（🔴 真正的 project.env 与 app.env 永不入库）
+```
+
+生产形态是 `/srv/platform` 统一形态，**逐条命令见仓库根的 [`DEPLOY.md`](../DEPLOY.md)**：
+
+```
+本地交叉编译 → museframe-api:<UTC时间戳>-g<源码短sha> → docker save | ssh prodsrv 'sudo docker load'
+→ 改 /srv/platform/apps/museframe/project.env 的 IMAGE_TAG
+→ sudo /srv/platform/scripts/platformctl deploy museframe [--tag <tag>]
+→ sudo /srv/platform/scripts/platformctl status museframe   # 退出码 0 = 全绿
 ```
 
 要点：
-1. 镜像**本地交叉编译** → `docker save` → `scp` → `docker load`，生产机不 build。
+1. 镜像**本地交叉编译**，生产机（1.9G 内存）**不 build**。tag 固定为时间戳+短 sha，**禁 latest**。
 2. compose **必须挂两张网**：`platform-db-net`（external + internal，连 PG）
-   与本项目自有 bridge（publish 端口）。只挂 internal 那张时容器 healthy、日志正常，
-   但宿主机 `curl` 直接 refused，**没有任何报错**。
+   与本项目自有 bridge `museframe-go-egress`（出网：上游图像 API / SMTP / JWKS）。
+   只挂 internal 那张时容器 healthy、日志正常，但宿主机 `curl` 直接 refused，**没有任何报错**。
 3. 库表由**一次性 job** 以 `museframe_owner` 执行 `migrations/001_init.sql` + `002_grants.sql`；
-   运行角色 `museframe_app` 只有 DML、无 DDL 权。
+   运行角色 `museframe_app` 只有 DML、无 DDL 权，应用**不自动建表**。
 4. 内存上限 **512m 不要随手调低**：理论最坏 = `MAX_SOURCE_PIXELS(40MP) × 4B ×
    worker_concurrency(3) ≈ 480 MB`。降到 256m 必须先调小 `MAX_SOURCE_PIXELS`，
    而那是**契约变更**（改变 422 `ASSET_UNSUPPORTED` 的触发阈值）。
+5. **资产与 web 目录是 bind mount，不是 named volume**：只有 `/srv/platform` 下的路径才会被
+   平台的 `backup-files.sh` 覆盖到，named volume 对平台备份工具是黑盒。
+6. 🔴 **`admin.html` 与 30 张风格封面不在镜像里**，它们在宿主机
+   `/srv/platform/apps/museframe/data/web`（只读挂进容器 `/var/lib/museframe/web`）。
+   换后台页面**不需要发版**，但改完必须同步到生产并核对 sha256——详见 [`AGENTS.md`](../AGENTS.md) §5。
+   （2026-09-11 踩过：以为「只挂 covers、SPA 归边缘」，结果 `/app` 与 `/admin.html` 全 404，已回滚。）
 
-### 本地跑测试
+### 本地门禁（本仓**没有** GitHub Actions，这就是全部门禁）
 
-集成测试需要 PostgreSQL，**DSN 用 `museframe_owner`**（测试夹具走 `TRUNCATE`，需要表属主权限）：
+```bash
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
+```
+
+集成测试需要 PostgreSQL，**DSN 用 `museframe_owner`**（测试夹具走 `TRUNCATE`，需要表属主权限）；
+不设 `MUSEFRAME_TEST_DATABASE_URL` 时它们 **skip**（是 skip，不是静默通过）：
 
 ```bash
 psql -U museframe_owner -d <db> -f migrations/001_init.sql
 psql -U museframe_owner -d <db> -f migrations/002_grants.sql
+for f in migrations/00[345]_*.sql; do psql -U museframe_owner -d <db> -f "$f"; done
 export MUSEFRAME_TEST_DATABASE_URL='postgres://museframe_owner:<pass>@127.0.0.1:5432/<db>?sslmode=disable'
 go test ./... -count=1
 ```
 
-## 🔴 切换前必须完成的门禁
+改了 `docs/admin-guide.html` 时还要对着线上后台核一遍数字（路由数 / 视图数 / 配置项数），
+命令见 [`AGENTS.md`](../AGENTS.md) §3。
 
-摘自 `45-MuseFrame后端重写报告.md` 第 10 节（7 条）：
+## 门禁现状（2026-09-13 复核）
 
-| # | 门禁 | 阻塞？ |
+原表摘自 `45-MuseFrame后端重写报告.md` 第 10 节（7 条）。切换已于 2026-09-12 完成，
+所以下面记的是**切换之后仍然悬着的**那几条。同一份待办也记在
+[仓库根 `README.md` 的「已知问题 / 待办」](../README.md)与
+[`docs/audit/README.md`](../docs/audit/README.md)——三处必须一致。
+
+| # | 门禁 | 现状 |
 |---|---|---|
-| **U-2** | 🔴 用 `POST /v1/admin/email/test` 对着 Brevo **实打实发一封信**——`internal/mailer` 无自动化测试 | **是** |
-| U-1 | `internal/oidc`（Google/Apple ID Token 验签）与 `internal/play`（Play 收据）无自动化测试，从未对真实端点跑过 | 否（生产三个凭据全空，这两条路径现在是 501 `PROVIDER_NOT_CONFIGURED`）。**启用任何一个之前必须先端到端联调** |
-| U-3 | `seedCatalog` / `seedProducts` 刻意未实现——目录数据改走数据迁移。**需拍板**：补一次性 seed 工具，还是接受「目录只由 DB 管」 | 需拍板 |
-| U-4 | 本地像素引擎 `local_engine_fallback` 未实现 | 否（该旗标线上恒为 false） |
-| U-5 | 挑带 compiler 的 3 个风格（`press_cover_story_01` / `press_reportage_wash_01` / `press_zine_poster_01`）各跑一次真实生成做人工对比 | 建议做 |
-| U-6 | 资产迁移四个数字仍是本地构造的 3/3/0/0，迁移日后补真实的 19/19/0/0 | 迁移日 |
-| U-7 | 内存上限 512m 的取舍（见上） | 否 |
+| **U-2** | 用 `POST /v1/admin/email/test` 对着 Brevo **实打实发一封信**——`internal/mailer` 无自动化测试 | 🔴 **仍未做**。生产 `GET /v1/admin/email-log` 实测 `sends: 0`，即邮箱验证码登录在生产上**一次都没走通过** |
+| U-1 | `internal/oidc`（Google/Apple ID Token 验签）与 `internal/play`（Play 收据）无自动化测试，从未对真实端点跑过 | 🔴 仍未做。生产三个凭据全空，这两条路径现在是 501 `PROVIDER_NOT_CONFIGURED`。**启用任何一个之前必须先端到端联调** |
+| U-3 | `seedCatalog` / `seedProducts` 刻意未实现——目录数据改走数据迁移 | 🔴 **需拍板**：补一次性 seed 工具，还是接受「目录只由 DB 管」 |
+| U-4 | 本地像素引擎 `local_engine_fallback` 未实现 | 🟢 接受。该旗标线上恒为 false；回落产出的不是模型结果，不该交付也不该计费 |
+| U-5 | 挑带 compiler 的 3 个风格（`press_cover_story_01` / `press_reportage_wash_01` / `press_zine_poster_01`）各跑一次真实生成做人工对比 | 🟡 仍未做（建议） |
+| U-6 | 资产迁移四个数字 | 🟢 迁移日已完成 |
+| U-7 | 内存上限 512m 的取舍（见上） | 🟢 接受，写进了 compose 注释 |
 
-另有两条**不属于重写范围、但仍悬着**的红项：
-- 生产 `app_config` 表里的**明文密钥行尚未清除**（Go 版不读它，但它还在库里、还在每日备份里）。
-  迁移时必须跳过这两行，旧栈下线后清掉历史备份里的凭据。
-- 备份**仍无异地、仍未做过恢复演练**。
+另有两条**不属于重写范围**的红项：
+
+- ~~生产 `app_config` 表里的明文密钥行尚未清除~~ → 🟢 **已解决**。迁移按 runbook 跳过了那两行；
+  2026-09-13 实测生产 `app_config` 只剩 `allow_guest` / `pack_credit_expiry_days` 两行，
+  **没有任何密钥行**。旧 Node 栈下线（2026-10-11 后）时仍需清掉历史备份 tar 里的凭据。
+- 备份**仍无异地副本** → 🔴 **仍悬着**。每日库备份（02:13 UTC）、文件备份（02:33 UTC）与
+  每周恢复演练（周日 07:08 UTC）都已落地，但**全部在同一台机器上**。见 [`OPS.md`](../OPS.md) §6。
 
 ---
 
 # MuseFrame（留影）后端 —— Go + PostgreSQL
 
-替换原 Node.js（零框架 `node:http`）+ SQLite 实现。**64 条路由**（公开 30 + 管理 34；
-另加一条不在公开契约里的 `/v1/ready`）
-逐条复刻，外加一条不在公开契约里的内部只读探针 `/v1/ready`。
+替换原 Node.js（零框架 `node:http`）+ SQLite 实现。
 
-- 地面事实来源：`/opt/museframe/server/*.js` 只读副本（源码是行为真本）
+**路由总数 68**（2026-09-13 实数，以 `internal/httpapi/routes_{public,admin}.go` 的 `a.add(` 为准）：
+
+| | 条数 | 来源 |
+|---|---|---|
+| 公开契约路由 | 30 | `routes_public.go` 编号 1–30 |
+| 内部只读探针 `/v1/ready` | 1 | 不在公开契约里；边缘代理不回源，公网打不到 |
+| 管理后台路由 | **37** | `routes_admin.go` 编号 31–67（**不是 34**：2026-09-12 第七轮补了 `job-detail` / `photo-analyses` / `style-versions` 三条只读视图） |
+
+- 地面事实来源：退役 Node 实现 `server/*.js`（源码是行为真本；重写期间读的是生产机
+  `/opt/museframe/server/*.js` 的只读副本，那台路径已随旧栈退役）
 - 契约：`9-服务器重构/11-API冻结契约.md` 第三章 + `12-契约空白补查.md` D-11~D-18
 - 盘点：`9-服务器重构/盘点-20260911/03-MuseFrame盘点.md`
 
@@ -280,7 +318,7 @@ Go 版改成**表白名单 + 显式列级脱敏清单**：
   所以「埋点 · 按 App 版本」的正常结果是一行 `(未上报)`。这一行就是这件事的唯一可见处。
   后端已兼容 `appVersion` / `app_version` / `version` 三种键，App 哪天开始报哪一个都会自动分开。
 
-### 管理后台的 34 条路由
+### 管理后台的 37 条路由
 
 | 路径 | 用途 |
 |---|---|
@@ -392,7 +430,11 @@ App 读 `GET /v1/generation-jobs/{id}` 的 `candidate.aigcLabeled`，在结果�
 
 核验一张成品：`exiftool -G -a -u <file>`，或 `aigc.ExtractJPEG`。
 
-## 切换 runbook
+## 切换 runbook（🟢 已于 2026-09-12 执行完毕，保留作记录）
+
+> 下面这段是一次性切换的步骤，**已经跑过了**，不要再照着跑一遍。
+> 日常发版看 [`DEPLOY.md`](../DEPLOY.md)；它用的是 `platformctl`，不是这里的 `docker compose`。
+> 增量迁移那一段（`migrations/00[345]_*.sql`，幂等、只加可空列、对旧镜像透明）仍然有效。
 
 ```bash
 # 0. 前置：统一 PG 已就绪，museframe 库与三个角色已建好
@@ -430,13 +472,16 @@ curl -s -o /dev/null -w '%{http_code}\n' "localhost:8787/v1/admin/overview?admin
 curl -s -o /dev/null -w '%{http_code}\n' -H "X-Admin-Token: $ADMIN_TOKEN" localhost:8787/v1/admin/overview  # 200
 ```
 
-### 回滚
+### 紧急回旧 Node 栈（观察期到 2026-10-11）
+
+日常回滚是 `sudo /srv/platform/scripts/platformctl rollback museframe`（换回上一个 Go 镜像 tag）。
+下面这条是**整栈退回 Node** 的极端路径，只在 Go 版整体不可用时用：
 
 Go 版**不写 SQLite**，旧 Node 栈的数据文件在切换期间原封不动，所以回滚是：
 
-1. `docker compose -f deploy/docker-compose.yml down`（Go 栈停机，PG 数据保留）；
-2. 边缘代理把 `museframe.lenscript.cn` 的回源改回旧 Node 容器端口；
-3. `cd /opt/museframe && docker compose up -d` 拉起旧栈。
+1. `sudo docker compose -f /srv/platform/apps/museframe/docker-compose.yml down`（Go 栈停机，PG 数据保留）；
+2. 边缘代理（OpenResty）把 `museframe.lenscript.cn` 的回源改回旧 Node 容器端口；
+3. 拉起保留着的旧 Node 栈（容器 `museframe-api`，只停不删）。
 
 窗口期内在 PG 侧产生的新数据（新用户 / 新任务 / 新订单）**不会回流 SQLite** ——
 所以切换必须选在低流量窗口，并在回滚后按 PG 的 `created_at > 切换时刻` 导出人工补录。
@@ -444,4 +489,8 @@ Go 版**不写 SQLite**，旧 Node 栈的数据文件在切换期间原封不动
 
 ## 未解决项
 
-见 `9-服务器重构/45-MuseFrame后端重写报告.md` 末节。
+见本文「门禁现状（2026-09-13 复核）」一节——那是本仓的真相源。
+同一份待办也记在 [仓库根 `README.md` 的「已知问题 / 待办」](../README.md) 与
+[`docs/audit/README.md`](../docs/audit/README.md)；改一处就把三处一起改。
+
+历史全表在掌镜仓库 `9-服务器重构/45-MuseFrame后端重写报告.md` 末节（本仓外，只读参考）。

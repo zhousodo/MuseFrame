@@ -1,6 +1,9 @@
 # MuseFrame 上架审查报告（Google Play + iOS App Store）
 
-> 更新：2026-08-20 · 状态图例：✅ 已完成 · 🟡 需你的账号/资料 · 🔴 阻断项
+> 更新：2026-08-20 · **2026-09-13 复核**：安全结论仍然成立（并已在 Go 版重新实现），
+> 但部署形态那一段已按 `/srv/platform` + `platformctl` 订正——线上后端是 `server-go/`，不是 Node 栈。
+> 剩余阻断项以 [`README.md` 的「已知问题 / 待办」](README.md) 为准。
+> 状态图例：✅ 已完成 · 🟡 需你的账号/资料 · 🔴 阻断项
 
 ## 0. 一句话结论
 
@@ -87,14 +90,21 @@ Creator，无限生成烧我们的模型钱。
 
 1. **真实内购接线**（🔴 最大工作量）：客户端接 Play Billing / StoreKit 拿真实
    `purchaseToken`/`transaction`，服务端验签逻辑**已写好**，只差你的商品 ID + 凭据。
-2. **配置注入**（改服务器 `.env` 即可，无需重发 App）：
-   ```
-   GOOGLE_CLIENT_IDS=<android/ios/web 的 OAuth client id>
-   GOOGLE_SERVICE_ACCOUNT_JSON=/opt/museframe/play-sa.json
-   APPLE_BUNDLE_IDS=com.museframe.app
-   FREE_REQUIRES_AUTH=true      # 上架前建议打开
-   ```
-   然后 `sudo systemctl restart museframe`。
+2. **配置注入**（改服务器配置即可，无需重发 App）：
+   - `GOOGLE_CLIENT_IDS` / `APPLE_BUNDLE_IDS` / `FREE_REQUIRES_AUTH` 是**后台热键**，
+     在「配置 · 系统配置」页改完**立刻生效**，不用重启。
+   - `GOOGLE_SERVICE_ACCOUNT_JSON`（Play 服务账号路径）是密钥项，只能改
+     `/srv/platform/apps/museframe/app.env`（600）后重新 deploy：
+     ```
+     ssh prodsrv
+     sudo nano /srv/platform/apps/museframe/app.env
+     sudo /srv/platform/scripts/platformctl deploy museframe --tag <当前生产 tag>
+     ```
+   完整清单见 `server-go/docs/admin-guide.html` 第 4 节与 `DEPLOY.md`。
+
+   🔴 **启用 Google / Apple 登录或 Play 收据校验之前必须先端到端联调**（门禁 U-1）：
+   `internal/oidc` 与 `internal/play` 从未对真实端点跑过，生产三个凭据当前全空，
+   这两条路径现在回 501 `PROVIDER_NOT_CONFIGURED`。
 3. **前端登录 UI**：目前 onboarding 是游客直进。接真实登录时加「使用 Google/Apple
    登录」按钮（Capacitor 有官方插件），拿到 idToken 传 `/v1/auth/exchange`。
 

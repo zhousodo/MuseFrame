@@ -4,16 +4,90 @@ A working full-stack implementation of the **MuseFrame Gallery MVP Implementatio
 a curated-gallery photo app where users pick a *direction*, not a prompt — one photo in,
 one identity-preserving artwork out, saved in about two minutes.
 
-## Run
+> 在本仓工作之前先读 [`AGENTS.md`](AGENTS.md)（哪份代码是活的、分支、本地门禁、发版链、红线）。
+
+## 仓库现状（2026-09-13）
+
+| 目录 | 状态 |
+|---|---|
+| **`server-go/`** | 🟢 **线上后端**。Go 1.26 + PostgreSQL（统一实例 `platform-postgres`，库 `museframe`）。容器 `museframe-api-go`，只绑 `127.0.0.1:18787` |
+| **`web/`** | 🟢 线上 SPA + 运营后台静态壳。以 bind-mount 挂进容器（不在镜像里），`web/admin.html` 与生产机那一份 sha256 必须一致 |
+| `server/` | 🔴 **已退役**的 Node + SQLite 实现。容器 `museframe-api` 已停（**只停不删**），保留到 **2026-10-11** 作回滚兜底。不要在这里加功能，也不要删它 |
+| 根 `Dockerfile` / `docker-compose.yml` / `package.json` | 属于已退役的 Node 栈，同样保留到 10-11 |
+
+公网入口 `https://museframe.lenscript.cn`（Cloudflare → OpenResty → 容器）。
+运营后台 `https://museframe.lenscript.cn/admin.html`，逐页说明见
+[`server-go/docs/admin-guide.html`](server-go/docs/admin-guide.html)。
+
+### 本地跑起来（开发）
 
 ```bash
-npm install
-npm start
-# → http://localhost:8787
+cd server-go
+go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
 ```
 
-Requires Node.js ≥ 22.5 (uses the built-in `node:sqlite`). The only npm dependency is
-`jpeg-js` (pure JS, no native build).
+集成测试要一个 PostgreSQL（DSN 用 `museframe_owner`，夹具走 `TRUNCATE`）；
+不设 `MUSEFRAME_TEST_DATABASE_URL` 时它们 **skip**，不是静默通过。详见 `AGENTS.md` §3。
+
+退役的 Node 栈仍可本地起（`npm install && npm start`，Node ≥ 22.5），
+但它读自己的 SQLite、不接生产数据，**只用于比对旧行为**。
+
+## 分支
+
+只有三条长期分支，平时同一个 tip：**`main`（默认，稳定）· `develop`（开发汇合）· `backend`（后端工作线）**。
+临时分支用 `feat/` `fix/` `docs/` `chore/` 前缀，**合入后立刻删**。
+
+`main` 上有 GitHub ruleset **`main-protect`**（active、无 bypass 名单）：禁 `deletion`、禁 `non_fast_forward`
+——**force push 与改写历史一律被拒**。本地清 `[gone]` 分支只用 `git branch -d`，**绝不 `git worktree prune`**。
+
+## 门禁：本仓没有 GitHub Actions
+
+没有 `.github/workflows/`，CI 不存在。提交前自己跑：
+`go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1`（在 `server-go/`），
+加上 `node --check web/*.js`、`admin.html` 可解析、`git diff --check`。完整清单在 `AGENTS.md` §3。
+
+## 发版链（生产机不 build）
+
+本地交叉编译 → 镜像 tag `museframe-api:<UTC时间戳>-g<源码短sha>`（禁 latest）→
+`docker save | ssh prodsrv 'sudo docker load'` →
+改 `/srv/platform/apps/museframe/project.env` 的 `IMAGE_TAG` →
+`sudo /srv/platform/scripts/platformctl deploy museframe`。
+逐条命令与回滚见 `AGENTS.md` §4 与 [`DEPLOY.md`](DEPLOY.md)。
+
+`admin.html` 是宿主机文件（bind-mount），**换它不需要发版**，但要同步并核对 sha256（`AGENTS.md` §5）。
+
+## 已知问题 / 待办
+
+线上跑的是 `server-go/`，所以下面按**它**的状态记。
+2026-09-07 那三份审计笔记（游客会话越权 + 额度泄露 + 后台安全复审）原本是对 Node 版写的，
+已归档到 [`docs/audit/`](docs/audit/)，逐条与 Go 实现的对应关系写在
+[`docs/audit/README.md`](docs/audit/README.md)。
+
+**已修（Go 版已核实）**
+
+- 游客会话越权：`requireAccount()` 把 `is_guest` 挡在可信边界上，作品 / 图片 / 额度 / 生成 / 购买全部 401；
+  图片令牌只对已注册账号的资产签发（`internal/store/queries_assets.go` 的 `is_guest = false` 过滤，
+  同时撤销了历史上为游客资产签发、尚未过期的令牌）。生产 `allow_guest=false`、`free_requires_auth=true`。
+- 购买收据跨账号重放：`assertPurchaseClaim()` 在 pending、订单号规范化、最终授予三处校验账号/商品绑定，
+  冲突回 409 `PURCHASE_ALREADY_CLAIMED`。
+- 长期会话令牌进图片 URL：网页改用一小时 `img_token`（`GET /v1/assets/img-token`）。
+- 上游密钥进数据库：Go 版 secret 键只读环境变量，写入回 422；生产 `app_config` 表实测只剩
+  `allow_guest` / `pack_credit_expiry_days` 两行，**没有任何密钥行**。
+- 容器纵深加固：生产实测 `User=1000:1000`、`ReadonlyRootfs=true`、`CapDrop=[ALL]`、
+  `no-new-privileges:true`、`PidsLimit=128`、`mem_limit 512m`。
+- 畸形 `Host` 导致进程崩溃：Node 版的 `new URL(Host)` 路径在 Go 版不存在（`net/http` 自己解析请求行）。
+
+**🔴 仍是待办**
+
+| # | 项 | 说明 |
+|---|---|---|
+| U-2 | **SMTP 从未对 Brevo 实打实发过一封信** | `internal/mailer` 没有自动化测试。生产 `GET /v1/admin/email-log` 实测 `sends: 0` ——邮箱验证码登录这条路**在生产上一次都没走通过**。发一封：后台「运营 · 发信记录 → 发送测试邮件」 |
+| U-1 | **`internal/oidc`（Google/Apple ID Token）与 `internal/play`（Play 收据）从未对真实端点跑过** | 生产三个凭据当前全空，这两条路径现在回 501 `PROVIDER_NOT_CONFIGURED`。**启用任何一个之前必须先端到端联调** |
+| U-3 | `seedCatalog` / `seedProducts` 刻意未实现 | 目录数据只由数据迁移管。**需拍板**：补一次性 seed 工具，还是接受「目录只由 DB 管」 |
+| U-5 | 三个带 prompt compiler 的风格没做过真实生成的人工对比 | `press_cover_story_01` / `press_reportage_wash_01` / `press_zine_poster_01` |
+| — | 资产 `?token=` 旧入口仍在 | `GET /v1/assets/{id}/file` 仍接受已上架客户端的会话令牌 query 参数（全站唯一一条）。当前网页不用它；旧 APK 下线后应关掉 |
+| — | 备份**仍无异地副本** | 每日备份与每周恢复演练已落地（见 `OPS.md` §6），但全部在同一台机器上 |
+| — | 上游 `gpt.lenscript.cn` 未端到端复测 | 9/5 起曾持续不可用，9/12 观测到变成 400 参数错，疑似恢复但没有实测确认。生产 `jobsByStatus` 只有 `succeeded: 11` |
 
 ## What's implemented (spec P0)
 
@@ -71,35 +145,48 @@ entitlements, products, purchases, `/v1/events` telemetry. Stable error codes
 ## Layout
 
 ```
-server/
-  index.js     HTTP server + static hosting
-  api.js       /v1 route handlers
-  db.js        node:sqlite schema (spec §12, adapted)
-  ledger.js    append-only credit ledger (§13.4)
-  jobs.js      generation worker + quality gate (§9.2/9.4)
-  styles.js    24 StyleSpecs · 6 exhibitions · product catalog
-  engine/      jpeg codec wrapper, pixel ops, pipeline interpreter, analysis
-web/
-  index.html · app.css · api.js · app.js   (no-build mobile-first SPA)
-data/          SQLite DB + uploaded/generated assets (created at runtime)
+server-go/                🟢 线上后端（Go 1.26 + PostgreSQL）—— 详见 server-go/README.md
+  cmd/museframe-api       服务主程序（含 healthcheck 子命令）
+  cmd/museframe-assets    资产迁移 + sha256 回填 + 四数字交叉校验
+  internal/httpapi        路由表（公开 30 + /v1/ready + 管理 37）+ 横切中间层 + 全部 handler
+  internal/aigc           AI 生成内容标识：显式水印（内嵌 GB2312 子集字体）+ 隐式 EXIF/XMP
+  internal/cfgstore       运行时配置注册表（59 项 = 47 热键 + 12 只读；🔴 密钥只走环境变量）
+  internal/store          PostgreSQL 持久层 + 管理后台只读数据浏览
+  internal/ledger         append-only 额度台账
+  internal/worker         生成队列 + 质量闸
+  internal/{provider,imaging,oidc,play,mailer,ratelimit,metrics,netx,logx,apierr,config}
+  migrations/             001_init.sql（24 表 / 58 索引）… 005_free_grant_ip.sql
+  deploy/                 Dockerfile · Dockerfile.migrate · docker-compose.yml · project.env.example
+  docs/admin-guide.html   运营后台使用指南（7 分组 / 15 视图 / 37 路由 / 59 配置项）
+web/                      🟢 线上 SPA + 后台静态壳（bind-mount 进容器，不在镜像里）
+  index.html · app.css · api.js · app.js · native.js · i18n.js · config.js
+  admin.html              运营后台（唯一真相源：侧栏标记 + TABS 数组）
+  covers/                 30 张风格封面 —— coverUrl 能否非 null 的硬依赖
+server/                   🔴 已退役的 Node + SQLite 实现，保留到 2026-10-11
+  index.js · api.js · db.js · ledger.js · jobs.js · styles.js · engine/
+docs/
+  audit/                  2026-09-07 审计笔记归档 + 与 Go 实现的逐条对应
+  PRICING-2026-09.md · ops/
 ```
 
 ## Model adapters (spec §9.3 primary + backup)
 
-- **Primary — RemoteImageAdapter** (`server/engine/remoteAdapter.js`): calls an
+- **Primary — RemoteImageAdapter** (live: `server-go/internal/provider`; retired Node original:
+  `server/engine/remoteAdapter.js`): calls an
   OpenAI-compatible `/v1/images/edits` endpoint (image-to-image) with the source
   photo and an instruction assembled from the StyleSpec's `promptAssembly`
   (original baseDirection per style + subject rules from analysis + control
   fragments for strength/fidelity/composition + negative constraints). Sources
   are downscaled to 1024 px before sending; results are center-cropped to the
-  requested output ratio. Configure via `.env` (`IMAGE_PROVIDER=remote`,
-  base URL / API key / model, default `gpt-image-2`). Typical latency 1–5 min.
-- **Backup — LocalStyleEngine**: the deterministic pixel engine. It runs the
-  whole pipeline only when the operator explicitly sets `IMAGE_PROVIDER=local`
-  (dev / offline). As a fallback for a *failed* remote call it is **off by
-  default** and must be turned on deliberately (`local_engine_fallback`, admin
-  panel or `LOCAL_ENGINE_FALLBACK`) — a filter pass is not the model's output and
-  should not be delivered, and billed, as one. Safety rejections are never
+  requested output ratio. Configured from the container environment
+  (`/srv/platform/apps/museframe/app.env`: `IMAGE_PROVIDER=remote`,
+  base URL / API key / model, default `gpt-image-2`); base URL and model are also
+  hot-editable in the admin console, **the key never is** (writes return 422).
+  Typical latency 1–5 min.
+- **Backup — LocalStyleEngine**: the deterministic pixel engine, and it exists only in the
+  retired Node stack. In the Go backend `local_engine_fallback` is a registered flag that is
+  **off in production and not implemented** (gate U-4) — a filter pass is not the model's
+  output and must not be delivered, and billed, as one. Safety rejections are never
   retried locally: the job fails with `GENERATION_REJECTED` and 0 units charged.
 - **No provider configured ⇒ no generation.** With `IMAGE_PROVIDER=remote`
   (the default) and no API key / base URL, the service refuses to generate at
@@ -117,7 +204,11 @@ latency; input downscaling to 1024 px helps modestly. Mitigations in place:
 - 420 s provider timeout so slow generations finish instead of failing,
 - honest 1–5 min estimates surfaced before Generate and on the progress screen,
 - progress screen supports leaving and returning (Projects shows live status),
-- automatic local-engine fallback if the provider errors or times out.
+- a circuit breaker (`provider_breaker_streak` / `provider_breaker_cooldown_seconds`): after N
+  consecutive supply-side upstream failures the service fails fast instead of paying for more
+  doomed calls, and probes with one job once the cooldown expires — no manual action needed.
+  The local engine is **not** a fallback here: `local_engine_fallback` is off in production and
+  the Go backend never silently delivers a filter pass as a model result.
 
 ## Style-card samples (spec §5.1)
 
@@ -159,7 +250,8 @@ where the style calls for it; real brands/logos never are).
 
 **Prompt compiler for designed styles.** Static prompts can't reproduce what
 these skills actually do — they have an LLM design each poster around the
-specific photo. `server/engine/promptCompiler.js` ports that step: before
+specific photo. The prompt compiler ports that step (live:
+`server-go/internal/provider`; retired Node original: `server/engine/promptCompiler.js`): before
 generation, a fast vision-capable chat model (`PROMPT_COMPILER_MODEL`, default
 `gpt-5.4-mini`) looks at the photo and compiles a four-paragraph image-edit
 prompt — fragment/layout plan matched to the scene's actual layers, short
@@ -171,7 +263,16 @@ invariants (never rotate/flip source fragments). Falls back to the static
 ## Deliberate MVP simplifications
 
 - Analysis is heuristic (no face detection); labeled `heuristic-0.1`.
-- Store purchases are mocked server-side with the real verify/grant shape.
 - Uploads are session-authenticated paths standing in for short-lived signed URLs.
-- Apple/Google sign-in uses a dev fake-provider adapter; works, private images, credits, generation, and purchases require a registered account.
 - Per-job cost telemetry stores provider token usage as a proxy metric.
+- **Store purchases**: the Go backend verifies real Google Play receipts through the
+  `androidpublisher` API (`internal/play`). The mock path is double-gated (env
+  `ALLOW_MOCK_PURCHASES` **and** an admin token) and is **off in production**.
+  Apple receipt verification is not wired up.
+- **Apple/Google sign-in**: the Go backend does real ID-token verification
+  (`internal/oidc`: JWKS + RS256 + `iss`/`aud`/`exp`). 🔴 The three production credentials are
+  currently empty, so both paths return 501 `PROVIDER_NOT_CONFIGURED` and neither has ever run
+  against a real endpoint — end-to-end testing is required before enabling either (see
+  「已知问题 / 待办」above). Email-code login is the working path.
+- Works, private images, credits, generation and purchases all require a **registered**
+  account; guest tokens unlock none of it.
