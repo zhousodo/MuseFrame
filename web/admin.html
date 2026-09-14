@@ -131,8 +131,12 @@
   .muted{color:var(--muted);}
 
   /* ---------- 徽章 ---------- */
+  /* 🔴 文字色不能用 --muted(#6b7280)：在 #f3f4f6 底上只有 4.39:1，够不着 WCAG AA 的 4.5
+     （徽章是 11px 正文级，走 4.5 不是 3.0 那一档）。压深一档到 #4b5563 → 6.87:1。
+     这里跟 .b.ok/.b.warn/.b.err 一样写成「底色 + 文字色」的字面量对，不动 --muted ——
+     那是跨后台契约 token，且它用在白底正文上是 4.83:1，本来就合格，不该为徽章去改它。 */
   .b{display:inline-block;font-size:11px;line-height:18px;padding:0 8px;border-radius:6px;white-space:nowrap;
-     font-weight:600;background:#f3f4f6;color:var(--muted);}
+     font-weight:600;background:#f3f4f6;color:#4b5563;}
   .b+.b{margin-left:4px;}
   .b.ok{background:#dcfce7;color:#15803d;}
   .b.warn{background:#fef3c7;color:#b45309;}
@@ -285,6 +289,24 @@
     button.sm{min-height:44px;padding:8px 12px;}
     #viewer{padding:0;}
     #viewer .drawer{width:100vw;max-height:100vh;border-radius:0;}
+  }
+
+  /* ---------- ≤413px：顶栏让品牌名单独承压 ----------
+     🔴 375px 实测顶栏 scrollWidth 392 > clientWidth 375，登出按钮被裁掉 17px，
+        而 html,body 的 overflow-x:hidden 让它连滚都滚不出来 —— 点不全。
+        根因是 .topbar 这个 flex 容器里**没有一项愿意让位**：.burger 写了
+        width:44px 却因为默认 flex-shrink:1 被压成 16.38×44（v2 承诺的
+        「触控目标 ≥44×44」对它根本没兑现），品牌名又 white-space:nowrap 不肯收缩。
+        只给 .burger 加 flex:0 0 auto 会让溢出从 392 涨到 420 —— 泄压口不在那儿。
+     🔴 让位的必须是品牌名：窄屏上它是纯装饰。环境徽章是「我在生产环境」的安全
+        信号、登出是必要操作，两个都不能砍，所以显式钉成 flex:0 0 auto。
+     🔴 阈值 413 与掌镜后台保持一致（覆盖 414 以下全部机型；不用 400 ——
+        规则在区间中间开洞比规则本身宽松更糟）。 */
+  @media (max-width:413px){
+    .burger{flex:0 0 auto;}
+    /* min-width:0 是泄压口：没有它 flex 项不会收缩到 min-content 以下，省略号永远不出现。 */
+    .topbar .brand{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .topbar .b,.topbar button{flex:0 0 auto;}
   }
 </style>
 </head>

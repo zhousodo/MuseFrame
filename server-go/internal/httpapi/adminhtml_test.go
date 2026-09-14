@@ -494,6 +494,50 @@ func TestAdminHTMLFollowsSharedLayoutSpec(t *testing.T) {
 	}
 }
 
+// 🔴 窄屏顶栏不许再挤裂。
+//
+// 2026-09-14 验收实测：375px 下 .topbar 的 scrollWidth 392 > clientWidth 375，
+// 登出按钮被裁掉 17px，而 html,body 的 overflow-x:hidden 让它连滚都滚不出来 ——
+// 用户没有任何办法把它拉回来。同时 .burger 虽然写了 width:44px，却因为父级是 flex
+// 且没设 flex-shrink，被压成 16.38×44，「触控目标 ≥44×44」根本没兑现。
+//
+// 修法是让品牌名成为唯一的弹性项（min-width:0 才是泄压口 —— 没有它 flex 项不会
+// 收缩到 min-content 以下、省略号永远不出现），徽章与按钮显式钉死不参与压缩。
+// 这几条是一组，少任何一条都会退回挤裂，所以整组钉在这里。
+func TestAdminHTMLNarrowTopbarDoesNotCrush(t *testing.T) {
+	code := adminCode(t)
+	for _, want := range []string{
+		// 阈值与掌镜后台保持一致：覆盖 414 以下全部机型，不在区间中间开洞。
+		"@media (max-width:413px)",
+		".burger{flex:0 0 auto;}",
+		// 品牌名是唯一让位的那个：窄屏上它是装饰。
+		"min-width:0",
+		"text-overflow:ellipsis",
+		// 环境徽章（「我在生产环境」的安全信号）与登出（必要操作）不许被压。
+		".topbar .b,.topbar button{flex:0 0 auto;}",
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("窄屏顶栏会挤裂（登出被裁 / 汉堡不足 44×44），缺少：%s", want)
+		}
+	}
+}
+
+// 🔴 默认徽章 .b 的文字色不许退回 --muted。
+//
+// --muted(#6b7280) 配 .b 的 #f3f4f6 底只有 4.39:1，够不着 WCAG AA 的 4.5
+// （徽章 11px 属正文级，走 4.5 不是 3.0 那一档）。压深到 #4b5563 → 6.87:1。
+// 🔴 不许「顺手」改 --muted 本身：那是跨后台契约 token，且它用在白底正文上
+// 是 4.83:1 本来就合格 —— 为徽章去动它会同时改坏另外三个后台。
+func TestAdminHTMLDefaultBadgeMeetsAA(t *testing.T) {
+	code := adminCode(t)
+	if !strings.Contains(code, "font-weight:600;background:#f3f4f6;color:#4b5563;") {
+		t.Error(".b 默认徽章文字色必须是 #4b5563（配 #f3f4f6 底 = 6.87:1）；退回 var(--muted) 只有 4.39:1，不达 AA")
+	}
+	if !strings.Contains(code, "--muted:#6b7280") {
+		t.Error("--muted 是跨后台契约 token，不许为了徽章对比度去改它")
+	}
+}
+
 // 🔴 图表取色与 --primary 必须同值。
 //
 // 图表主序列的颜色是**手工写死的 hex 字面量**，不是 var(--primary)。
