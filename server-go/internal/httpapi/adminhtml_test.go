@@ -447,20 +447,25 @@ func TestAdminHTMLRequestsDownscaledThumbnails(t *testing.T) {
 	}
 }
 
-// 统一视觉规范的骨架：左侧固定导航 220px、顶部栏（产品名 + 环境 + 登出）、
-// 内容区 ≤1280px、≤768px 抽屉式导航。
+// 统一视觉规范的骨架：左侧固定导航 240px、顶部栏（产品名 + 环境 + 登出）、
+// 内容区 ≤1440px、≤768px 抽屉式导航。
+// 这条守卫是「防止有人偷偷改掉共享规范」用的 —— 钉子只许往新值上挪，不许拔。
 func TestAdminHTMLFollowsSharedLayoutSpec(t *testing.T) {
 	code := adminCode(t)
 	for _, want := range []string{
-		"--nav-w:220px",
-		"--content:1280px",
-		"--primary:#2563eb",
+		"--nav-w:240px",     // 2026-09-14 视觉规范 v2，与光轴脚本 / 掌镜 Zlens / 拍搭同步
+		"--content:1440px",  // 2026-09-14 视觉规范 v2，与光轴脚本 / 掌镜 Zlens / 拍搭同步
+		"--primary:#4F46E5", // 2026-09-14 视觉规范 v2，与光轴脚本 / 掌镜 Zlens / 拍搭同步
+		// 状态四色与边框色是跨后台契约，v2 没动，断言原样保留（含小写）。
 		"--ok:#16a34a",
 		"--warn:#d97706",
 		"--err:#dc2626",
 		"--muted:#6b7280",
 		"--line:#e5e7eb",
-		`-apple-system,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC","Segoe UI",sans-serif`,
+		// 旧主色 #2563eb 没有消失，降级成信息色，继续守着。
+		"--info:#2563eb",
+		"--top-h:64px",
+		`Inter,-apple-system,"PingFang SC","Microsoft YaHei","Noto Sans SC","Noto Sans CJK SC","Segoe UI",sans-serif`, // 2026-09-14 视觉规范 v2，与光轴脚本 / 掌镜 Zlens / 拍搭同步
 		"@media (max-width:768px)",
 		"body.navopen .nav",
 		`id="logoutBtn"`,
@@ -486,6 +491,144 @@ func TestAdminHTMLFollowsSharedLayoutSpec(t *testing.T) {
 	// 斑马纹。
 	if !strings.Contains(code, "tbody tr:nth-child(even) td") {
 		t.Error("表格必须有斑马纹")
+	}
+}
+
+// cssBlockAfter 取出 prefix（形如 "@media (...){"）之后配对花括号内的整段内容。
+// 用花括号配对而不是找下一个 "}"：媒体查询里每条规则自己就带一对花括号，
+// 只找第一个 "}" 会在第一条规则处就截断，断言于是变成假绿。
+func cssBlockAfter(code, prefix string) (string, bool) {
+	i := strings.Index(code, prefix)
+	if i < 0 {
+		return "", false
+	}
+	start := i + len(prefix)
+	depth := 1
+	for j := start; j < len(code); j++ {
+		switch code[j] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return code[start:j], true
+			}
+		}
+	}
+	return "", false
+}
+
+// 🔴 窄屏顶栏不许再挤裂。
+//
+// 2026-09-14 验收实测：375px 下 .topbar 的 scrollWidth 392 > clientWidth 375，
+// 登出按钮被裁掉 17px，而 html,body 的 overflow-x:hidden 让它连滚都滚不出来 ——
+// 用户没有任何办法把它拉回来。同时 .burger 虽然写了 width:44px，却因为父级是 flex
+// 且没设 flex-shrink，被压成 16.38×44，「触控目标 ≥44×44」根本没兑现。
+//
+// 修法分两件事，**它们的作用域不一样，别再合并回一个断点**：
+//
+//  1. 品牌名可收缩（min-width:0 + ellipsis）—— **无条件**，不许放进任何媒体查询。
+//     min-width:0 不是「窄屏才要的」，是 flex 子项能被省略号截断的先决条件：
+//     flex 项默认 min-width:auto，不收缩到 min-content 以下，ellipsis 永不触发。
+//     「能不能收缩」是布局能力，该由空间够不够决定，而那是浏览器算的 ——
+//     拿断点去划线必然留夹缝：上一版划在 413，就在 414–418 这 5px 漏出
+//     「登出被裁 4.8px」（419 才是顶栏自然内容宽）。
+//  2. 汉堡 44×44 —— 在 768 档，这条**真有断点语义**：768 以下才是抽屉布局、
+//     汉堡才是唯一导航入口。
+func TestAdminHTMLNarrowTopbarDoesNotCrush(t *testing.T) {
+	code := adminCode(t)
+
+	// ① 品牌名的收缩能力必须挂在 .topbar .brand 自己身上。
+	brandRe := regexp.MustCompile(`\.topbar \.brand\{[^}]*min-width:0[^}]*text-overflow:ellipsis[^}]*\}`)
+	if !brandRe.MatchString(code) {
+		t.Error(".topbar .brand 必须同时带 min-width:0 与 text-overflow:ellipsis（少 min-width:0 则省略号永不触发，压力会顶到登出上）")
+	}
+
+	// ② 🔴 而且必须在**任何媒体查询之外** —— 这正是 414–418 夹缝的根因。
+	//    第一个 @media 之前的那段就是无条件生效的规则。
+	if i := strings.Index(code, "@media"); i < 0 {
+		t.Fatal("样式表里一个 @media 都没有，断言前提不成立")
+	} else if !brandRe.MatchString(code[:i]) {
+		t.Error("品牌名的 min-width:0/ellipsis 被塞进了媒体查询里 —— 必须无条件生效，否则断点之外又会留出挤裂的夹缝")
+	}
+
+	// ③ 徽章与按钮不参与压缩（无条件）：让位的只能是品牌名。
+	if !strings.Contains(code, ".topbar .b,.topbar button{flex:0 0 auto;}") {
+		t.Error("环境徽章与顶栏按钮必须 flex:0 0 auto —— 否则收缩会被分摊到登出身上")
+	}
+
+	// ④ 汉堡的触控目标必须落在 768 档之内。
+	const mq768 = "@media (max-width:768px){"
+	blk, ok := cssBlockAfter(code, mq768)
+	if !ok {
+		t.Fatal("找不到 @media (max-width:768px) 区块")
+	}
+	if !strings.Contains(blk, ".burger{width:44px;height:44px;}") {
+		t.Error("汉堡的 44×44 触控目标必须在 @media (max-width:768px) 里（768 以下才是抽屉布局，汉堡是唯一导航入口）")
+	}
+}
+
+// 🔴 默认徽章 .b 的文字色不许退回 --muted。
+//
+// --muted(#6b7280) 配 .b 的 #f3f4f6 底只有 4.39:1，够不着 WCAG AA 的 4.5
+// （徽章 11px 属正文级，走 4.5 不是 3.0 那一档）。压深到 #4b5563 → 6.87:1。
+// 🔴 不许「顺手」改 --muted 本身：那是跨后台契约 token，且它用在白底正文上
+// 是 4.83:1 本来就合格 —— 为徽章去动它会同时改坏另外三个后台。
+func TestAdminHTMLDefaultBadgeMeetsAA(t *testing.T) {
+	code := adminCode(t)
+	if !strings.Contains(code, "font-weight:600;background:#f3f4f6;color:#4b5563;") {
+		t.Error(".b 默认徽章文字色必须是 #4b5563（配 #f3f4f6 底 = 6.87:1）；退回 var(--muted) 只有 4.39:1，不达 AA")
+	}
+	if !strings.Contains(code, "--muted:#6b7280") {
+		t.Error("--muted 是跨后台契约 token，不许为了徽章对比度去改它")
+	}
+}
+
+// 🔴 图表取色与 --primary 必须同值。
+//
+// 图表主序列的颜色是**手工写死的 hex 字面量**，不是 var(--primary)。
+// 之所以留字面量：不想为了省一次同步就去改既有取色路径（图例走 HTML 内联样式、
+// 折线柱子走 SVG 属性，两条路）。注意 admin.html 里原来那句「SVG 表现属性不解析
+// var()、写了会掉成黑色」是**假的**，2026-09-14 实测证伪（表现属性会被当作
+// author-origin 的 CSS 声明解析，var() 正常替换，连 fallback 语法都支持）——
+// 所以这里是「选择不改」，不是「不能改」。
+//
+// 但「选择不改」就欠下一笔手工同步：上面那条 TestAdminHTMLFollowsSharedLayoutSpec
+// 只钉 --primary 变量，钉不住这三处字面量。改主色时改了变量、忘了改这里，
+// 图表会**静默**留在旧主色上，没有任何测试会红。这条守卫就是补这个洞。
+//
+// 钉的是「两者一致」这个不变量，不是某个具体色值 —— 下次改主色只需改 :root 一处，
+// 再把这三处跟上即可，不用回来改测试。
+func TestAdminHTMLChartColorsMatchPrimary(t *testing.T) {
+	code := adminCode(t)
+
+	primaryRe := regexp.MustCompile(`--primary:(#[0-9A-Fa-f]{6})`)
+	pm := primaryRe.FindStringSubmatch(code)
+	if pm == nil {
+		t.Fatal("在 :root 里找不到 --primary:#xxxxxx，无法校验图表取色")
+	}
+	primary := pm[1]
+
+	// 每条都锚在稳定的语义标签上（'成功' / 'jobsSucceeded' / 'newUsers'）。
+	// 🔴 匹配不到 = 取色路径被重构了，必须 Fatal 报错而不是静默放行 ——
+	// 一条钉不住的断言比没有断言更坏（假绿）。
+	for _, c := range []struct {
+		what string
+		re   *regexp.Regexp
+	}{
+		{"chartA 图例「成功」", regexp.MustCompile(`\['成功','(#[0-9A-Fa-f]{6})'\]`)},
+		{"chartA 折线 jobsSucceeded", regexp.MustCompile(`key:'jobsSucceeded', color:'(#[0-9A-Fa-f]{6})'`)},
+		{"chartB 柱状 newUsers", regexp.MustCompile(`barChart\(days, 'newUsers', '(#[0-9A-Fa-f]{6})'`)},
+	} {
+		m := c.re.FindStringSubmatch(code)
+		if m == nil {
+			t.Errorf("%s：取色位置没匹配到（取色路径被改过？），这条守卫已失效，请修正正则", c.what)
+			continue
+		}
+		if !strings.EqualFold(m[1], primary) {
+			t.Errorf("%s 的颜色是 %s，与 --primary(%s) 不一致 —— 改主色时漏同步了这处字面量",
+				c.what, m[1], primary)
+		}
 	}
 }
 
