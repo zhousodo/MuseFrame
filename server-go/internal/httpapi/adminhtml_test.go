@@ -494,6 +494,30 @@ func TestAdminHTMLFollowsSharedLayoutSpec(t *testing.T) {
 	}
 }
 
+// cssBlockAfter 取出 prefix（形如 "@media (...){"）之后配对花括号内的整段内容。
+// 用花括号配对而不是找下一个 "}"：媒体查询里每条规则自己就带一对花括号，
+// 只找第一个 "}" 会在第一条规则处就截断，断言于是变成假绿。
+func cssBlockAfter(code, prefix string) (string, bool) {
+	i := strings.Index(code, prefix)
+	if i < 0 {
+		return "", false
+	}
+	start := i + len(prefix)
+	depth := 1
+	for j := start; j < len(code); j++ {
+		switch code[j] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return code[start:j], true
+			}
+		}
+	}
+	return "", false
+}
+
 // 🔴 窄屏顶栏不许再挤裂。
 //
 // 2026-09-14 验收实测：375px 下 .topbar 的 scrollWidth 392 > clientWidth 375，
@@ -501,24 +525,46 @@ func TestAdminHTMLFollowsSharedLayoutSpec(t *testing.T) {
 // 用户没有任何办法把它拉回来。同时 .burger 虽然写了 width:44px，却因为父级是 flex
 // 且没设 flex-shrink，被压成 16.38×44，「触控目标 ≥44×44」根本没兑现。
 //
-// 修法是让品牌名成为唯一的弹性项（min-width:0 才是泄压口 —— 没有它 flex 项不会
-// 收缩到 min-content 以下、省略号永远不出现），徽章与按钮显式钉死不参与压缩。
-// 这几条是一组，少任何一条都会退回挤裂，所以整组钉在这里。
+// 修法分两件事，**它们的作用域不一样，别再合并回一个断点**：
+//
+//  1. 品牌名可收缩（min-width:0 + ellipsis）—— **无条件**，不许放进任何媒体查询。
+//     min-width:0 不是「窄屏才要的」，是 flex 子项能被省略号截断的先决条件：
+//     flex 项默认 min-width:auto，不收缩到 min-content 以下，ellipsis 永不触发。
+//     「能不能收缩」是布局能力，该由空间够不够决定，而那是浏览器算的 ——
+//     拿断点去划线必然留夹缝：上一版划在 413，就在 414–418 这 5px 漏出
+//     「登出被裁 4.8px」（419 才是顶栏自然内容宽）。
+//  2. 汉堡 44×44 —— 在 768 档，这条**真有断点语义**：768 以下才是抽屉布局、
+//     汉堡才是唯一导航入口。
 func TestAdminHTMLNarrowTopbarDoesNotCrush(t *testing.T) {
 	code := adminCode(t)
-	for _, want := range []string{
-		// 阈值与掌镜后台保持一致：覆盖 414 以下全部机型，不在区间中间开洞。
-		"@media (max-width:413px)",
-		".burger{flex:0 0 auto;}",
-		// 品牌名是唯一让位的那个：窄屏上它是装饰。
-		"min-width:0",
-		"text-overflow:ellipsis",
-		// 环境徽章（「我在生产环境」的安全信号）与登出（必要操作）不许被压。
-		".topbar .b,.topbar button{flex:0 0 auto;}",
-	} {
-		if !strings.Contains(code, want) {
-			t.Errorf("窄屏顶栏会挤裂（登出被裁 / 汉堡不足 44×44），缺少：%s", want)
-		}
+
+	// ① 品牌名的收缩能力必须挂在 .topbar .brand 自己身上。
+	brandRe := regexp.MustCompile(`\.topbar \.brand\{[^}]*min-width:0[^}]*text-overflow:ellipsis[^}]*\}`)
+	if !brandRe.MatchString(code) {
+		t.Error(".topbar .brand 必须同时带 min-width:0 与 text-overflow:ellipsis（少 min-width:0 则省略号永不触发，压力会顶到登出上）")
+	}
+
+	// ② 🔴 而且必须在**任何媒体查询之外** —— 这正是 414–418 夹缝的根因。
+	//    第一个 @media 之前的那段就是无条件生效的规则。
+	if i := strings.Index(code, "@media"); i < 0 {
+		t.Fatal("样式表里一个 @media 都没有，断言前提不成立")
+	} else if !brandRe.MatchString(code[:i]) {
+		t.Error("品牌名的 min-width:0/ellipsis 被塞进了媒体查询里 —— 必须无条件生效，否则断点之外又会留出挤裂的夹缝")
+	}
+
+	// ③ 徽章与按钮不参与压缩（无条件）：让位的只能是品牌名。
+	if !strings.Contains(code, ".topbar .b,.topbar button{flex:0 0 auto;}") {
+		t.Error("环境徽章与顶栏按钮必须 flex:0 0 auto —— 否则收缩会被分摊到登出身上")
+	}
+
+	// ④ 汉堡的触控目标必须落在 768 档之内。
+	const mq768 = "@media (max-width:768px){"
+	blk, ok := cssBlockAfter(code, mq768)
+	if !ok {
+		t.Fatal("找不到 @media (max-width:768px) 区块")
+	}
+	if !strings.Contains(blk, ".burger{width:44px;height:44px;}") {
+		t.Error("汉堡的 44×44 触控目标必须在 @media (max-width:768px) 里（768 以下才是抽屉布局，汉堡是唯一导航入口）")
 	}
 }
 

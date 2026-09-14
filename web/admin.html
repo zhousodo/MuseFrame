@@ -51,7 +51,20 @@
     background:var(--surface);border-bottom:1px solid var(--line);
     display:flex;align-items:center;gap:12px;padding:0 16px;
   }
-  .topbar .brand{font-size:15px;font-weight:600;white-space:nowrap;}
+  /* 🔴 min-width:0 不是「窄屏才要的」，是 flex 子项能被省略号截断的**先决条件**：
+     flex 项默认 min-width:auto，不会收缩到 min-content 以下，text-overflow:ellipsis
+     于是永远不触发，压力只能往外顶（实测：只给汉堡加 flex:0 0 auto 而没有泄压口时，
+     顶栏溢出反而从 392 涨到 420）。
+     🔴 所以这条**不设断点**：「flex 项能不能收缩」是布局能力，由空间够不够决定，
+     而空间够不够浏览器自己会算。硬拿一个猜出来的断点去划线，必然在某个宽度上留夹缝
+     —— 上一版划在 413，就在 414–418 这 5px 漏出了「登出被裁 4.8px」
+     （419 才是顶栏的自然内容宽）。
+     泄压口常备：空间够时省略号根本不出现、观感零变化，不够时品牌名自动让位。 */
+  .topbar .brand{font-size:15px;font-weight:600;white-space:nowrap;
+    min-width:0;overflow:hidden;text-overflow:ellipsis;}
+  /* 让位的只能是品牌名（窄屏上它是装饰）：环境徽章是「我在生产环境」的安全信号、
+     按钮是必要操作，两者显式钉死不参与压缩。没有压力时这条不产生任何效果。 */
+  .topbar .b,.topbar button{flex:0 0 auto;}
   .topbar .spacer{flex:1;}
   .topbar .stamp{color:var(--muted);font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums;}
   .burger{display:none;width:36px;height:36px;border:1px solid var(--line);background:var(--surface);
@@ -284,6 +297,10 @@
     .filters .right{margin-left:0;width:100%;}
     .tw{max-height:70vh;}
     /* 移动端触控目标 ≥44×44（统一规范 v2 §4）。.burger 只在这个断点里出现，直接放大。 */
+    /* 🔴 这条是**真有断点语义**的那种：768 以下才是抽屉布局，.burger 才是唯一的
+       导航入口，所以必须拇指点得中 —— 它在 414 和在 375 一样需要 44×44。
+       （不参与压缩由上面无条件的 .topbar button{flex:0 0 auto} 保证；
+       光写 width:44px 不够，flex 默认会把它压回去：实测 375 压成 16.38、414 压成 27.59。） */
     .burger{width:44px;height:44px;}
     button{min-height:44px;}
     button.sm{min-height:44px;padding:8px 12px;}
@@ -291,23 +308,9 @@
     #viewer .drawer{width:100vw;max-height:100vh;border-radius:0;}
   }
 
-  /* ---------- ≤413px：顶栏让品牌名单独承压 ----------
-     🔴 375px 实测顶栏 scrollWidth 392 > clientWidth 375，登出按钮被裁掉 17px，
-        而 html,body 的 overflow-x:hidden 让它连滚都滚不出来 —— 点不全。
-        根因是 .topbar 这个 flex 容器里**没有一项愿意让位**：.burger 写了
-        width:44px 却因为默认 flex-shrink:1 被压成 16.38×44（v2 承诺的
-        「触控目标 ≥44×44」对它根本没兑现），品牌名又 white-space:nowrap 不肯收缩。
-        只给 .burger 加 flex:0 0 auto 会让溢出从 392 涨到 420 —— 泄压口不在那儿。
-     🔴 让位的必须是品牌名：窄屏上它是纯装饰。环境徽章是「我在生产环境」的安全
-        信号、登出是必要操作，两个都不能砍，所以显式钉成 flex:0 0 auto。
-     🔴 阈值 413 与掌镜后台保持一致（覆盖 414 以下全部机型；不用 400 ——
-        规则在区间中间开洞比规则本身宽松更糟）。 */
-  @media (max-width:413px){
-    .burger{flex:0 0 auto;}
-    /* min-width:0 是泄压口：没有它 flex 项不会收缩到 min-content 以下，省略号永远不出现。 */
-    .topbar .brand{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-    .topbar .b,.topbar button{flex:0 0 auto;}
-  }
+  /* 注：这里曾有一条 @media (max-width:413px) 专门「让品牌名可收缩」。
+     它的职责已被上面**无条件**的 .topbar .brand{min-width:0} 完整接管 ——
+     留一条空规则只会让人猜它还管什么，所以整条删掉。 */
 </style>
 </head>
 <body>
