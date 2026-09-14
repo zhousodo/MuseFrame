@@ -494,6 +494,54 @@ func TestAdminHTMLFollowsSharedLayoutSpec(t *testing.T) {
 	}
 }
 
+// 🔴 图表取色与 --primary 必须同值。
+//
+// 图表主序列的颜色是**手工写死的 hex 字面量**，不是 var(--primary)。
+// 之所以留字面量：不想为了省一次同步就去改既有取色路径（图例走 HTML 内联样式、
+// 折线柱子走 SVG 属性，两条路）。注意 admin.html 里原来那句「SVG 表现属性不解析
+// var()、写了会掉成黑色」是**假的**，2026-09-14 实测证伪（表现属性会被当作
+// author-origin 的 CSS 声明解析，var() 正常替换，连 fallback 语法都支持）——
+// 所以这里是「选择不改」，不是「不能改」。
+//
+// 但「选择不改」就欠下一笔手工同步：上面那条 TestAdminHTMLFollowsSharedLayoutSpec
+// 只钉 --primary 变量，钉不住这三处字面量。改主色时改了变量、忘了改这里，
+// 图表会**静默**留在旧主色上，没有任何测试会红。这条守卫就是补这个洞。
+//
+// 钉的是「两者一致」这个不变量，不是某个具体色值 —— 下次改主色只需改 :root 一处，
+// 再把这三处跟上即可，不用回来改测试。
+func TestAdminHTMLChartColorsMatchPrimary(t *testing.T) {
+	code := adminCode(t)
+
+	primaryRe := regexp.MustCompile(`--primary:(#[0-9A-Fa-f]{6})`)
+	pm := primaryRe.FindStringSubmatch(code)
+	if pm == nil {
+		t.Fatal("在 :root 里找不到 --primary:#xxxxxx，无法校验图表取色")
+	}
+	primary := pm[1]
+
+	// 每条都锚在稳定的语义标签上（'成功' / 'jobsSucceeded' / 'newUsers'）。
+	// 🔴 匹配不到 = 取色路径被重构了，必须 Fatal 报错而不是静默放行 ——
+	// 一条钉不住的断言比没有断言更坏（假绿）。
+	for _, c := range []struct {
+		what string
+		re   *regexp.Regexp
+	}{
+		{"chartA 图例「成功」", regexp.MustCompile(`\['成功','(#[0-9A-Fa-f]{6})'\]`)},
+		{"chartA 折线 jobsSucceeded", regexp.MustCompile(`key:'jobsSucceeded', color:'(#[0-9A-Fa-f]{6})'`)},
+		{"chartB 柱状 newUsers", regexp.MustCompile(`barChart\(days, 'newUsers', '(#[0-9A-Fa-f]{6})'`)},
+	} {
+		m := c.re.FindStringSubmatch(code)
+		if m == nil {
+			t.Errorf("%s：取色位置没匹配到（取色路径被改过？），这条守卫已失效，请修正正则", c.what)
+			continue
+		}
+		if !strings.EqualFold(m[1], primary) {
+			t.Errorf("%s 的颜色是 %s，与 --primary(%s) 不一致 —— 改主色时漏同步了这处字面量",
+				c.what, m[1], primary)
+		}
+	}
+}
+
 // 🔴 页面上绝不允许出现「—」「undefined」「NaN」这类占位：
 // 「—」既可能是「这里本来就没有」也可能是「取数取挂了」，而这两件事的
 // 处理方式完全相反。空值一律换成一句人话（「无」「未记录」「游客（无邮箱）」）。

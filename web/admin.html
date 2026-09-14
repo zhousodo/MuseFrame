@@ -1621,9 +1621,14 @@ async function loadStats(){
     const r = await api('/v1/admin/stats/daily?days=' + statsDays);
     const days = r.days || [];
     const has = days.some(d => (d.jobsSucceeded||0) + (d.jobsFailed||0) + (d.newUsers||0) + (d.revenueMinor||0) > 0);
-    // 🔴 图表主序列跟品牌色走（v2 = #4F46E5）。这里只能写 hex 字面量，不能写 var(--primary)：
-    //    这些值最终落在 SVG 的 stroke= / fill= **表现属性**上，浏览器不解析属性里的 var()，
-    //    写了就变成非法值、线和柱子会掉成黑色。改主色时记得同步这三处。
+    // 🔴 图表主序列跟品牌色走（v2 = #4F46E5），这三处**刻意**写 hex 字面量。
+    //    注意：不是因为 var() 不能用 —— 2026-09-14 实测证伪过一个旧说法：
+    //    SVG 的 stroke= / fill= 表现属性**会**被当作 author-origin 的 CSS 声明解析，
+    //    var() 正常替换（连 var(--x,#fallback) 都支持），失败时也是回落/继承而非掉成黑色。
+    //    写字面量纯粹是为了不改动既有取色路径（图例走的是 HTML 内联样式，不是 SVG 属性）。
+    //    代价：改主色必须手工同步这三处。这个代价由 adminhtml_test.go 的
+    //    TestAdminHTMLChartColorsMatchPrimary 兜底（它断言这里的取色与 --primary 同值），
+    //    不是靠人记性 —— 改了变量忘了改这里，那条守卫会红。
     $('chartA').innerHTML = chartBox(`每日生成（近 ${statsDays} 天）`, [['成功','#4F46E5'],['失败','#dc2626']],
       has ? lineChart(days, [{key:'jobsSucceeded', color:'#4F46E5', label:'成功'},{key:'jobsFailed', color:'#dc2626', label:'失败'}]) : '',
       '窗口内没有生成任务。');
