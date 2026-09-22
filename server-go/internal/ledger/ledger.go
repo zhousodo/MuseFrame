@@ -172,6 +172,46 @@ func Release(ctx context.Context, q store.Queryer, newID NewID, userID, jobID st
 	return nil
 }
 
+// Revoke 撤销一笔购买**尚未消费**的额度（退款）。append-only：不改任何已有分录，
+// 对该购买发出的每个还有余额的桶各补一笔负的 refund 分录，键
+// refund:purchase:<purchaseId>:<bucketId>，重复调用是空操作。
+// 已预留给在跑任务的那部分不在余额里，所以不会被撤走、也不会把桶扣成负数。
+// 返回实际撤销的张数。
+//
+// 🔴 调用方必须在事务里：上锁 → 读余额 → 写分录必须是原子的（与 Reserve 同理）。
+func Revoke(ctx context.Context, q store.Queryer, newID NewID, userID, purchaseID string, now time.Time) (int, error) {
+	if err := store.RequireTx(q, "ledger.Revoke"); err != nil {
+		return 0, err
+	}
+	if err := store.LockUserCredits(ctx, q, userID); err != nil {
+		return 0, err
+	}
+	buckets, err := store.PurchaseBucketBalances(ctx, q, userID, purchaseID, now)
+	if err != nil {
+		return 0, err
+	}
+	total := 0
+	for _, b := range buckets {
+		if b.Balance <= 0 {
+			continue
+		}
+		ref := "refund:purchase:" + purchaseID + ":" + b.ID
+		done, err := store.LedgerRefExistsForUser(ctx, q, userID, ref)
+		if err != nil {
+			return 0, err
+		}
+		if done {
+			continue
+		}
+		pid := purchaseID
+		if err := store.InsertLedger(ctx, q, newID(), userID, "refund", -b.Balance, b.ID, nil, &pid, ref, now); err != nil {
+			return 0, err
+		}
+		total += b.Balance
+	}
+	return total, nil
+}
+
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

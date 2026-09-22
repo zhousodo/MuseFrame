@@ -14,6 +14,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"museframe-api/internal/waffo"
 )
 
 // MaxPoolConnsHardLimit 硬顶 4：统一 PG 实例 max_connections=50，每项目配额 8
@@ -68,6 +70,23 @@ type Config struct {
 
 	GoogleServiceAccountJSON string
 	GoogleWebClientID        string
+
+	// Waffo Pancake（网页端结账，商户记录 MoR）。
+	// 🔴 WaffoPrivateKey 是商户 API 私钥：只在这里出现，绝不进 DB、绝不进日志。
+	// 商户号 / 店铺号 / 公钥都不是密钥，但同样只从环境变量读（不给后台热改）。
+	WaffoMerchantID string
+	WaffoPrivateKey string
+	WaffoStoreID    string
+	// WaffoWebhookPublicKey 是平台级 webhook 验签公钥（按环境各一把）。
+	// WAFFO_MODE=prod 且环境变量留空时用 internal/waffo 内置的生产公钥；
+	// test 模式必须显式给（测试钥不内置）。
+	WaffoWebhookPublicKey string
+	WaffoAPIBaseURL       string
+	// WaffoMode 是本服务对应的 Waffo 环境（test | prod）。mode 不同的 webhook 事件
+	// 一律 200 但忽略：测试事件打到生产不能发额度。
+	WaffoMode string
+	// WaffoSuccessURL 是收银台付完之后「完成」按钮跳回的地址（必须是绝对 https）。
+	WaffoSuccessURL string
 }
 
 func getenv(k, def string) string {
@@ -151,6 +170,26 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("%s 必须 >= 1", f.env)
 		}
 		*f.dst = v
+	}
+
+	// ---- Waffo Pancake ----
+	c.WaffoMerchantID = strings.TrimSpace(os.Getenv("WAFFO_MERCHANT_ID"))
+	c.WaffoPrivateKey = os.Getenv("WAFFO_PRIVATE_KEY")
+	c.WaffoStoreID = strings.TrimSpace(os.Getenv("WAFFO_STORE_ID"))
+	c.WaffoAPIBaseURL = strings.TrimSpace(getenv("WAFFO_API_BASE_URL", waffo.DefaultBaseURL))
+	c.WaffoMode = strings.ToLower(strings.TrimSpace(getenv("WAFFO_MODE", "prod")))
+	if c.WaffoMode != "prod" && c.WaffoMode != "test" {
+		return nil, fmt.Errorf("WAFFO_MODE 只能是 prod 或 test")
+	}
+	c.WaffoWebhookPublicKey = strings.TrimSpace(os.Getenv("WAFFO_WEBHOOK_PUBLIC_KEY"))
+	if c.WaffoWebhookPublicKey == "" {
+		c.WaffoWebhookPublicKey = waffo.DefaultWebhookPublicKeyPEM(c.WaffoMode)
+	}
+	c.WaffoSuccessURL = strings.TrimSpace(getenv("WAFFO_SUCCESS_URL", "https://museframe.lenscript.cn/app?checkout=success"))
+	if !strings.HasPrefix(c.WaffoSuccessURL, "https://") {
+		// 文档：相对 / 无 scheme 的值创建会话时不报错，买家付款那一刻才被支付渠道拒掉，
+		// 而且只看到一句泛泛的「支付失败」。所以在启动时就挡住。
+		return nil, fmt.Errorf("WAFFO_SUCCESS_URL 必须是绝对的 https:// 地址")
 	}
 
 	return c, nil

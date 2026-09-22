@@ -15,8 +15,8 @@ func TestServerSecretsNotBrowsable(t *testing.T) {
 			t.Fatal("白名单里混进了 server_secrets")
 		}
 	}
-	if len(BrowsableTableNames()) != 23 {
-		t.Fatalf("白名单应为 23 张表（24 张业务表去掉 server_secrets），实际 %d", len(BrowsableTableNames()))
+	if len(BrowsableTableNames()) != 24 {
+		t.Fatalf("白名单应为 24 张表（25 张业务表去掉 server_secrets），实际 %d", len(BrowsableTableNames()))
 	}
 }
 

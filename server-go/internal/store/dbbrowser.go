@@ -26,7 +26,7 @@ import (
 	"time"
 )
 
-// browsableTables 是允许浏览的表白名单（24 张业务表去掉 server_secrets）。
+// browsableTables 是允许浏览的表白名单（25 张业务表去掉 server_secrets）。
 // server_secrets 存的是服务端持久随机盐与图片令牌 HMAC 密钥，
 // 运维没有任何正当理由在面板里看它 —— 整表拒绝。
 var browsableTables = map[string]bool{
@@ -36,6 +36,9 @@ var browsableTables = map[string]bool{
 	"idempotency_records": true, "manual_grants": true, "photo_analyses": true, "products": true,
 	"projects": true, "purchases": true, "sessions": true, "style_versions": true,
 	"styles": true, "user_feedback": true, "users": true,
+	// webhook_events（006）：支付平台回调的原样留档，退款 / 取消 / 找不到订单的异常
+	// 都记在它的 error 列里 —— 这是运营看「钱收了额度为什么没到」的第一站。
+	"webhook_events": true,
 	// server_secrets 刻意不在白名单里。
 }
 
