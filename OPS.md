@@ -49,7 +49,7 @@ sudo /srv/platform/scripts/platformctl deploy museframe --tag <tag>   # 见 DEPL
 sudo /srv/platform/scripts/platformctl rollback museframe
 sudo /srv/platform/scripts/platformctl backup museframe
 sudo /srv/platform/scripts/platformctl restore museframe  # 默认恢复到**临时库**；覆盖生产需 --force-production + 二次确认
-sudo /srv/platform/scripts/platformctl migrate museframe  # 先 dry-run 再确认
+sudo /srv/platform/scripts/platformctl migrate museframe  # 🔴 对 museframe 不可用（无 runner 目录，2026-09-23 实测），迁移按 DEPLOY.md §3 手工跑
 ```
 
 退出码：`0` 成功 / `1` 一般错误 / `2` 参数错 / `3` 资源不足拒绝执行 / `4` 校验失败。
@@ -86,7 +86,11 @@ sudo /srv/platform/scripts/platformctl migrate museframe  # 先 dry-run 再确�
 以及 2026-09-23 起的 Waffo 网页端结账一组：`WAFFO_MERCHANT_ID` / `WAFFO_STORE_ID` /
 🔴 `WAFFO_PRIVATE_KEY`（商户 API 私钥，与上面三个密钥同一红线）/ `WAFFO_MODE` /
 `WAFFO_WEBHOOK_PUBLIC_KEY`（prod 可留空，内置）/ `WAFFO_SUCCESS_URL` / `WAFFO_API_BASE_URL`。
-这一组**不在后台注册表里**（不显示、不可热改）。接入步骤见 [`DEPLOY.md`](DEPLOY.md) §6。
+这一组**不在后台注册表里**（不显示、不可热改）。接入步骤与上线记录见 [`DEPLOY.md`](DEPLOY.md) §6。
+🔴 `WAFFO_PRIVATE_KEY` 在 `app.env` 里**必须是一行**（PEM 头尾齐全、换行写成字面量 `
+`、不加引号）：
+compose 的 `env_file` 不接受多行值，贴成多行会让 `docker compose config` 解析失败、deploy 在替换容器前中止；
+只贴 base64 主体则服务起得来但日志报「私钥不可解析」、`billing.web` 为 false。改完先 `docker compose config >/dev/null` 再 deploy。
 
 🔴 **后台没有任何密钥写入口**：`image_provider_api_key` 与 `smtp_pass` 在配置页只显示固定掩码，
 写它们直接回 **422**。这是对 Node 版「运维从后台设了一次密钥，密钥就明文躺进 `app_config` 表
