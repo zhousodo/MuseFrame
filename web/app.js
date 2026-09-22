@@ -9,7 +9,7 @@
 // are used up the paywall asks the user to email support (manual top-up).
 import { ensureSession, ensureAssetToken, setToken, clearToken, get, post, put, del, assetUrl, apiUrl, track, token } from './api.js';
 import { deviceId, getAuthConfig, nativeSignIn, nativePurchase, isNative, platform, emailRequestCode, emailVerifyCode } from './native.js';
-import { t, getLang, setLang, initLang } from './i18n.js?v=20260907a';
+import { t, getLang, setLang, initLang } from './i18n.js?v=20260923a';
 
 // ---------- tiny DOM helper ----------
 function h(tag, attrs, ...children) {
@@ -129,6 +129,10 @@ const freeUnits = () => S.authConfig?.freeUnits ?? 3;
 const supportEmail = () => S.authConfig?.support?.email || 'donaldkuke@gmail.com';
 const supportQQ = () => S.authConfig?.support?.qqGroup || '';
 const nativeBilling = () => isNative() && !!(S.authConfig?.billing?.google || S.authConfig?.billing?.apple) && S.products.length > 0;
+// Web checkout (Waffo Pancake hosted cashier): any browser, never the packaged
+// app (stores forbid off-store payment inside native apps). Server-gated by
+// billing.web, which is only true once the merchant key + store id are set.
+const webBilling = () => !isNative() && !!S.authConfig?.billing?.web && S.products.length > 0;
 
 // Catalogue helpers: Chinese UI shows the CNY price, English the USD price.
 // A product with no CNY price is simply not offered to Chinese-language users.
@@ -137,7 +141,27 @@ function productPrice(p) {
   return p.priceMinor != null ? `$${(p.priceMinor / 100).toFixed(2)}` : null;
 }
 const productName = (p) => (getLang() === 'zh' ? (p.displayNameZh || p.displayName) : p.displayName);
-const offeredProducts = () => S.products.filter(p => productPrice(p) !== null);
+// Web checkout currency: CNY (WeChat Pay) only for packs shown to Chinese users
+// with a CNY price; subscriptions are USD-only on the provider side.
+const webCurrency = (p) => (p.productType === 'pack' && getLang() === 'zh' && p.priceCnyMinor != null ? 'CNY' : 'USD');
+function fmtMoney(minor, cur) {
+  if (minor == null) return '—';
+  const c = (cur || 'USD').toUpperCase();
+  const sym = { USD: '$', CNY: '¥', JPY: '¥', EUR: '€', GBP: '£', HKD: 'HK$' }[c] || (c + ' ');
+  if (c === 'JPY') return sym + String(Math.round(minor));
+  const v = minor / 100;
+  return sym + (c === 'CNY' ? v.toFixed(minor % 100 ? 2 : 0) : v.toFixed(2));
+}
+const webPrice = (p) => (webCurrency(p) === 'CNY' ? fmtMoney(p.priceCnyMinor, 'CNY') : fmtMoney(p.priceMinor, 'USD'));
+// With web checkout the subscription is always purchasable (USD), even when the
+// Chinese catalogue has no CNY price for it.
+const offeredProducts = () => S.products.filter(p => productPrice(p) !== null || (webBilling() && p.productType === 'subscription'));
+// The user's live web subscription, if any (drives "Manage subscription").
+function activeWebSubscription() {
+  const now = Date.now();
+  return (S.purchases || []).find(p => p.platform === 'waffo' && p.productType === 'subscription' && p.status === 'verified'
+    && (!p.expiresAt || Date.parse(p.expiresAt) > now)) || null;
+}
 function perImage(p) {
   if (!p.grantedUnits) return null;
   const minor = getLang() === 'zh' ? p.priceCnyMinor : p.priceMinor;
@@ -964,6 +988,7 @@ function ProfileScreen() {
   const planName = isFree ? t('Free account') : (S.products.find(p => p.internalKey === ent.plan)?.displayName || 'Creator');
   const rows = [
     isNative() && !isFree && [t('Manage subscription'), () => openPaywall('manage')],
+    !isNative() && activeWebSubscription() && [t('Manage subscription · cancel'), cancelWebSubscription],
     isNative() && [t('Restore purchases'), async () => { await refreshEnt(); render(); toast(S.ent.plan === 'free' ? t('No active plan found') : t('Purchases restored')); }],
     [t('Purchase history'), () => openInfo('purchases')],
     supportQQ() && [t('QQ group · buy credits') + ' · ' + supportQQ(), () => openPaywall('profile')],
@@ -996,9 +1021,14 @@ function ProfileScreen() {
         h('div', { style: { font: '400 12px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '4px' } },
           isFree
             ? (signedIn()
-              ? t('{n} artworks are included with your account. Packs start at {price}; buy in our QQ group or by email.', { n: freeUnits(), price: (offeredProducts().filter(p => p.productType === 'pack').sort((a, b) => a.grantedUnits - b.grantedUnits)[0] && productPrice(offeredProducts().filter(p => p.productType === 'pack').sort((a, b) => a.grantedUnits - b.grantedUnits)[0])) || '—' })
+              ? t(webBilling()
+                ? '{n} artworks are included with your account. Packs start at {price} — pay online by card or WeChat.'
+                : '{n} artworks are included with your account. Packs start at {price}; buy in our QQ group or by email.',
+              { n: freeUnits(), price: (offeredProducts().filter(p => p.productType === 'pack').sort((a, b) => a.grantedUnits - b.grantedUnits)[0] && productPrice(offeredProducts().filter(p => p.productType === 'pack').sort((a, b) => a.grantedUnits - b.grantedUnits)[0])) || '—' })
               : t('Register with your email to receive {n} free artworks.', { n: freeUnits() }))
-            : t('All directions unlocked · priority creation')),
+            : (activeWebSubscription()?.expiresAt
+              ? t('All directions unlocked · priority creation · renews {date}', { date: fmtDate(activeWebSubscription().expiresAt, undefined) })
+              : t('All directions unlocked · priority creation'))),
         isFree && h('button', { class: 'btn', style: { marginTop: '12px', height: '42px', borderRadius: '10px', fontSize: '13.5px' }, onClick: () => signedIn() ? openPaywall('profile') : openAuth('profile') },
           signedIn() ? t('See packs & prices') : t('Register'))),
       h('div', { class: 'panel', style: { marginTop: '16px', overflow: 'hidden' } },
@@ -1154,6 +1184,74 @@ function openPaywall(context) {
   track('paywall_viewed', { context });
   renderOverlay();
 }
+
+// ---------- web checkout (Waffo Pancake) ----------
+// The server creates a hosted-cashier session and we leave the page. Credits
+// are granted by the provider's webhook, never by this client — after paying,
+// the cashier's "Done" button brings the user back with ?checkout=success and
+// we simply poll the balance (see awaitCheckoutResult).
+let checkoutBusy = false;
+async function webCheckout(p) {
+  if (!signedIn()) { openAuth(S.screen); return; }
+  if (checkoutBusy) return;
+  checkoutBusy = true;
+  const currency = webCurrency(p);
+  try {
+    track('checkout_started', { productId: p.internalKey, currency });
+    const res = await post('/v1/purchases/web/checkout', { productKey: p.internalKey, currency });
+    window.location.assign(res.checkoutUrl);
+  } catch (e) {
+    checkoutBusy = false;
+    if (e.code === 'AUTH_REQUIRED') openAuth(S.screen);
+    else if (e.code === 'PROVIDER_NOT_CONFIGURED') toast(t('Online payment is not open yet'));
+    else if (e.code === 'VERIFICATION_UNAVAILABLE') toast(t('Payment provider unavailable — please try again in a moment'));
+    else if (e.code === 'RATE_LIMITED') toast(t('Too many attempts — please wait a minute'));
+    else toast(t('Could not start checkout — you were not charged'));
+  }
+}
+async function cancelWebSubscription() {
+  const sub = activeWebSubscription();
+  if (!sub) return;
+  const until = sub.expiresAt ? fmtDate(sub.expiresAt, undefined) : '';
+  if (!window.confirm(t('Cancel your subscription? You keep access until {date}, then it will not renew.', { date: until }))) return;
+  try {
+    const res = await post('/v1/purchases/web/subscription/cancel', {});
+    track('subscription_cancel_requested', { status: res.status });
+    toast(t('Subscription will end on {date}', { date: res.expiresAt ? fmtDate(res.expiresAt, undefined) : until }), 3200);
+    await loadProfile();
+  } catch (e) {
+    if (e.code === 'NOT_FOUND') { toast(t('No active subscription found')); await loadProfile(); }
+    else if (e.code === 'PROVIDER_NOT_CONFIGURED') toast(t('Online payment is not open yet'));
+    else toast(t('Could not cancel right now — please try again or email us'));
+  }
+}
+// Back from the cashier: strip the marker from the URL, then poll the balance
+// for ~20 s (the webhook usually lands within seconds, but it is asynchronous).
+async function awaitCheckoutResult() {
+  try {
+    const u = new URL(location.href);
+    u.searchParams.delete('checkout');
+    history.replaceState(null, '', u.pathname + (u.search || '') + u.hash);
+  } catch { /* ignore */ }
+  if (!signedIn()) { toast(t('Payment received — sign in to see your credits'), 3200); return; }
+  const before = S.ent ? { units: S.ent.availableUnits, plan: S.ent.plan } : { units: 0, plan: 'free' };
+  toast(t('Payment is being confirmed…'), 2600);
+  const t0 = Date.now();
+  for (let i = 0; i < 8; i++) {
+    await new Promise(r => setTimeout(r, i === 0 ? 1500 : 2600));
+    try { await refreshEnt(); } catch { continue; }
+    const changed = S.ent.availableUnits > before.units || (S.ent.plan !== before.plan && S.ent.plan !== 'free');
+    if (changed) {
+      render();
+      toast(S.ent.plan !== 'free' && S.ent.plan !== before.plan ? t('Welcome to Creator') : t('Payment received — credits added'), 3200);
+      track('checkout_completed', { ms: Date.now() - t0 });
+      loadProfile();
+      return;
+    }
+  }
+  render();
+  toast(t('Payment is still being confirmed — your credits will appear shortly'), 4200);
+}
 function supportMailto(kind = 'more', product = null) {
   const who = userEmail() || userLabel() || '';
   if (kind === 'buy' && product) {
@@ -1213,13 +1311,19 @@ function PaywallSheet() {
     body = t('Sign up with your email — no password, no card. {n} complete artworks are on us. If you already have an account, the same steps sign you in.', { n });
   } else if (premium) {
     title = t('Premium direction');
-    body = t('Premium directions come with Creator. Pick the plan below, then join our QQ group or email us — we enable it on your account.');
+    body = webBilling()
+      ? t('Premium directions come with Creator. Subscribe below — pay online, unlocked as soon as the payment is confirmed.')
+      : t('Premium directions come with Creator. Pick the plan below, then join our QQ group or email us — we enable it on your account.');
   } else if ((S.ent?.availableUnits || 0) > 0) {
     title = t('Your artworks');
-    body = t('You have {n} left. Packs below add more — buy in our QQ group or by email and we credit your account.', { n: S.ent.availableUnits });
+    body = webBilling()
+      ? t('You have {n} left. Packs below add more — pay online by card or WeChat and they are credited automatically.', { n: S.ent.availableUnits })
+      : t('You have {n} left. Packs below add more — buy in our QQ group or by email and we credit your account.', { n: S.ent.availableUnits });
   } else {
     title = t('Your free artworks are used up');
-    body = t('You have used the {n} free artworks that come with your account. Pick a pack below, then join our QQ group or email us — we credit your account by hand.', { n });
+    body = webBilling()
+      ? t('You have used the {n} free artworks that come with your account. Pick a pack below and pay online — credits are added automatically.', { n })
+      : t('You have used the {n} free artworks that come with your account. Pick a pack below, then join our QQ group or email us — we credit your account by hand.', { n });
   }
 
   const contactCard = ContactBlock(premium ? 'premium' : 'more');
@@ -1240,6 +1344,7 @@ function PaywallSheet() {
         ]
         : [
           Catalogue(premium),
+          webBilling() && h('div', { class: 'kicker', style: { padding: '4px 0 8px' } }, t('Prefer to pay another way?')),
           contactCard,
           nativeBilling() && StorePlans(close),
           h('div', { style: { textAlign: 'center', font: '400 10.5px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '14px' } },
@@ -1257,18 +1362,31 @@ function Catalogue(premiumFirst) {
   const packs = items.filter(p => p.productType === 'pack').sort((a, b) => a.grantedUnits - b.grantedUnits);
   const subs = items.filter(p => p.productType === 'subscription');
   items = premiumFirst ? [...subs, ...packs] : [...packs, ...subs];
+  const web = webBilling();
   return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', paddingBottom: '14px' } },
     items.map(p => {
       const sub = p.productType === 'subscription';
-      return h('a', { class: 'plan-row' + (sub ? ' selected' : ''), href: supportMailto('buy', p), style: { textDecoration: 'none', color: 'inherit' } },
-        h('div', { style: { flex: 1, minWidth: 0 } },
-          h('div', { style: { font: '600 14px var(--sans)' } }, productName(p), sub && h('span', { style: { font: '600 9.5px var(--sans)', letterSpacing: '.5px', color: 'var(--cobalt)', marginLeft: '8px' } }, t('PREMIUM + HIGH-RES'))),
-          h('div', { style: { font: '400 11.5px var(--sans)', color: 'var(--ink-muted)' } },
-            sub ? t('{n} artworks every {period} · all directions · high tier', { n: p.grantedUnits, period: t('period.' + p.period) })
-              : t('{n} artworks · {each} each · never expire', { n: p.grantedUnits, each: perImage(p) }))),
-        h('div', { style: { textAlign: 'right', flex: 'none' } },
-          h('div', { style: { font: '600 15px var(--sans)' } }, productPrice(p), sub && h('span', { style: { font: '400 11px var(--sans)', color: 'var(--ink-muted)' } }, ' / ' + t('period.' + p.period))),
-          h('div', { style: { font: '600 11px var(--sans)', color: 'var(--cobalt)' } }, supportQQ() ? t('QQ / email to buy') : t('Email to buy'))));
+      const price = web ? webPrice(p) : productPrice(p);
+      const each = web && !sub && webCurrency(p) === 'USD' && p.grantedUnits
+        ? fmtMoney(Math.round(p.priceMinor / p.grantedUnits), 'USD') : perImage(p);
+      const info = h('div', { style: { flex: 1, minWidth: 0 } },
+        h('div', { style: { font: '600 14px var(--sans)' } }, productName(p), sub && h('span', { style: { font: '600 9.5px var(--sans)', letterSpacing: '.5px', color: 'var(--cobalt)', marginLeft: '8px' } }, t('PREMIUM + HIGH-RES'))),
+        h('div', { style: { font: '400 11.5px var(--sans)', color: 'var(--ink-muted)' } },
+          sub ? t('{n} artworks every {period} · all directions · high tier', { n: p.grantedUnits, period: t('period.' + p.period) })
+            : t('{n} artworks · {each} each · never expire', { n: p.grantedUnits, each })));
+      const priceBlock = (hint) => h('div', { style: { textAlign: 'right', flex: 'none' } },
+        h('div', { style: { font: '600 15px var(--sans)' } }, price, sub && h('span', { style: { font: '400 11px var(--sans)', color: 'var(--ink-muted)' } }, ' / ' + t('period.' + p.period))),
+        hint);
+      if (!web) {
+        return h('a', { class: 'plan-row' + (sub ? ' selected' : ''), href: supportMailto('buy', p), style: { textDecoration: 'none', color: 'inherit' } },
+          info, priceBlock(h('div', { style: { font: '600 11px var(--sans)', color: 'var(--cobalt)' } }, supportQQ() ? t('QQ / email to buy') : t('Email to buy'))));
+      }
+      // Web checkout: the whole row is the buy action; the button is the primary CTA.
+      return h('div', { class: 'plan-row' + (sub ? ' selected' : ''), style: { cursor: 'pointer', alignItems: 'center' }, onClick: () => webCheckout(p) },
+        info,
+        priceBlock(h('div', { style: { font: '400 10.5px var(--sans)', color: 'var(--ink-muted)' } }, webCurrency(p) === 'CNY' ? t('WeChat Pay') : t('Card · Apple Pay · Google Pay'))),
+        h('button', { class: 'btn small', style: { flex: 'none', width: 'auto', padding: '0 14px', height: '36px', marginLeft: '10px' }, onClick: (e) => { e.stopPropagation(); webCheckout(p); } },
+          sub ? t('Subscribe') : t('Buy')));
     }));
 }
 
@@ -1358,9 +1476,15 @@ function InfoSheet() {
   let title, body;
   if (key === 'purchases') {
     title = t('Purchase history');
-    body = S.purchases.length
-      ? h('div', null, S.purchases.map(p => h('div', { style: { display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid rgba(217,213,204,.5)', font: '400 13px var(--sans)' } },
-        h('span', null, p.product), h('span', { style: { color: 'var(--ink-muted)' } }, `$${(p.amountMinor / 100).toFixed(2)} · ${fmtDate(p.purchasedAt, undefined)}`))))
+    // Pending rows are abandoned checkouts (the cashier was opened but never
+    // paid) — not purchases, so they are hidden from the history.
+    const rows = S.purchases.filter(p => p.status !== 'pending');
+    const statusLabel = (p) => ({ canceled: t('status.canceled'), refunded: t('status.refunded'), invalid: t('status.invalid') })[p.status]
+      || (p.productType === 'subscription' && p.status === 'verified' && p.expiresAt && Date.parse(p.expiresAt) > Date.now() ? t('status.active') : '');
+    body = rows.length
+      ? h('div', null, rows.map(p => h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '8px 0', borderBottom: '1px solid rgba(217,213,204,.5)', font: '400 13px var(--sans)' } },
+        h('span', null, p.product, statusLabel(p) && h('span', { style: { font: '500 10.5px var(--sans)', color: p.status === 'verified' ? 'var(--cobalt)' : 'var(--ink-muted)', marginLeft: '8px' } }, statusLabel(p))),
+        h('span', { style: { color: 'var(--ink-muted)', flex: 'none' } }, `${fmtMoney(p.amountMinor, p.currency)} · ${fmtDate(p.purchasedAt, undefined)}`))))
       : t('No purchases yet. Artworks added by our team after you email us are shown in your balance, not here.');
   } else [title, body] = INFO()[key];
   return h('div', { class: 'sheet-backdrop', onClick: () => { S.infoSheet = null; renderOverlay(); } },
@@ -1451,6 +1575,8 @@ async function bootApp() {
   }
   S.booted = true;
   render();
+  // Returned from the hosted cashier (?checkout=success): confirm the balance.
+  if (!S.bootError && params.get('checkout') === 'success') awaitCheckoutResult();
 }
 initLang(params.get('lang'));
 bootApp();

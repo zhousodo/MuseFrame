@@ -16,6 +16,7 @@ const EN = {
   'opt.high': 'High', 'opt.natural': 'Natural',
   'opt.keep': 'Keep', 'opt.reframe': 'Reframe', 'opt.original': 'Original',
   'status.draft': 'Draft', 'status.generating': 'In progress', 'status.ready': 'New', 'status.saved': 'Saved',
+  'status.active': 'Active', 'status.canceled': 'Canceled', 'status.refunded': 'Refunded', 'status.invalid': 'Not verified',
   'period.month': 'month', 'period.year': 'year', 'period.once': 'one-time',
 };
 
@@ -27,6 +28,7 @@ const ZH = {
   'opt.high': '高', 'opt.natural': '自然',
   'opt.keep': '保持', 'opt.reframe': '重新构图', 'opt.original': '原比例',
   'status.draft': '草稿', 'status.generating': '生成中', 'status.ready': '新作品', 'status.saved': '已保存',
+  'status.active': '订阅中', 'status.canceled': '已取消', 'status.refunded': '已退款', 'status.invalid': '未通过核验',
   'period.month': '月', 'period.year': '年', 'period.once': '一次性',
 
   // quota badge
@@ -306,6 +308,31 @@ const ZH = {
   'Email us to delete': '发邮件申请删除',
   'Reading the image': '正在读取图片',
   'Subject, light and composition — a moment.': '主体、光线与构图——稍等片刻。',
+
+  // web checkout (Waffo Pancake hosted cashier)
+  'Buy': '购买',
+  'Subscribe': '订阅',
+  'WeChat Pay': '微信支付',
+  'Card · Apple Pay · Google Pay': '银行卡 · Apple Pay · Google Pay',
+  'Prefer to pay another way?': '想用别的方式付款？',
+  'Manage subscription · cancel': '管理订阅 · 取消',
+  'All directions unlocked · priority creation · renews {date}': '全部风格已解锁 · 优先生成 · {date} 续费',
+  '{n} artworks are included with your account. Packs start at {price} — pay online by card or WeChat.': '你的账号含 {n} 张免费作品。加购包 {price} 起——支持银行卡或微信在线支付。',
+  'Premium directions come with Creator. Subscribe below — pay online, unlocked as soon as the payment is confirmed.': '付费风格随 Creator 订阅解锁。在下方订阅、在线支付，付款确认后立即开通。',
+  'You have {n} left. Packs below add more — pay online by card or WeChat and they are credited automatically.': '你还剩 {n} 张。下方的加购包可补充额度——银行卡或微信在线支付，到账自动入账。',
+  'You have used the {n} free artworks that come with your account. Pick a pack below and pay online — credits are added automatically.': '账号附带的 {n} 张免费作品已用完。选一个加购包在线支付，额度会自动加到你的账户。',
+  'Online payment is not open yet': '在线支付尚未开通',
+  'Payment provider unavailable — please try again in a moment': '支付通道暂时不可用，请稍后再试',
+  'Too many attempts — please wait a minute': '操作太频繁，请稍等一分钟',
+  'Could not start checkout — you were not charged': '无法发起支付——没有产生扣款',
+  'Cancel your subscription? You keep access until {date}, then it will not renew.': '确定取消订阅？在 {date} 之前仍可使用，之后不再续费。',
+  'Subscription will end on {date}': '订阅将于 {date} 结束',
+  'No active subscription found': '没有找到有效订阅',
+  'Could not cancel right now — please try again or email us': '暂时无法取消，请稍后再试或给我们发邮件',
+  'Payment received — sign in to see your credits': '已收到付款——登录后即可查看额度',
+  'Payment is being confirmed…': '正在确认付款…',
+  'Payment received — credits added': '付款成功，额度已到账',
+  'Payment is still being confirmed — your credits will appear shortly': '付款仍在确认中，额度稍后会自动到账',
 };
 
 function interpolate(s, vars) {
