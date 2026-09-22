@@ -2,8 +2,9 @@ package httpapi
 
 import "net/http"
 
-// registerPublicRoutes 注册 30 条公开路由，顺序与 Node 版 api.js 的
-// route() 调用顺序逐条一致（首个匹配即终结，顺序会影响 404 归因）。
+// registerPublicRoutes 注册 33 条公开路由：前 30 条顺序与 Node 版 api.js 的
+// route() 调用顺序逐条一致（首个匹配即终结，顺序会影响 404 归因），
+// 31–33 是 2026-09-23 Waffo 网页端结账新增的（追加在末尾，不影响前面的归因）。
 func (a *App) registerPublicRoutes() {
 	a.add(http.MethodPost, `/v1/auth/exchange`, a.hAuthExchange)                // 1
 	a.add(http.MethodPost, `/v1/auth/email/request`, a.hEmailRequest)           // 2
@@ -35,6 +36,11 @@ func (a *App) registerPublicRoutes() {
 	a.add(http.MethodPost, `/v1/events`, a.hEvents)                             // 28
 	a.add(http.MethodDelete, `/v1/auth/session`, a.hLogout)                     // 29
 	a.add(http.MethodGet, `/v1/health`, a.hHealth)                              // 30
+	// Waffo Pancake 网页端结账（2026-09-23）。webhook 不鉴权、靠 RSA 验签；
+	// 另两条要真实账号。见 public_waffo.go / webhook_waffo.go。
+	a.add(http.MethodPost, `/v1/purchases/web/checkout`, a.hWebCheckout)                      // 31
+	a.add(http.MethodPost, `/v1/purchases/web/subscription/cancel`, a.hWebSubscriptionCancel) // 32
+	a.add(http.MethodPost, `/v1/webhooks/waffo`, a.hWaffoWebhook)                             // 33
 	// 目标架构统一探针：/v1/ready 是**只读**探活（SELECT 1，绝不写库）。
 	// 它不在公开契约里 —— 边缘代理不把它回源，公网打不到；
 	// compose healthcheck 与运维用它，行为差异已在 README 登记。

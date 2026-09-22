@@ -6,12 +6,16 @@ import (
 )
 
 const purchaseCols = `id, user_id, product_id, platform, external_transaction_id, status, amount_minor,
-	currency, purchased_at, expires_at, created_at`
+	currency, purchased_at, expires_at, created_at, provider_order_id`
+
+// purchaseColsPU 是带 pu. 前缀的同一列表，给 JOIN products 的查询用。
+const purchaseColsPU = `pu.id, pu.user_id, pu.product_id, pu.platform, pu.external_transaction_id, pu.status,
+	pu.amount_minor, pu.currency, pu.purchased_at, pu.expires_at, pu.created_at, pu.provider_order_id`
 
 func scanPurchase(row interface{ Scan(...any) error }) (*Purchase, error) {
 	var p Purchase
 	err := row.Scan(&p.ID, &p.UserID, &p.ProductID, &p.Platform, &p.ExternalTransactionID, &p.Status,
-		&p.AmountMinor, &p.Currency, &p.PurchasedAt, &p.ExpiresAt, &p.CreatedAt)
+		&p.AmountMinor, &p.Currency, &p.PurchasedAt, &p.ExpiresAt, &p.CreatedAt, &p.ProviderOrderID)
 	if err != nil {
 		return nil, err
 	}
@@ -26,8 +30,8 @@ func GetPurchaseByExternal(ctx context.Context, q Queryer, platform, externalTxI
 }
 
 const insertPurchaseSQL = `INSERT INTO purchases (id, user_id, product_id, platform, external_transaction_id, status,
-		   amount_minor, currency, purchased_at, expires_at, created_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`
+		   amount_minor, currency, purchased_at, expires_at, created_at, provider_order_id)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`
 
 // InsertPurchase 写一条订单，(platform, external_transaction_id) 撞唯一约束就**报错**。
 //
@@ -45,7 +49,7 @@ const insertPurchaseSQL = `INSERT INTO purchases (id, user_id, product_id, platf
 func InsertPurchase(ctx context.Context, q Queryer, p *Purchase) error {
 	_, err := q.Exec(ctx, insertPurchaseSQL,
 		p.ID, p.UserID, p.ProductID, p.Platform, p.ExternalTransactionID, p.Status,
-		p.AmountMinor, p.Currency, p.PurchasedAt, p.ExpiresAt, p.CreatedAt)
+		p.AmountMinor, p.Currency, p.PurchasedAt, p.ExpiresAt, p.CreatedAt, p.ProviderOrderID)
 	return err
 }
 
@@ -55,7 +59,7 @@ func InsertPurchaseIfAbsent(ctx context.Context, q Queryer, p *Purchase) error {
 	_, err := q.Exec(ctx,
 		insertPurchaseSQL+` ON CONFLICT (platform, external_transaction_id) DO NOTHING`,
 		p.ID, p.UserID, p.ProductID, p.Platform, p.ExternalTransactionID, p.Status,
-		p.AmountMinor, p.Currency, p.PurchasedAt, p.ExpiresAt, p.CreatedAt)
+		p.AmountMinor, p.Currency, p.PurchasedAt, p.ExpiresAt, p.CreatedAt, p.ProviderOrderID)
 	return err
 }
 
@@ -84,16 +88,22 @@ func SetPurchaseExpiry(ctx context.Context, q Queryer, id string, expires *time.
 type PurchaseListItem struct {
 	ID          string
 	ProductName string
+	ProductType string
 	AmountMinor *int64
 	Currency    *string
 	PurchasedAt time.Time
 	ExpiresAt   *time.Time
+	// 2026-09-23 网页端结账新增（非破坏性追加）。
+	Platform        string
+	Status          string
+	ProviderOrderID *string
 }
 
 // ListPurchasesOfUser 订单历史，ORDER BY purchased_at DESC，无 LIMIT。
 func ListPurchasesOfUser(ctx context.Context, q Queryer, userID string) ([]PurchaseListItem, error) {
 	rows, err := q.Query(ctx,
-		`SELECT pu.id, p.display_name, pu.amount_minor, pu.currency, pu.purchased_at, pu.expires_at
+		`SELECT pu.id, p.display_name, p.product_type, pu.amount_minor, pu.currency, pu.purchased_at, pu.expires_at,
+		        pu.platform, pu.status, pu.provider_order_id
 		 FROM purchases pu JOIN products p ON p.id = pu.product_id
 		 WHERE pu.user_id = $1 ORDER BY pu.purchased_at DESC, pu.id ASC`, userID)
 	if err != nil {
@@ -103,7 +113,8 @@ func ListPurchasesOfUser(ctx context.Context, q Queryer, userID string) ([]Purch
 	var out []PurchaseListItem
 	for rows.Next() {
 		var it PurchaseListItem
-		if err := rows.Scan(&it.ID, &it.ProductName, &it.AmountMinor, &it.Currency, &it.PurchasedAt, &it.ExpiresAt); err != nil {
+		if err := rows.Scan(&it.ID, &it.ProductName, &it.ProductType, &it.AmountMinor, &it.Currency, &it.PurchasedAt, &it.ExpiresAt,
+			&it.Platform, &it.Status, &it.ProviderOrderID); err != nil {
 			return nil, err
 		}
 		out = append(out, it)

@@ -131,11 +131,14 @@ sudo /srv/platform/scripts/platformctl status museframe
 psql "$OWNER_DSN" -v ON_ERROR_STOP=1 -f server-go/migrations/003_feedback_handled.sql
 psql "$OWNER_DSN" -v ON_ERROR_STOP=1 -f server-go/migrations/004_aigc_label.sql
 psql "$OWNER_DSN" -v ON_ERROR_STOP=1 -f server-go/migrations/005_free_grant_ip.sql
+psql "$OWNER_DSN" -v ON_ERROR_STOP=1 -f server-go/migrations/006_waffo.sql    # 2026-09-23：Waffo 网页端结账
 
-# 自检：24 张表 / 58 个索引
+# 自检：跑到 005 是 24 张表 / 58 个索引；跑完 006 是 25 张表 / 61 个索引
 psql "$OWNER_DSN" -tAc "SELECT count(*) FROM information_schema.tables
   WHERE table_schema='public' AND table_type='BASE TABLE';"
 psql "$OWNER_DSN" -tAc "SELECT count(*) FROM pg_indexes WHERE schemaname='public';"
+# 006 还回填了四个商品的 Waffo 商品号，应当四行都非空：
+psql "$OWNER_DSN" -tAc "SELECT internal_key, waffo_product_id FROM products ORDER BY internal_key;"
 ```
 
 新增迁移的顺序是：**先跑迁移（旧镜像照常跑），再发新镜像**。反过来会让新代码读到不存在的列。
@@ -184,3 +187,64 @@ ssh prodsrv 'sudo sha256sum /srv/platform/apps/museframe/data/web/admin.html'
 
 安全与合规现状见 [`STORE-READINESS.md`](STORE-READINESS.md)；AIGC 标识的实现与开关见
 `AGENTS.md` §7 与 `server-go/docs/admin-guide.html` 第 3.11 节。
+
+---
+
+## 6. Waffo Pancake 网页端结账接入（2026-09-23）
+
+网页端「购买 / 订阅」按钮走 Waffo Pancake 的托管收银台（商户记录 MoR：税、发票、退款争议都由平台承担）。
+后端只做三件事：建结账会话（`POST /v1/purchases/web/checkout`）、验签并处理回调
+（`POST /v1/webhooks/waffo`）、以商户身份取消订阅（`POST /v1/purchases/web/subscription/cancel`）。
+**额度只由验签通过的 webhook 发**；收银台跳回的 `?checkout=success` 只让前端轮询余额。
+实现：`server-go/internal/waffo`（签名客户端 + 验签）、`internal/httpapi/{public_waffo,webhook_waffo}.go`。
+
+**已经做好的（不用再做）**：Dashboard 上 prod 模式的四个商品与 webhook 都已登记（Raw 格式、全部 14 种事件、
+URL `https://museframe.lenscript.cn/v1/webhooks/waffo`）；生产 webhook 验签公钥已内置在
+`internal/waffo/keys.go`；四个商品号已写进 `migrations/006_waffo.sql`：
+
+| internal_key | waffo_product_id | 类型 | 价格 |
+|---|---|---|---|
+| `pack_10` | `PROD_3l2au9D4bKq3SWJtHOeknD` | 一次性 | USD 4.99 / CNY 29.00 |
+| `pack_30` | `PROD_3MGCYkNJsjqqPpM8HlwvXN` | 一次性 | USD 9.99 / CNY 69.00 |
+| `pack_100` | `PROD_6IYxsqbH1ql6R5ZyAoyvxA` | 一次性 | USD 29.99 / CNY 199.00 |
+| `creator_monthly` | `PROD_2V2oX2au6mKplqg3nHesbR` | 订阅（按月） | USD 7.99 / 月（无试用） |
+
+商户号 `MER_4Dq9KxGzXARmX7Pm0K4968`，店铺 `STO_2gYlsri8wtsqFPiIEN6kOO`（都不是密钥）。
+
+**上线清单**（按顺序，全部是人拍板后的动作）：
+
+- [ ] **迁移**：以 `museframe_owner` 跑 `server-go/migrations/006_waffo.sql`（§3 的命令；幂等，可在发版前跑，
+      对旧镜像透明）。自检 25 张表 / 61 个索引，`SELECT internal_key, waffo_product_id FROM products` 四行非空。
+- [ ] **私钥**：Dashboard → API & Development → API Keys → 建一把 **Production** 的 key，下载私钥
+      （只显示一次）。把它写进 `/srv/platform/apps/museframe/app.env`（600）的 `WAFFO_PRIVATE_KEY`，
+      连同 `WAFFO_MERCHANT_ID` / `WAFFO_STORE_ID` / `WAFFO_MODE=prod` / `WAFFO_SUCCESS_URL`（模板见
+      `server-go/deploy/project.env.example`）。🔴 与 `IMAGE_PROVIDER_API_KEY` 同一红线：不入库、不进日志、
+      不贴进任何文档 / 工单。多行 PEM 可压成一行，换行写成 `\n`。
+- [ ] **验签公钥**：prod 模式**留空** `WAFFO_WEBHOOK_PUBLIC_KEY` 即用内置的生产钥。只有两种情况要填：
+      Waffo 换钥（Dashboard → Settings → Webhooks → Webhook Public Key，LIVE），或者临时切 `WAFFO_MODE=test`
+      联调（那时必须填 Test 钥）。
+- [ ] **边缘代理**（OpenResty，配置在 `zhousodo/lenscript-platform`，**本仓不改**）核对：
+      `POST /v1/webhooks/waffo` 必须回源到 `127.0.0.1:18787`，**原样透传** `X-Waffo-Signature` /
+      `X-Waffo-Event` / `Content-Type` 头与**未经改写的请求体**（验签算的是原始字节；任何 JSON 重排 /
+      gzip 解压再压 / 字符集转换都会 401），`client_max_body_size` 对这条路径 ≥ 256k，不做鉴权、
+      不做 Cloudflare 人机挑战（Waffo 的投递没有浏览器）。`/v1/purchases/web/*` 与其他 `/v1/*` 同一规则即可。
+- [ ] **发版**：§1 的链条（交叉编译 → 打镜像 → 传 → `platformctl deploy`）。开机日志应有一行
+      `Waffo 网页端结账 {"configured":true,"webhookKey":true,"mode":"prod"}`。
+      `curl -s https://museframe.lenscript.cn/v1/auth/config | python3 -c "import sys,json;print(json.load(sys.stdin)['billing'])"`
+      应显示 `'web': True`。
+- [ ] **回调连通性**：Dashboard → Settings → Webhooks → Send Test Event。🔴 测试事件永远用 **Test** 钥签，
+      生产服务（内置 prod 钥）会回 **401** —— 这是**预期的**，只证明「路径通、边缘没吞头没改体」；
+      看到 401 而不是 404 / 502 / 超时就算通。投递日志里的响应体应是 `AUTH_INVALID` 的错误信封。
+- [ ] **真实购买验证**：用一个真实账号在网页端买 `pack_10`（USD 4.99，之后在 Dashboard 里退掉）。
+      期望链路：`purchases` 出现 `platform=waffo, status=pending` 行 → 付款 → 数秒内 `webhook_events`
+      出现 `order.completed`（`processed_at` 非空、`error` 为空）→ 该 `purchases` 行变 `verified`、
+      `provider_order_id` 填上 → 用户余额 +10。退款后：`refund.succeeded` 到达，行变 `refunded`，
+      未消费的 10 张被一笔 `refund` 负分录撤销（后台 · 用户详情 · 额度账本可见）。
+- [ ] **订阅验证**（可选）：订阅 `creator_monthly` → `subscription.activated` + `payment_succeeded` 两条都到、
+      `expires_at` = 本期末 + 48h 宽限、发 40 张（键 `grant:purchase:<id>:<periodEnd>`）→ 在网页端
+      「管理订阅 · 取消」→ `subscription.canceling` 到达（权益保留）→ 期末 `subscription.canceled`
+      到达后行变 `canceled`、`expires_at` 压到当时，plan 回 free。
+
+**排障**：`OPS.md` §5 表里有「网页端付了钱额度没到」与「用户要退款」两行。
+`webhook_events` 表能在后台「数据库浏览」里翻。回调若 401，先核对 `WAFFO_MODE` 与事件 `mode` 是否一致、
+边缘是否改写了请求体。回调若 5xx，Waffo 会自动重投（最多 4 次），`processed_at` 为空的行会被重新处理。

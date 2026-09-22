@@ -860,7 +860,7 @@ sudo /srv/platform/scripts/platformctl logs museframe</code></pre>
 <div class="scroll"><table>
 <thead><tr><th>类别</th><th>位置</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td>业务数据库</td><td>统一 PostgreSQL 容器 <code>platform-postgres</code>，库名 <code>museframe</code></td><td>24 张表；三级角色，运行角色无 DDL 权；连接池硬顶 4</td></tr>
+<tr><td>业务数据库</td><td>统一 PostgreSQL 容器 <code>platform-postgres</code>，库名 <code>museframe</code></td><td>24 张表（跑过 006 迁移后 25 张，多一张 <code>webhook_events</code>）；三级角色，运行角色无 DDL 权；连接池硬顶 4</td></tr>
 <tr><td>图片与产出资产</td><td><code>/srv/platform/apps/museframe/data/assets</code>（挂到容器 <code>/var/lib/museframe/assets</code>）</td><td>源图 / 候选 / 缩略图 / 导出都在这里</td></tr>
 <tr><td>前端与后台静态文件</td><td><code>/srv/platform/apps/museframe/data/web</code>（只读挂到容器 <code>/var/lib/museframe/web</code>）</td><td>含 <code>admin.html</code> 与 30 张风格封面；<b>封面是 <code>/v1/styles</code> / <code>/v1/discover</code> 的 <code>coverUrl</code> 能否非 null 的硬依赖</b></td></tr>
 <tr><td>每日库备份</td><td><code>/srv/platform/backups/db/museframe/</code>（另有 <code>globals/</code> 存角色）</td><td>每日 <b>02:13 UTC</b>：<code>pg_dump -Fc -Z6</code> + SHA-256 立即校验 + 先验后删清理</td></tr>
@@ -878,7 +878,7 @@ sudo /srv/platform/scripts/platformctl logs museframe</code></pre>
   对应生产镜像 <code>museframe-api:20260912T145715Z-gbc3c8f0c</code><br>
   <b>核对依据</b>（全部以仓库源码 + 生产只读核对为准）：
   <code>server-go/internal/httpapi/routes_admin.go</code>（<b>37</b> 条管理路由，<code>a.add(</code> 逐条数）与
-  <code>routes_public.go</code>（公开 30 + <code>/v1/ready</code>）、
+  <code>routes_public.go</code>（公开 30 + <code>/v1/ready</code>；2026-09-23 起再加 3 条 Waffo 网页端结账路由，公开 33）、
   <code>web/admin.html</code>（侧栏 <b>7 分组</b>、<code>TABS</code> <b>15 项</b>、<code>TAB_ALIASES</code>
   <code>ops→styles</code> / <code>db-browser→db</code>）、
   <code>server-go/internal/httpapi/admin_{config,ops,actions,grant,visibility}.go</code>（写入口语义与状态码）、

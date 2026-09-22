@@ -4,6 +4,7 @@ package httpapi
 
 import (
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,7 @@ import (
 	"museframe-api/internal/provider"
 	"museframe-api/internal/ratelimit"
 	"museframe-api/internal/store"
+	"museframe-api/internal/waffo"
 	"museframe-api/internal/worker"
 )
 
@@ -67,13 +69,16 @@ type App struct {
 	mailer     Mailer
 	verifier   *oidc.Verifier
 	playClient *play.Client
-	routes     []route
-	now        func() time.Time
-	newID      func() string
-	imgHMAC    []byte
-	ipSalt     string
-	version    string
-	adminTok   []byte
+	// waffo 是网页端结账的签名客户端；waffoPub 是 webhook 验签公钥（nil = 回 503）。
+	waffo    *waffo.Client
+	waffoPub *rsa.PublicKey
+	routes   []route
+	now      func() time.Time
+	newID    func() string
+	imgHMAC  []byte
+	ipSalt   string
+	version  string
+	adminTok []byte
 	// mx 是进程内的每接口请求计数器，喂后台的「接口健康」视图。
 	// 它是**进程内**的：重启清零、多副本各算各的。后台那一节明写了这两条 ——
 	// 把它说成「全站 24h 统计」会让运维在扩副本之后拿一个副本的数字做判断。
@@ -92,19 +97,22 @@ type Mailer interface {
 
 // Options 是构造参数。
 type Options struct {
-	Config      *config.Config
-	Runtime     *cfgstore.Store
-	Store       *store.Store
-	Logger      *logx.Logger
-	Provider    *provider.Adapter
-	Worker      *worker.Worker
-	Mailer      Mailer
-	Play        *play.Client
-	Verifier    *oidc.Verifier
-	Version     string
-	Now         func() time.Time
-	NewID       func() string
-	ImgTokenKey []byte
+	Config   *config.Config
+	Runtime  *cfgstore.Store
+	Store    *store.Store
+	Logger   *logx.Logger
+	Provider *provider.Adapter
+	Worker   *worker.Worker
+	Mailer   Mailer
+	Play     *play.Client
+	Verifier *oidc.Verifier
+	Waffo    *waffo.Client
+	// WaffoWebhookKey 为 nil 时 POST /v1/webhooks/waffo 回 503（不会放行任何未验签的回调）。
+	WaffoWebhookKey *rsa.PublicKey
+	Version         string
+	Now             func() time.Time
+	NewID           func() string
+	ImgTokenKey     []byte
 }
 
 // New 构造 App 并注册全部 50 条路由。
@@ -125,10 +133,25 @@ func New(o Options) *App {
 	if playClient == nil {
 		playClient = play.New("", "")
 	}
+	// Waffo：未显式注入时从配置构造（集成测试与 main 走同一条路；main 另外只多打一行开机日志）。
+	// 公钥不可解析 = nil = webhook 回 503，绝不放行。
+	waffoClient := o.Waffo
+	if waffoClient == nil {
+		waffoClient = waffo.New(waffo.Config{
+			MerchantID: o.Config.WaffoMerchantID, PrivateKeyPEM: o.Config.WaffoPrivateKey, BaseURL: o.Config.WaffoAPIBaseURL,
+		})
+	}
+	waffoPub := o.WaffoWebhookKey
+	if waffoPub == nil && o.Config.WaffoWebhookPublicKey != "" {
+		if pub, err := waffo.ParsePublicKey(o.Config.WaffoWebhookPublicKey); err == nil {
+			waffoPub = pub
+		}
+	}
 	a := &App{
 		cfg: o.Config, rt: o.Runtime, st: o.Store, lg: o.Logger,
 		prov: o.Provider, worker: o.Worker, mailer: o.Mailer,
 		verifier: verifier, playClient: playClient,
+		waffo: waffoClient, waffoPub: waffoPub,
 		now: now, newID: newID, version: o.Version, imgHMAC: o.ImgTokenKey,
 		ipSalt:   o.Config.IPHashSalt,
 		adminTok: []byte(o.Config.AdminToken),
@@ -177,6 +200,8 @@ var rlRules = []rlRule{
 	{regexp.MustCompile(`^/v1/auth/email/verify$`), "", 20, 10 * time.Minute},
 	{regexp.MustCompile(`^/v1/generation-jobs$`), "POST", 40, 10 * time.Minute},
 	{regexp.MustCompile(`^/v1/purchases/verify$`), "", 30, 10 * time.Minute},
+	// 网页端结账：每次都要出网建一个 Waffo 会话，与 verify 同一档。
+	{regexp.MustCompile(`^/v1/purchases/web/`), "", 30, 10 * time.Minute},
 	{regexp.MustCompile(`^/v1/assets/upload-intents$`), "", 60, 10 * time.Minute},
 	{regexp.MustCompile(`^/v1/events$`), "POST", 120, 10 * time.Minute},
 	{regexp.MustCompile(`^/v1/admin/`), "", 120, time.Minute},

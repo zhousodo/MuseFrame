@@ -190,8 +190,9 @@ func TestRouteCount(t *testing.T) {
 	if adm != 37 {
 		t.Fatalf("管理路由应为 37 条，实际 %d", adm)
 	}
-	if pub != 31 {
-		t.Fatalf("公开路由应为 30 条契约路由 + 1 条内部 /v1/ready = 31，实际 %d", pub)
+	// 2026-09-23：+3（Waffo 网页端结账 / 取消订阅 / webhook），追加在编号 31–33。
+	if pub != 34 {
+		t.Fatalf("公开路由应为 33 条契约路由 + 1 条内部 /v1/ready = 34，实际 %d", pub)
 	}
 }
 

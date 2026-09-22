@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/rsa"
 	"encoding/base64"
 	"errors"
 	"net"
@@ -28,6 +29,7 @@ import (
 	"museframe-api/internal/play"
 	"museframe-api/internal/provider"
 	"museframe-api/internal/store"
+	"museframe-api/internal/waffo"
 	"museframe-api/internal/worker"
 )
 
@@ -139,6 +141,27 @@ func main() {
 	mail := mailer.New(rt, cfg.SMTPPass)
 	playClient := play.New(cfg.GoogleServiceAccountJSON, rt.String("google_package_name"))
 
+	// Waffo Pancake（网页端结账）。私钥不可解析 = 未配置（支付路由回 501），服务照常起；
+	// webhook 公钥不可解析 = 回 503 而不是放行 —— 开机只喊一嗓子，不打印任何键材料。
+	waffoClient := waffo.New(waffo.Config{
+		MerchantID: cfg.WaffoMerchantID, PrivateKeyPEM: cfg.WaffoPrivateKey, BaseURL: cfg.WaffoAPIBaseURL,
+	})
+	var waffoPub *rsa.PublicKey
+	if cfg.WaffoWebhookPublicKey != "" {
+		pub, err := waffo.ParsePublicKey(cfg.WaffoWebhookPublicKey)
+		if err != nil {
+			lg.Warn("WAFFO_WEBHOOK_PUBLIC_KEY 不可解析：/v1/webhooks/waffo 将回 503，直到修好", nil)
+		} else {
+			waffoPub = pub
+		}
+	}
+	if (cfg.WaffoMerchantID != "" || cfg.WaffoPrivateKey != "") && !waffoClient.Configured() {
+		lg.Warn("WAFFO_MERCHANT_ID / WAFFO_PRIVATE_KEY 不齐或私钥不可解析：网页端结账不可用（501）", nil)
+	}
+	lg.Info("Waffo 网页端结账", map[string]any{
+		"configured": waffoClient.Configured() && cfg.WaffoStoreID != "", "webhookKey": waffoPub != nil, "mode": cfg.WaffoMode,
+	})
+
 	wk := worker.New(worker.Options{
 		Store: st, Runtime: rt, Provider: prov, Logger: lg, AssetDir: cfg.AssetDir,
 		NewID: httpapi.NewUUID,
@@ -153,7 +176,8 @@ func main() {
 
 	app := httpapi.New(httpapi.Options{
 		Config: cfg, Runtime: rt, Store: st, Logger: lg, Provider: prov, Worker: wk,
-		Mailer: mail, Play: playClient, Version: buildVersion, ImgTokenKey: []byte(imgKey),
+		Mailer: mail, Play: playClient, Waffo: waffoClient, WaffoWebhookKey: waffoPub,
+		Version: buildVersion, ImgTokenKey: []byte(imgKey),
 	})
 	pub, adm := app.RouteCount()
 	lg.Info("路由已注册", map[string]any{"public": pub, "admin": adm, "total": pub + adm})
