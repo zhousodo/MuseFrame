@@ -98,6 +98,7 @@ go build ./... && go vet ./... && gofmt -l . && go test ./... -count=1
 | — | 资产 `?token=` 旧入口仍在 | `GET /v1/assets/{id}/file` 仍接受已上架客户端的会话令牌 query 参数（全站唯一一条）。当前网页不用它；旧 APK 下线后应关掉 |
 | — | 备份**仍无异地副本** | 每日备份与每周恢复演练已落地（见 `OPS.md` §6），但全部在同一台机器上 |
 | — | 上游 `gpt.lenscript.cn` 未端到端复测 | 9/5 起曾持续不可用，9/12 观测到变成 400 参数错，疑似恢复但没有实测确认。生产 `jobsByStatus` 只有 `succeeded: 11` |
+| — | **Waffo Pancake 网页端结账已上线，店铺审核中**（2026-09-23） | 代码、迁移 006、密钥、发版全部落地，`/v1/auth/config` 的 `billing.web=true`；Waffo 店铺业务详情已提交、**审核中（1–3 个工作日）**，通过前结账会话被 Waffo 403。审核通过后待做：Send Test Event（预期 401）、首笔真实订单核对 `webhook_events` / `purchases`。所有者明确暂不做买退测试。交接见 [`docs/HANDOVER-2026-09-23-waffo.md`](docs/HANDOVER-2026-09-23-waffo.md) |
 
 ## What's implemented (spec P0)
 

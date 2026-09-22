@@ -125,20 +125,34 @@ sudo /srv/platform/scripts/platformctl status museframe
 库表由**一次性 job** 以 `museframe_owner` 执行；运行角色 `museframe_app` 只有 DML、**无 DDL 权**，
 应用**不会**自动建表。
 
-```bash
-# 增量迁移全部幂等、可重复执行，且只加可空列 / 索引，所以对正在跑的旧镜像完全透明,
-# 可以在发版前单独执行。
-psql "$OWNER_DSN" -v ON_ERROR_STOP=1 -f server-go/migrations/003_feedback_handled.sql
-psql "$OWNER_DSN" -v ON_ERROR_STOP=1 -f server-go/migrations/004_aigc_label.sql
-psql "$OWNER_DSN" -v ON_ERROR_STOP=1 -f server-go/migrations/005_free_grant_ip.sql
-psql "$OWNER_DSN" -v ON_ERROR_STOP=1 -f server-go/migrations/006_waffo.sql    # 2026-09-23：Waffo 网页端结账
+🔴 **2026-09-23 实测口径**（覆盖此前「`psql "$OWNER_DSN"`」的写法）：
+`platformctl migrate museframe` 对本项目**不可用**——它期望 `/srv/platform/migrations/museframe/`
+下有 `migrate` / `migrate.sh` / `run.sh`，该目录从未配过 runner，跑了只会报错退出（无副作用）。
+容器 `platform-postgres` 里**没有 `postgres` 这个角色**，超级用户名在容器环境变量 `$POSTGRES_USER`
+里（不要把它的值抄进任何文档）。可用的做法是把 SQL 拷进容器，以超级用户连上后 `SET ROLE museframe_owner`
+再执行，新建的表属主仍是 `museframe_owner`（006 的 `webhook_events` 已按此实测）：
 
-# 自检：跑到 005 是 24 张表 / 58 个索引；跑完 006 是 25 张表 / 61 个索引
-psql "$OWNER_DSN" -tAc "SELECT count(*) FROM information_schema.tables
-  WHERE table_schema='public' AND table_type='BASE TABLE';"
-psql "$OWNER_DSN" -tAc "SELECT count(*) FROM pg_indexes WHERE schemaname='public';"
-# 006 还回填了四个商品的 Waffo 商品号，应当四行都非空：
-psql "$OWNER_DSN" -tAc "SELECT internal_key, waffo_product_id FROM products ORDER BY internal_key;"
+```bash
+# 在本机：把迁移文件送到生产机（幂等、只加可空列 / 索引，对正在跑的旧镜像透明，可在发版前单独跑）
+scp server-go/migrations/006_waffo.sql prodsrv:/tmp/006_waffo.sql
+
+# 在生产机：前置一行 SET ROLE，再以容器内的超级用户执行；跑完把临时文件删掉
+ssh prodsrv
+printf '%s
+' 'SET ROLE museframe_owner;' > /tmp/006_run.sql && cat /tmp/006_waffo.sql >> /tmp/006_run.sql
+sudo docker cp /tmp/006_run.sql platform-postgres:/006_run.sql
+sudo docker exec platform-postgres sh -c 'psql -U "$POSTGRES_USER" -d museframe -v ON_ERROR_STOP=1 -f /006_run.sql; rm -f /006_run.sql'
+rm -f /tmp/006_run.sql /tmp/006_waffo.sql
+# （docker cp 到容器 /tmp 下时 psql 曾报 No such file，拷到根目录 / 下则正常——照上面写即可）
+
+# 自检（同样以容器内超级用户执行；把 SQL 写进文件再 -f，别在 ssh 参数里嵌 $$ 或引号）
+#   2026-09-23 生产实测：跑完 006 是 25 张表 / 64 个索引（此前文档写 61，是基线本来就比文档多 3 个，
+#   006 只新增 3 个）；products 里 pack_10 / pack_30 / pack_100 / creator_monthly 四行 waffo_product_id 非空，
+#   creator_annual / mini_pack 两个未上架商品为空是预期的（网页端对它们回 501）。
+SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE';
+SELECT count(*) FROM pg_indexes WHERE schemaname='public';
+SELECT internal_key, waffo_product_id FROM products ORDER BY internal_key;
+SELECT tablename, tableowner FROM pg_tables WHERE tablename='webhook_events';   -- museframe_owner
 ```
 
 新增迁移的顺序是：**先跑迁移（旧镜像照常跑），再发新镜像**。反过来会让新代码读到不存在的列。
@@ -211,39 +225,47 @@ URL `https://museframe.lenscript.cn/v1/webhooks/waffo`）；生产 webhook 验�
 
 商户号 `MER_4Dq9KxGzXARmX7Pm0K4968`，店铺 `STO_2gYlsri8wtsqFPiIEN6kOO`（都不是密钥）。
 
-**上线清单**（按顺序，全部是人拍板后的动作）：
+**上线记录（2026-09-23，勾选项附实测证据）**：
 
-- [ ] **迁移**：以 `museframe_owner` 跑 `server-go/migrations/006_waffo.sql`（§3 的命令；幂等，可在发版前跑，
-      对旧镜像透明）。自检 25 张表 / 61 个索引，`SELECT internal_key, waffo_product_id FROM products` 四行非空。
-- [ ] **私钥**：Dashboard → API & Development → API Keys → 建一把 **Production** 的 key，下载私钥
-      （只显示一次）。把它写进 `/srv/platform/apps/museframe/app.env`（600）的 `WAFFO_PRIVATE_KEY`，
-      连同 `WAFFO_MERCHANT_ID` / `WAFFO_STORE_ID` / `WAFFO_MODE=prod` / `WAFFO_SUCCESS_URL`（模板见
-      `server-go/deploy/project.env.example`）。🔴 与 `IMAGE_PROVIDER_API_KEY` 同一红线：不入库、不进日志、
-      不贴进任何文档 / 工单。多行 PEM 可压成一行，换行写成 `\n`。
-- [ ] **验签公钥**：prod 模式**留空** `WAFFO_WEBHOOK_PUBLIC_KEY` 即用内置的生产钥。只有两种情况要填：
-      Waffo 换钥（Dashboard → Settings → Webhooks → Webhook Public Key，LIVE），或者临时切 `WAFFO_MODE=test`
-      联调（那时必须填 Test 钥）。
-- [ ] **边缘代理**（OpenResty，配置在 `zhousodo/lenscript-platform`，**本仓不改**）核对：
-      `POST /v1/webhooks/waffo` 必须回源到 `127.0.0.1:18787`，**原样透传** `X-Waffo-Signature` /
-      `X-Waffo-Event` / `Content-Type` 头与**未经改写的请求体**（验签算的是原始字节；任何 JSON 重排 /
-      gzip 解压再压 / 字符集转换都会 401），`client_max_body_size` 对这条路径 ≥ 256k，不做鉴权、
-      不做 Cloudflare 人机挑战（Waffo 的投递没有浏览器）。`/v1/purchases/web/*` 与其他 `/v1/*` 同一规则即可。
-- [ ] **发版**：§1 的链条（交叉编译 → 打镜像 → 传 → `platformctl deploy`）。开机日志应有一行
-      `Waffo 网页端结账 {"configured":true,"webhookKey":true,"mode":"prod"}`。
-      `curl -s https://museframe.lenscript.cn/v1/auth/config | python3 -c "import sys,json;print(json.load(sys.stdin)['billing'])"`
-      应显示 `'web': True`。
-- [ ] **回调连通性**：Dashboard → Settings → Webhooks → Send Test Event。🔴 测试事件永远用 **Test** 钥签，
+- [x] **迁移**：006 已于 2026-09-22 17:32 UTC 在生产执行（§3 的做法，不是 `platformctl migrate`）。
+      实测 25 张表 / 64 个索引，`webhook_events` 属主 `museframe_owner`，四个上架商品的 `waffo_product_id` 非空。
+- [x] **私钥**：所有者在 Dashboard → API 与开发 → 生产模式 建了 key **`museframe-prod-server`**（「允许再次下载私钥」已开，
+      以后可在 Dashboard 重新查看），写进 `/srv/platform/apps/museframe/app.env`（600，属主 root）。
+      🔴 **格式踩坑（已修）**：compose 的 `env_file` 是 dotenv 语法——值**只能一行、不要加引号、不能只贴 base64 主体**。
+      第一次贴进去的是不带 `-----BEGIN/END-----` 的裸 base64 且带单引号，服务起来后日志报「私钥不可解析」；
+      修成多行 PEM 又让 `docker compose config` 直接解析失败（`unexpected character "+" in variable name`），
+      platformctl 在替换容器**之前**就中止，线上未受影响。正确形态是一行：
+      `WAFFO_PRIVATE_KEY=-----BEGIN PRIVATE KEY-----
+MII…
+-----END PRIVATE KEY-----`（字面量 `
+`，服务会还原）。
+      写完先 `cd /srv/platform/apps/museframe && sudo docker compose config >/dev/null` 确认能解析，再 deploy。
+- [x] **验签公钥**：prod 留空，用内置钥。开机日志 `webhookKey: true`。
+- [x] **边缘代理**：未改平台仓；实测对 `https://museframe.lenscript.cn/v1/webhooks/waffo` 发无签名 POST 回 **401**
+      （不是 404 / 502 / 超时），说明路由已通、头与请求体没有被边缘吞掉。
+- [x] **发版**：镜像 `museframe-api:20260922T171022Z-g8ec4f1d5`（源码 `8ec4f1d5` = PR #5 合入 develop 的 merge），
+      WSL 交叉编译 + `docker build` 后 `docker save | ssh prodsrv 'sudo docker load'`，`platformctl deploy` 三次
+      （17:34 首发、17:43 带错误密钥、17:45 修正后），最后一次开机日志
+      `Waffo 网页端结账 {"configured":true,"webhookKey":true,"mode":"prod"}`；
+      `GET /v1/auth/config` 的 `billing` 为 `{'google': False, 'apple': False, 'mock': False, 'web': True}`。
+      上一版 tag `20260912T145715Z-gbc3c8f0c` 仍在生产机，可 `platformctl rollback museframe`。
+- [ ] **回调连通性**（等 Waffo 审核通过后做）：Dashboard → Settings → Webhooks → Send Test Event。🔴 测试事件永远用 **Test** 钥签，
       生产服务（内置 prod 钥）会回 **401** —— 这是**预期的**，只证明「路径通、边缘没吞头没改体」；
       看到 401 而不是 404 / 502 / 超时就算通。投递日志里的响应体应是 `AUTH_INVALID` 的错误信封。
-- [ ] **真实购买验证**：用一个真实账号在网页端买 `pack_10`（USD 4.99，之后在 Dashboard 里退掉）。
+- [ ] **真实购买验证**（所有者 2026-09-23 明确：**暂不做**买一笔再退一笔的测试；审核通过后由首笔真实订单代替）：
       期望链路：`purchases` 出现 `platform=waffo, status=pending` 行 → 付款 → 数秒内 `webhook_events`
       出现 `order.completed`（`processed_at` 非空、`error` 为空）→ 该 `purchases` 行变 `verified`、
-      `provider_order_id` 填上 → 用户余额 +10。退款后：`refund.succeeded` 到达，行变 `refunded`，
-      未消费的 10 张被一笔 `refund` 负分录撤销（后台 · 用户详情 · 额度账本可见）。
-- [ ] **订阅验证**（可选）：订阅 `creator_monthly` → `subscription.activated` + `payment_succeeded` 两条都到、
-      `expires_at` = 本期末 + 48h 宽限、发 40 张（键 `grant:purchase:<id>:<periodEnd>`）→ 在网页端
+      `provider_order_id` 填上 → 用户余额 +N。退款时：`refund.succeeded` 到达，行变 `refunded`，
+      未消费额度被一笔 `refund` 负分录撤销（后台 · 用户详情 · 额度账本可见）。
+- [ ] **订阅验证**（可选，同上等首笔真实订阅）：`subscription.activated` + `payment_succeeded` 两条都到、
+      `expires_at` = 本期末 + 48h 宽限、发 30 张（键 `grant:purchase:<id>:<periodEnd>`）→ 在网页端
       「管理订阅 · 取消」→ `subscription.canceling` 到达（权益保留）→ 期末 `subscription.canceled`
       到达后行变 `canceled`、`expires_at` 压到当时，plan 回 free。
+
+**Waffo 侧状态（2026-09-23）**：店铺 `STO_2gYlsri8wtsqFPiIEN6kOO` 业务详情已提交，**审核中（1–3 个工作日，邮件通知）**；
+审核通过前 `create-session` 会被 Waffo 以 403 `Store is not approved for production payments` 拒绝，网页端会看到
+「暂时无法发起支付」类提示，这不是我们的故障。域名验证已通过（`/.well-known/waffo-verify.txt`，由 lenscript-site 仓发布），
+网站自检「未发现明显问题」。完整交接见 [`docs/HANDOVER-2026-09-23-waffo.md`](docs/HANDOVER-2026-09-23-waffo.md)。
 
 **排障**：`OPS.md` §5 表里有「网页端付了钱额度没到」与「用户要退款」两行。
 `webhook_events` 表能在后台「数据库浏览」里翻。回调若 401，先核对 `WAFFO_MODE` 与事件 `mode` 是否一致、

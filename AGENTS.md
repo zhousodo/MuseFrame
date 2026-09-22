@@ -3,7 +3,8 @@
 面向任何在这个仓库里改东西的人或 agent。先读这一页，再动手。
 产品说明看 [`README.md`](README.md)，后端实现看 [`server-go/README.md`](server-go/README.md)，
 运维动作看 [`OPS.md`](OPS.md) 与 [`DEPLOY.md`](DEPLOY.md)，
-运营后台逐页说明看 [`server-go/docs/admin-guide.html`](server-go/docs/admin-guide.html)。
+运营后台逐页说明看 [`server-go/docs/admin-guide.html`](server-go/docs/admin-guide.html)，
+网页端收款（Waffo Pancake）的交接看 [`docs/HANDOVER-2026-09-23-waffo.md`](docs/HANDOVER-2026-09-23-waffo.md)。
 
 ---
 
