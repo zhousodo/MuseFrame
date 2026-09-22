@@ -158,14 +158,16 @@ entitlements, products, purchases, `/v1/events` telemetry. Stable error codes
 server-go/                🟢 线上后端（Go 1.26 + PostgreSQL）—— 详见 server-go/README.md
   cmd/museframe-api       服务主程序（含 healthcheck 子命令）
   cmd/museframe-assets    资产迁移 + sha256 回填 + 四数字交叉校验
-  internal/httpapi        路由表（公开 30 + /v1/ready + 管理 37）+ 横切中间层 + 全部 handler
+  cmd/museframe-waffo-seed 本地商品 ↔ Waffo 商品号映射（生产四个已固化在 006 迁移里，平时不用跑）
+  internal/httpapi        路由表（公开 33 + /v1/ready + 管理 37）+ 横切中间层 + 全部 handler
+  internal/waffo          Waffo Pancake 签名客户端 + webhook 验签（网页端结账，2026-09-23）
   internal/aigc           AI 生成内容标识：显式水印（内嵌 GB2312 子集字体）+ 隐式 EXIF/XMP
   internal/cfgstore       运行时配置注册表（59 项 = 47 热键 + 12 只读；🔴 密钥只走环境变量）
   internal/store          PostgreSQL 持久层 + 管理后台只读数据浏览
   internal/ledger         append-only 额度台账
   internal/worker         生成队列 + 质量闸
   internal/{provider,imaging,oidc,play,mailer,ratelimit,metrics,netx,logx,apierr,config}
-  migrations/             001_init.sql（24 表 / 58 索引）… 005_free_grant_ip.sql
+  migrations/             001_init.sql（24 表 / 58 索引）… 006_waffo.sql（+webhook_events 表、两列、三索引 → 25 表 / 61 索引）
   deploy/                 Dockerfile · Dockerfile.migrate · docker-compose.yml · project.env.example
   docs/admin-guide.html   运营后台使用指南（7 分组 / 15 视图 / 37 路由 / 59 配置项）
 web/                      🟢 线上 SPA + 后台静态壳（bind-mount 进容器，不在镜像里）

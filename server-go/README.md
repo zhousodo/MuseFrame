@@ -115,11 +115,11 @@ go test ./... -count=1
 
 替换原 Node.js（零框架 `node:http`）+ SQLite 实现。
 
-**路由总数 68**（2026-09-13 实数，以 `internal/httpapi/routes_{public,admin}.go` 的 `a.add(` 为准）：
+**路由总数 71**（2026-09-23 实数，以 `internal/httpapi/routes_{public,admin}.go` 的 `a.add(` 为准）：
 
 | | 条数 | 来源 |
 |---|---|---|
-| 公开契约路由 | 30 | `routes_public.go` 编号 1–30 |
+| 公开契约路由 | **33** | `routes_public.go` 编号 1–33（1–30 与 Node 版逐条一致；31–33 是 2026-09-23 Waffo 网页端结账新增：`POST /v1/purchases/web/checkout`、`POST /v1/purchases/web/subscription/cancel`、`POST /v1/webhooks/waffo`） |
 | 内部只读探针 `/v1/ready` | 1 | 不在公开契约里；边缘代理不回源，公网打不到 |
 | 管理后台路由 | **37** | `routes_admin.go` 编号 31–67（**不是 34**：2026-09-12 第七轮补了 `job-detail` / `photo-analyses` / `style-versions` 三条只读视图） |
 
@@ -131,6 +131,7 @@ go test ./... -count=1
 ```
 cmd/museframe-api       服务主程序（含 healthcheck 子命令）
 cmd/museframe-assets    资产迁移 + sha256 回填 + 四数字交叉校验
+cmd/museframe-waffo-seed 本地商品 ↔ Waffo 商品号映射 / 建商品（生产四个已固化在 006，平时不用跑）
 internal/apierr         统一错误信封与 26 个错误码
 internal/aigc           AI 生成内容标识：显式水印（内嵌 GB2312 子集字体）+ 隐式 EXIF/XMP
 internal/cfgstore       运行时配置（🔴 密钥只走环境变量）
@@ -147,12 +148,15 @@ internal/provider       上游图像模型适配器
 internal/ratelimit      滑动窗口限流
 internal/metrics        进程内每接口请求计数器（后台「接口健康」视图）
 internal/store          PostgreSQL 持久层 + 管理后台只读数据浏览
+internal/waffo          Waffo Pancake 商户 API 签名客户端（RSA-SHA256）+ webhook 验签 + 内置生产验签公钥
 internal/worker         生成队列
 migrations/             001_init.sql（24 表 / 58 索引）、002_grants.sql（角色授权）、
                         003_feedback_handled.sql（反馈「已处理」两列 + 部分索引）、
                         004_aigc_label.sql（assets.aigc_label 一列 + 未标识成品部分索引）、
                         005_free_grant_ip.sql（free_grants.ip 明文客户端地址，可空、幂等、
-                        加一列对正在跑的旧镜像完全透明，可在发版前单独执行）
+                        加一列对正在跑的旧镜像完全透明，可在发版前单独执行）、
+                        006_waffo.sql（products.waffo_product_id、purchases.provider_order_id 两可空列
+                        + webhook_events 表 + 四个商品的映射回填；同样幂等、可在发版前执行 → 25 表 / 61 索引）
 deploy/                 Dockerfile、docker-compose.yml、project.env.example
 ```
 
@@ -303,6 +307,9 @@ Go 版改成**表白名单 + 显式列级脱敏清单**：
 | `api.js ensureSession`、`app.js:169/936` | `GET /v1/entitlements/me` | 用户详情 · 额度账本 + 可用额度 |
 | `app.js:155` | `GET /v1/products` | 运营 · 商品与价格 |
 | `app.js:1266` 内购 | `POST /v1/purchases/verify` | **购买**（平台 / 交易号 / 金额 / 入账额度 + 重验入口） |
+| `app.js webCheckout()` 网页端购买（2026-09-23） | `POST /v1/purchases/web/checkout` | **购买**（platform=waffo，先落 pending 行；额度由 webhook 发） |
+| `app.js cancelWebSubscription()` | `POST /v1/purchases/web/subscription/cancel` | 购买（期末由 webhook 改成 canceled） |
+| Waffo 平台回调（不是 App） | `POST /v1/webhooks/waffo` | 数据库浏览 · `webhook_events`（原始载荷 + 处理结果 / 异常说明） |
 | `app.js:936` | `GET /v1/purchases` | 同上；用户详情 · 购买 |
 | `api.js track()`（16 个调用点） | `POST /v1/events` | **埋点**（按事件名 / 天 / App 版本聚合 + 原始样本 + 导出） |
 | App 不调用 | `GET /v1/styles`、`GET /v1/styles/{slug}` | 运营 · 风格管理 |

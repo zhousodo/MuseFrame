@@ -67,7 +67,7 @@ go test ./... -count=1     # 不设 MUSEFRAME_TEST_DATABASE_URL 时集成测试 
 # 要把集成测试真正跑起来，需要一个 PostgreSQL，DSN 用 owner 角色（夹具走 TRUNCATE）：
 #   psql -U museframe_owner -d <db> -f migrations/001_init.sql
 #   psql -U museframe_owner -d <db> -f migrations/002_grants.sql
-#   for f in migrations/00[345]_*.sql; do psql -U museframe_owner -d <db> -f "$f"; done
+#   for f in migrations/00[3456]_*.sql; do psql -U museframe_owner -d <db> -f "$f"; done
 #   export MUSEFRAME_TEST_DATABASE_URL='postgres://museframe_owner:<pass>@127.0.0.1:5432/<db>?sslmode=disable'
 #   go test ./... -count=1
 ```

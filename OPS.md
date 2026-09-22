@@ -19,7 +19,7 @@
 | MuseFrame API | 容器 `museframe-api-go`（compose 栈 `museframe-go`，**服务名 `api`**），绑 `127.0.0.1:18787` |
 | 镜像 | `museframe-api:<UTC时间戳>-g<源码短sha>`，**禁 latest**；本地交叉编译后 `docker load`，生产机不 build |
 | 配置三件套 | `/srv/platform/apps/museframe/{docker-compose.yml, project.env, app.env}` |
-| 业务数据库 | 统一 PostgreSQL 容器 `platform-postgres`，库 `museframe`（24 表；三级角色，运行角色无 DDL 权；连接池硬顶 4） |
+| 业务数据库 | 统一 PostgreSQL 容器 `platform-postgres`，库 `museframe`（24 表，跑过 006 后 25 表；三级角色，运行角色无 DDL 权；连接池硬顶 4） |
 | 图片与产出 | `/srv/platform/apps/museframe/data/assets` → 容器 `/var/lib/museframe/assets`（bind mount，**唯一真本**） |
 | 前端与后台静态壳 | `/srv/platform/apps/museframe/data/web` → 容器 `/var/lib/museframe/web`（只读挂载，含 `admin.html` 与 30 张封面） |
 | 密钥 | `/srv/platform/apps/museframe/app.env`（600）——`ADMIN_TOKEN` / `IMAGE_PROVIDER_API_KEY` / `SMTP_PASS` / `IP_HASH_SALT` 的唯一存放处 |
@@ -77,12 +77,16 @@ sudo /srv/platform/scripts/platformctl migrate museframe  # 先 dry-run 再确�
 每一项都带来源徽章（`db 覆盖` / `env` / `默认`），清空即回退到 env / 默认。
 越界的值**回 422 而不是悄悄夹一下**，错误信息里写着合法区间。每一次写操作落审计。
 
-### 3.2 只能改 `app.env` + 重新 deploy（12 项）
+### 3.2 只能改 `app.env` + 重新 deploy（12 项 + Waffo 一组）
 
 `ADMIN_TOKEN`、`IMAGE_PROVIDER_API_KEY`、`SMTP_PASS`、`IP_HASH_SALT`、
 `GOOGLE_SERVICE_ACCOUNT_JSON`、`MUSEFRAME_DATABASE_URL` 与池上限、资产/web 目录、
 `TRUSTED_PROXY` / `TRUST_CF_CONNECTING_IP` / `RATE_LIMIT_MAX_KEYS`、
-`ALLOW_MOCK_PURCHASES` / `ALLOW_TEST_LOGIN`、`PORT` / `HOST` / `SHUTDOWN_GRACE_SECONDS`。
+`ALLOW_MOCK_PURCHASES` / `ALLOW_TEST_LOGIN`、`PORT` / `HOST` / `SHUTDOWN_GRACE_SECONDS`，
+以及 2026-09-23 起的 Waffo 网页端结账一组：`WAFFO_MERCHANT_ID` / `WAFFO_STORE_ID` /
+🔴 `WAFFO_PRIVATE_KEY`（商户 API 私钥，与上面三个密钥同一红线）/ `WAFFO_MODE` /
+`WAFFO_WEBHOOK_PUBLIC_KEY`（prod 可留空，内置）/ `WAFFO_SUCCESS_URL` / `WAFFO_API_BASE_URL`。
+这一组**不在后台注册表里**（不显示、不可热改）。接入步骤见 [`DEPLOY.md`](DEPLOY.md) §6。
 
 🔴 **后台没有任何密钥写入口**：`image_provider_api_key` 与 `smtp_pass` 在配置页只显示固定掩码，
 写它们直接回 **422**。这是对 Node 版「运维从后台设了一次密钥，密钥就明文躺进 `app_config` 表
@@ -164,6 +168,8 @@ sudo /srv/platform/scripts/platformctl migrate museframe  # 先 dry-run 再确�
 | 看用户写的反馈正文、标「已处理」 | 后台 **运营 · 用户反馈** |
 | 重试失败的生成任务 | 后台 **生成与资产 · 生成任务**（只有 `failed` / `cancelled` 能重试；**新建一条**带 `parent_job_id` 的任务并重新预留额度） |
 | 补发漏入账的购买额度 | 后台 **用户与订单 · 购买记录 → 重验**（幂等；只对 `verified` 生效；**不会**重新向商店要收据） |
+| 网页端付了钱额度没到（Waffo） | 先看后台 **数据库浏览 · `webhook_events`**：没有这条订单的行 = 回调没打进来（查 Waffo Dashboard → Webhooks 投递日志与边缘代理）；有行但 `error` 非空 = 订单对不上（照 error 文案处理）；有行且 `processed_at` 为空 = 我们这边事务失败，Waffo 会自动重投。`purchases` 里 `platform=waffo` 且 `status=pending` 的行是**打开了收银台但没付**的，不是故障 |
+| 用户要退款（Waffo） | 在 Waffo Dashboard 里退；`refund.succeeded` 回调到达后订单自动标 `refunded`、订阅立即关、加购包**未消费**的额度自动补一笔负分录撤销（部分退款也按全额撤销，要保留额度用后台「手工发放」补回） |
 | 查某个用户的全部事实 | 后台 **用户** → 点行打开「单用户纵向详情」（额度账本 / 购买 / 项目 / 任务 / 资产 / 会话六块） |
 
 逐步骤与每个异常返回的含义见 `server-go/docs/admin-guide.html` 第 3 节。
