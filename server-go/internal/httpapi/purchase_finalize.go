@@ -144,13 +144,19 @@ func (a *App) finalizePurchase(ctx context.Context, userID string, product *stor
 }
 
 // PurchaseItem 是 GET /v1/purchases 的一行。
+// platform / status / providerOrderId / productType 是 2026-09-23 的非破坏性追加：
+// 网页端要据此显示「订阅中 / 已取消 / 已退款」与币种，旧客户端忽略即可。
 type PurchaseItem struct {
-	ID          string  `json:"id"`
-	Product     string  `json:"product"`
-	AmountMinor *int64  `json:"amountMinor"`
-	Currency    *string `json:"currency"`
-	PurchasedAt string  `json:"purchasedAt"`
-	ExpiresAt   *string `json:"expiresAt"`
+	ID              string  `json:"id"`
+	Product         string  `json:"product"`
+	AmountMinor     *int64  `json:"amountMinor"`
+	Currency        *string `json:"currency"`
+	PurchasedAt     string  `json:"purchasedAt"`
+	ExpiresAt       *string `json:"expiresAt"`
+	Platform        string  `json:"platform"`
+	Status          string  `json:"status"`
+	ProviderOrderID *string `json:"providerOrderId"`
+	ProductType     string  `json:"productType"`
 }
 
 // hListPurchases 是订单历史，ORDER BY purchased_at DESC，无 LIMIT。
@@ -168,6 +174,7 @@ func (a *App) hListPurchases(c *Ctx) (any, error) {
 		out = append(out, PurchaseItem{
 			ID: p.ID, Product: p.ProductName, AmountMinor: p.AmountMinor, Currency: p.Currency,
 			PurchasedAt: store.ISO(p.PurchasedAt), ExpiresAt: store.ISOPtr(p.ExpiresAt),
+			Platform: p.Platform, Status: p.Status, ProviderOrderID: p.ProviderOrderID, ProductType: p.ProductType,
 		})
 	}
 	return map[string]any{"purchases": out}, nil

@@ -81,6 +81,11 @@ func TestSmokeAllRoutes(t *testing.T) {
 		{"DELETE", "/v1/auth/session", nil, user, 200},
 		{"GET", "/v1/health", nil, nil, 200},
 		{"GET", "/v1/ready", nil, nil, 200},
+		// Waffo 网页端结账（测试环境没配商户私钥）：缺 productKey 先撞 422；
+		// 没有有效订阅 404；webhook 无签名头 401（公钥是内置的生产钥）。
+		{"POST", "/v1/purchases/web/checkout", map[string]any{}, user, 422},
+		{"POST", "/v1/purchases/web/subscription/cancel", nil, user, 404},
+		{"POST", "/v1/webhooks/waffo", map[string]any{"id": "x"}, nil, 401},
 
 		{"GET", "/v1/admin/overview", nil, admin, 200},
 		{"GET", "/v1/admin/jobs", nil, admin, 200},
