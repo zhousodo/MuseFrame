@@ -55,6 +55,9 @@ func TestBodyLimits(t *testing.T) {
 		{http.MethodPost, "/v1/events", MaxJSONBody},
 		// PUT 之外的方法打同一路径不给大额度。
 		{http.MethodPost, "/v1/assets/abc-123/upload", MaxJSONBody},
+		// 支付平台回调 256 KB；只给 POST，GET 打同一路径不放宽。
+		{http.MethodPost, "/v1/webhooks/waffo", MaxWebhookBody},
+		{http.MethodGet, "/v1/webhooks/waffo", MaxJSONBody},
 	}
 	for _, c := range cases {
 		if got := BodyLimitFor(c.method, c.path); got != c.want {

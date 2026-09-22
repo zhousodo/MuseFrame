@@ -69,7 +69,7 @@ type testEnv struct {
 
 const adminToken = "test-admin-token-0123456789abcd"
 
-// 全部 24 张业务表，清库用。顺序无所谓：TRUNCATE ... CASCADE。
+// 全部 25 张业务表，清库用。顺序无所谓：TRUNCATE ... CASCADE。
 var allTables = []string{
 	"credit_ledger", "credit_buckets", "generation_candidates", "generation_jobs",
 	"photo_analyses", "assets", "projects", "purchases", "user_feedback",
@@ -77,6 +77,7 @@ var allTables = []string{
 	"auth_identities", "sessions", "users",
 	"exhibition_styles", "style_versions", "styles", "exhibitions",
 	"products", "app_config", "email_codes", "server_secrets",
+	"webhook_events",
 }
 
 func newTestEnv(t *testing.T) *testEnv {

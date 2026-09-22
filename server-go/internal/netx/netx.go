@@ -11,9 +11,10 @@ import (
 
 // 请求体上限（net.js:14）。只有真正驮照片的那条路由给大额度。
 const (
-	MaxUploadBody = 26 * 1024 * 1024 // PUT /v1/assets/{id}/upload
-	MaxAdminBody  = 1024 * 1024      // /v1/admin/*
-	MaxJSONBody   = 64 * 1024        // 其余 /v1/*
+	MaxUploadBody  = 26 * 1024 * 1024 // PUT /v1/assets/{id}/upload
+	MaxAdminBody   = 1024 * 1024      // /v1/admin/*
+	MaxWebhookBody = 256 * 1024       // /v1/webhooks/*（支付平台回调；载荷带完整订单与税额明细）
+	MaxJSONBody    = 64 * 1024        // 其余 /v1/*
 )
 
 var uploadPathRe = regexp.MustCompile(`^/v1/assets/[\w-]+/upload$`)
@@ -25,6 +26,9 @@ func BodyLimitFor(method, pathname string) int64 {
 	}
 	if strings.HasPrefix(pathname, "/v1/admin/") {
 		return MaxAdminBody
+	}
+	if method == http.MethodPost && strings.HasPrefix(pathname, "/v1/webhooks/") {
+		return MaxWebhookBody
 	}
 	return MaxJSONBody
 }

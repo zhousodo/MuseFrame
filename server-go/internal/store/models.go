@@ -112,6 +112,8 @@ type Product struct {
 	GoogleProductID *string
 	AppleProductID  *string
 	PriceCnyMinor   *int64
+	// WaffoProductID 是 Waffo Pancake 上对应的商品（PROD_xxx），NULL = 网页端不可买。
+	WaffoProductID *string
 }
 
 // Purchase 对应 purchases 表。
@@ -127,6 +129,9 @@ type Purchase struct {
 	PurchasedAt           time.Time
 	ExpiresAt             *time.Time
 	CreatedAt             time.Time
+	// ProviderOrderID 是支付平台自己的订单号（Waffo: ORD_xxx）。
+	// 🔴 与 ExternalTransactionID 不同：waffo 平台上那一列放的是我们自己的 purchases.id。
+	ProviderOrderID *string
 }
 
 // StyleRow 是 publishedStyleRows() 的一行：风格 + 最新已发布版本 + 所属展览排序。

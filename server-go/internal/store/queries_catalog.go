@@ -95,12 +95,13 @@ func StyleExists(ctx context.Context, q Queryer, id string) (bool, error) {
 // ---- 商品 ------------------------------------------------------------------
 
 const productCols = `id, internal_key, product_type, display_name, granted_units, price_minor, currency,
-	period, feature_flags, active, google_product_id, apple_product_id, price_cny_minor`
+	period, feature_flags, active, google_product_id, apple_product_id, price_cny_minor, waffo_product_id`
 
 func scanProduct(row interface{ Scan(...any) error }) (*Product, error) {
 	var p Product
 	err := row.Scan(&p.ID, &p.InternalKey, &p.ProductType, &p.DisplayName, &p.GrantedUnits, &p.PriceMinor,
-		&p.Currency, &p.Period, &p.FeatureFlags, &p.Active, &p.GoogleProductID, &p.AppleProductID, &p.PriceCnyMinor)
+		&p.Currency, &p.Period, &p.FeatureFlags, &p.Active, &p.GoogleProductID, &p.AppleProductID, &p.PriceCnyMinor,
+		&p.WaffoProductID)
 	if err != nil {
 		return nil, err
 	}

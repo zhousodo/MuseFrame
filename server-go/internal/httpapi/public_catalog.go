@@ -37,11 +37,13 @@ type EnabledBlock struct {
 	Enabled bool `json:"enabled"`
 }
 
-// BillingBlock 是三种支付渠道的开关。
+// BillingBlock 是四种支付渠道的开关。
 type BillingBlock struct {
 	Google bool `json:"google"`
 	Apple  bool `json:"apple"`
 	Mock   bool `json:"mock"`
+	// Web 是 Waffo Pancake 网页端结账（商户私钥 + 店铺号齐全）。2026-09-23 追加。
+	Web bool `json:"web"`
 }
 
 func emptyToNil(s string) *string {
@@ -84,6 +86,7 @@ func (a *App) hAuthConfig(c *Ctx) (any, error) {
 			Apple:  false, // App Store Server API 校验尚未配置
 			// 只对运维展示：其他人看到的是「请到商店 App 内购买」。
 			Mock: a.cfg.AllowMockPurchases && a.isAdminRequest(c.R),
+			Web:  a.waffoReady(),
 		},
 	}, nil
 }
