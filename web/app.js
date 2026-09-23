@@ -7,9 +7,13 @@
 // top nav, centred column, wrapped grids, centred dialogs). Chinese / English
 // copy via i18n.js. Free tier = N artworks after email registration; when they
 // are used up the paywall asks the user to email support (manual top-up).
-import { ensureSession, ensureAssetToken, setToken, clearToken, get, post, put, del, assetUrl, apiUrl, track, token } from './api.js';
-import { deviceId, getAuthConfig, nativeSignIn, nativePurchase, isNative, platform, emailRequestCode, emailVerifyCode } from './native.js';
-import { t, getLang, setLang, initLang } from './i18n.js?v=20260923a';
+// Cache-busting: the edge caches modules for hours, so every local import carries
+// ?v=. The api.js specifier must be byte-identical here and in native.js:
+// './api.js' and './api.js?v=...' would be two module instances (two tokens).
+// Bump all of them together with the app.js ?v= in index.html.
+import { ensureSession, ensureAssetToken, setToken, clearToken, get, post, put, del, assetUrl, apiUrl, track, token } from './api.js?v=20260923b';
+import { deviceId, getAuthConfig, nativeSignIn, nativePurchase, isNative, platform, emailRequestCode, emailVerifyCode } from './native.js?v=20260923b';
+import { t, getLang, setLang, initLang } from './i18n.js?v=20260923b';
 
 // ---------- tiny DOM helper ----------
 function h(tag, attrs, ...children) {
@@ -242,9 +246,19 @@ function webnav(active) {
     h('div', { class: 'spacer' }),
     h('button', { class: 'lang', onClick: toggleLang, 'aria-label': 'Language' }, getLang() === 'zh' ? 'EN' : '中文'),
     S.ent && h('button', { class: 'pillbtn', onClick: () => openPaywall('badge') }, unitsBadgeText()),
+    signedIn() && AccountChip(),
     !signedIn() && h('button', { class: 'btn secondary cta', onClick: () => openAuth(S.screen) }, t('Sign in / Register')),
     h('button', { class: 'btn cta', onClick: () => startImport(S.screen) }, t('Create')),
   );
+}
+
+// Signed-in account entry in the web header: avatar + email → profile (where
+// "Sign out" is a visible button, not a row buried in the settings list).
+function AccountChip() {
+  const who = userEmail() || userLabel() || t('Account');
+  return h('button', { class: 'account', title: who, 'aria-label': t('Account') + ' · ' + who, onClick: () => { loadProfile(); go('profile'); } },
+    h('span', { class: 'avatar' }, (who[0] || 'M').toUpperCase()),
+    h('span', { class: 'who' }, who));
 }
 
 // Every screen: web → top nav first (+ footer on the main sections); phone → tab bar last (only tab screens).
@@ -990,13 +1004,13 @@ function ProfileScreen() {
     isNative() && !isFree && [t('Manage subscription'), () => openPaywall('manage')],
     !isNative() && activeWebSubscription() && [t('Manage subscription · cancel'), cancelWebSubscription],
     isNative() && [t('Restore purchases'), async () => { await refreshEnt(); render(); toast(S.ent.plan === 'free' ? t('No active plan found') : t('Purchases restored')); }],
+    signedIn() && webBilling() && !isFree && [t('Buy credits'), () => openPaywall('profile')],
     [t('Purchase history'), () => openInfo('purchases')],
-    supportQQ() && [t('QQ group · buy credits') + ' · ' + supportQQ(), () => openPaywall('profile')],
+    supportQQ() && [(webBilling() ? t('QQ group · help') : t('QQ group · buy credits')) + ' · ' + supportQQ(), () => openPaywall('profile')],
     [t('Contact us'), () => { location.href = supportMailto(); }],
     [t('Privacy & data'), () => openInfo('privacy')],
     [t('About our styles'), () => openInfo('about')],
     [t('Language') + ' · ' + (getLang() === 'zh' ? 'English' : '中文'), toggleLang],
-    signedIn() && [t('Sign out'), signOut],
     [t('Delete account'), () => openInfo('delete')],
   ].filter(Boolean);
   const name = userLabel() || (signedIn() ? t('Creator') : t('Guest'));
@@ -1005,11 +1019,13 @@ function ProfileScreen() {
       h('div', { class: 'page-title', style: { padding: '14px 0 16px' } }, t('Profile')),
       h('div', { style: { paddingBottom: '18px' } },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: '14px' } },
-          h('div', { style: { width: '54px', height: '54px', borderRadius: '999px', background: 'var(--ink)', color: 'var(--canvas)', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '600 22px var(--serif)' } }, (name[0] || 'G').toUpperCase()),
-          h('div', { style: { minWidth: 0 } },
-            h('div', { style: { font: '600 16px var(--sans)', overflow: 'hidden', textOverflow: 'ellipsis' } }, name),
+          h('div', { style: { width: '54px', height: '54px', flex: 'none', borderRadius: '999px', background: 'var(--ink)', color: 'var(--canvas)', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '600 22px var(--serif)' } }, (name[0] || 'G').toUpperCase()),
+          h('div', { style: { flex: 1, minWidth: 0 } },
+            h('div', { style: { font: '600 16px var(--sans)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, name),
+            signedIn() && userEmail() && userEmail() !== name && h('div', { style: { font: '400 12.5px var(--mono)', color: 'var(--ink)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, userEmail()),
             h('div', { style: { font: '400 12px var(--sans)', color: 'var(--ink-muted)' } },
-              signedIn() ? t('Signed in — works and credits sync across devices') : t('Sign in to see your works and credits')))),
+              signedIn() ? t('Signed in — works and credits sync across devices') : t('Sign in to see your works and credits'))),
+          signedIn() && h('button', { class: 'btn secondary small', style: { flex: 'none', width: 'auto', padding: '0 14px', height: '38px' }, onClick: signOut }, t('Sign out'))),
         !signedIn() && h('div', { style: { paddingTop: '14px' } },
           h('button', { class: 'btn', style: { height: '46px', fontSize: '14.5px' }, onClick: () => openAuth('profile') },
             t('Sign in / Register — {n} free artworks', { n: freeUnits() }))),
@@ -1191,10 +1207,20 @@ function openPaywall(context) {
 // the cashier's "Done" button brings the user back with ?checkout=success and
 // we simply poll the balance (see awaitCheckoutResult).
 let checkoutBusy = false;
+// The store is not (yet) approved by the provider for live payments: the server
+// answers PAYMENTS_NOT_READY. Backends released before that code existed send a
+// VERIFICATION_UNAVAILABLE with this exact "rejected" wording for the same case.
+const paymentsNotReady = (e) => e.code === 'PAYMENTS_NOT_READY'
+  || (e.code === 'VERIFICATION_UNAVAILABLE' && /rejected the checkout\./.test(e.message || ''));
+function paywallNotice(msg) {
+  if (S.paywall) { S.paywall.notice = msg; renderOverlay(); }
+  toast(msg, 4200);
+}
 async function webCheckout(p) {
   if (!signedIn()) { openAuth(S.screen); return; }
   if (checkoutBusy) return;
   checkoutBusy = true;
+  if (S.paywall) { S.paywall.busy = p.internalKey; S.paywall.notice = null; renderOverlay(); }
   const currency = webCurrency(p);
   try {
     track('checkout_started', { productId: p.internalKey, currency });
@@ -1202,11 +1228,13 @@ async function webCheckout(p) {
     window.location.assign(res.checkoutUrl);
   } catch (e) {
     checkoutBusy = false;
+    if (S.paywall) S.paywall.busy = null;
     if (e.code === 'AUTH_REQUIRED') openAuth(S.screen);
-    else if (e.code === 'PROVIDER_NOT_CONFIGURED') toast(t('Online payment is not open yet'));
-    else if (e.code === 'VERIFICATION_UNAVAILABLE') toast(t('Payment provider unavailable — please try again in a moment'));
-    else if (e.code === 'RATE_LIMITED') toast(t('Too many attempts — please wait a minute'));
-    else toast(t('Could not start checkout — you were not charged'));
+    else if (paymentsNotReady(e)) paywallNotice(t('Payments are being activated — please try again later'));
+    else if (e.code === 'PROVIDER_NOT_CONFIGURED') paywallNotice(t('Online payment is not open yet'));
+    else if (e.code === 'VERIFICATION_UNAVAILABLE') paywallNotice(t('Payment provider unavailable — please try again in a moment'));
+    else if (e.code === 'RATE_LIMITED') paywallNotice(t('Too many attempts — please wait a minute'));
+    else paywallNotice(t('Could not start checkout — you were not charged'));
   }
 }
 async function cancelWebSubscription() {
@@ -1277,18 +1305,24 @@ async function copyQQ() {
   catch { toast(supportQQ(), 3000); }
 }
 // QQ group first (fastest way to buy), email second. QR only where there is room.
+// With web checkout on, this is the secondary "questions / other ways" block.
+// The QR lives under /covers/: the edge only forwards a few root paths to the
+// app, and /covers/* is one of them (a root /qq-group.png is a 404 there).
+const QQ_QR = '/covers/qq-group.png';
 function ContactBlock(kind = 'more') {
   const qq = supportQQ();
+  const web = webBilling();
   return h('div', { class: 'contact-card', style: { marginTop: '4px' } },
     qq && h('div', { class: 'qq-row' },
-      isWeb() && h('img', { class: 'qq-qr', src: apiUrl('/qq-group.png'), alt: t('QQ group QR code'), width: 96, height: 96 }),
+      isWeb() && h('img', { class: 'qq-qr', src: apiUrl(QQ_QR), alt: t('QQ group QR code'), width: 96, height: 96, onError: (e) => { e.target.remove(); } }),
       h('div', { style: { flex: 1, minWidth: 0 } },
-        h('div', { class: 'kicker', style: { paddingBottom: '4px' } }, t('QQ group · fastest')),
+        h('div', { class: 'kicker', style: { paddingBottom: '4px' } }, web ? t('QQ group · help') : t('QQ group · fastest')),
         h('div', { class: 'email' }, qq),
-        h('div', { style: { font: '400 11.5px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '4px' } }, t('Join the group and message the admin to buy — credited within minutes during the day.')),
+        h('div', { style: { font: '400 11.5px/1.5 var(--sans)', color: 'var(--ink-muted)', paddingTop: '4px' } },
+          web ? t('Questions, or prefer to pay another way? Join the group and message the admin.') : t('Join the group and message the admin to buy — credited within minutes during the day.')),
         h('div', { style: { display: 'flex', gap: '8px', paddingTop: '10px' } },
           h('button', { class: 'btn small', style: { flex: 'none', width: 'auto', padding: '0 14px', height: '40px' }, onClick: copyQQ }, t('Copy group number')),
-          !isWeb() && h('a', { class: 'btn secondary small', style: { flex: 'none', width: 'auto', padding: '0 14px', height: '40px', textDecoration: 'none' }, href: apiUrl('/qq-group.png'), target: '_blank', rel: 'noopener' }, t('QR code'))))),
+          !isWeb() && h('a', { class: 'btn secondary small', style: { flex: 'none', width: 'auto', padding: '0 14px', height: '40px', textDecoration: 'none' }, href: apiUrl(QQ_QR), target: '_blank', rel: 'noopener' }, t('QR code'))))),
     h('div', { style: { paddingTop: qq ? '14px' : 0, marginTop: qq ? '12px' : 0, borderTop: qq ? '1px solid var(--line)' : 'none' } },
       h('div', { class: 'kicker', style: { paddingBottom: '4px' } }, qq ? t('Or email us') : t('Email us')),
       h('div', { class: 'email', style: { fontSize: '13.5px' } }, supportEmail()),
@@ -1343,6 +1377,7 @@ function PaywallSheet() {
             t('Questions? '), supportQQ() && [t('QQ group '), h('b', null, supportQQ()), ' · '], h('a', { class: 'linkbtn', style: { textDecoration: 'none', fontWeight: 500 }, href: `mailto:${supportEmail()}` }, supportEmail())),
         ]
         : [
+          S.paywall.notice && h('div', { role: 'status', style: { font: '500 12.5px/1.55 var(--sans)', color: 'var(--warning)', background: 'var(--warning-soft)', borderRadius: '10px', padding: '10px 12px', marginBottom: '12px' } }, S.paywall.notice),
           Catalogue(premium),
           webBilling() && h('div', { class: 'kicker', style: { padding: '4px 0 8px' } }, t('Prefer to pay another way?')),
           contactCard,
@@ -1384,9 +1419,9 @@ function Catalogue(premiumFirst) {
       // Web checkout: the whole row is the buy action; the button is the primary CTA.
       return h('div', { class: 'plan-row' + (sub ? ' selected' : ''), style: { cursor: 'pointer', alignItems: 'center' }, onClick: () => webCheckout(p) },
         info,
-        priceBlock(h('div', { style: { font: '400 10.5px var(--sans)', color: 'var(--ink-muted)' } }, webCurrency(p) === 'CNY' ? t('WeChat Pay') : t('Card · Apple Pay · Google Pay'))),
-        h('button', { class: 'btn small', style: { flex: 'none', width: 'auto', padding: '0 14px', height: '36px', marginLeft: '10px' }, onClick: (e) => { e.stopPropagation(); webCheckout(p); } },
-          sub ? t('Subscribe') : t('Buy')));
+        priceBlock(h('div', { style: { font: '400 10.5px/1.35 var(--sans)', color: 'var(--ink-muted)', maxWidth: '112px', marginLeft: 'auto' } }, webCurrency(p) === 'CNY' ? t('WeChat Pay') : t('Card · Apple Pay · Google Pay'))),
+        h('button', { class: 'btn small', disabled: S.paywall?.busy ? true : null, style: { flex: 'none', width: 'auto', padding: '0 14px', height: '36px', marginLeft: '10px' }, onClick: (e) => { e.stopPropagation(); webCheckout(p); } },
+          S.paywall?.busy === p.internalKey ? t('Opening…') : (sub ? t('Subscribe') : t('Buy'))));
     }));
 }
 
@@ -1529,7 +1564,11 @@ function renderOverlay() {
   if (S.infoSheet) parts.push(InfoSheet());
   if (S.paywall) parts.push(PaywallSheet());
   if (S.toast) parts.push(h('div', { class: 'toast' }, S.toast));
+  const kind = S.paywall ? 'paywall' : S.infoSheet ? 'info' : S.detail ? 'detail' : '';
+  const keep = kind && overlayRoot.dataset.kind === kind ? overlayRoot.querySelector('.sheet')?.scrollTop || 0 : 0;
   overlayRoot.replaceChildren(...parts);
+  overlayRoot.dataset.kind = kind;
+  if (keep) { const sh = overlayRoot.querySelector('.sheet'); if (sh) sh.scrollTop = keep; }
 }
 
 // ---------- deep links (?exhibition=slug, ?plan=…, ?auth=1) ----------

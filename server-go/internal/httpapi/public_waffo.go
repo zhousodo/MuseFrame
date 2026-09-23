@@ -214,7 +214,12 @@ func (a *App) waffoCallError(err error, op string) error {
 		if op == "cancel" {
 			return apierr.New(422, apierr.CodeValidation, "This subscription can no longer be canceled.")
 		}
-		return apierr.New(http.StatusServiceUnavailable, apierr.CodeVerificationUnavail, "The payment provider rejected the checkout. Please contact us.")
+		// 403 = 店铺还没被 Waffo 放行做正式收款（审核中 / 被暂停）。这是「通道没开」而不是
+		// 请求写错了，单独给一个码，前端据此提示「支付通道正在审核中，请稍后再试」。
+		if e.Status == http.StatusForbidden {
+			return apierr.New(http.StatusServiceUnavailable, apierr.CodePaymentsNotReady, "Online payments are being activated. Please try again later.")
+		}
+		return apierr.New(http.StatusServiceUnavailable, apierr.CodeVerificationUnavail, "The payment provider declined the checkout request. Please contact us.")
 	}
 	return err
 }
