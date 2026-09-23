@@ -187,6 +187,28 @@ ssh prodsrv 'sudo sha256sum /srv/platform/apps/museframe/data/web/admin.html'
 
 浏览器强制刷新即可。回滚就是把 `.bak-<时间戳>` 拷回去。
 
+**换 SPA（`app.js` / `app.css` / `i18n.js` / `api.js` / `native.js` / `index.html`）同样走这个目录**，不发版：
+
+```bash
+D=/srv/platform/apps/museframe/data/web; TS=$(date -u +%Y%m%dT%H%M%SZ); SHA=$(git rev-parse --short=8 HEAD)
+scp web/<f> prodsrv:/tmp/<f>
+ssh prodsrv "sudo cp -p $D/<f> $D/<f>.bak-$TS-g$SHA && sudo install -m 640 -o ubuntu -g netdev /tmp/<f> $D/<f> && rm /tmp/<f>"
+```
+
+🔴 **缓存约定**：Cloudflare 对根资源缓存 4h（`max-age=14400`），`/app` 的 HTML 是 `no-cache`（DYNAMIC）。
+所以**改了哪个 JS/CSS，就升它的 `?v=`**：`index.html` 里 `app.css?v=` / `app.js?v=`，`app.js` 顶部三条 import 的 `?v=`；
+`api.js` 在 `app.js` 与 `native.js` 里各导入一次，**两处的 `?v=` 必须逐字一致**（不一致 = 两个模块实例 = 两份登录态）。
+线上核对用带 `?cb=<epoch>` 或新 `?v=` 的 curl 比 sha256。
+
+🔴 **边缘只把这些路径转给容器**：`/app*`、`/v1/*`、`/admin.html`、六个根资源（`app.js` `app.css` `api.js` `native.js` `config.js` `i18n.js`）。
+其余（含 `/covers/*`、`/qq-group.*.png`）是**落地页的静态文件**，由边缘直发、不到容器——
+往 `data/web/` 里新增文件在公网上是 404。SPA 里的 QQ 群二维码因此引用落地页自带的 `/qq-group.ba339a5b.png`
+（与 `web/qq-group.png` 逐字节一致）。路由清单见 `server-go/deploy/edge-regress.py`。
+
+- **2026-09-23 12:28Z** 网页端同步（PR「付费墙支付入口 / 退出登录 / 二维码」）：`app.js`（`?v=20260923c`）、`app.css`、`i18n.js`、
+  `native.js`、`index.html`（后三个模块 `?v=20260923b`），备份 `*.bak-20260923T122638Z-g210f6946` 与 `*.bak-20260923T122837Z-gf3005254`。
+  过程中曾装过一份 `covers/qq-group.png`（后证实 `/covers/*` 不到容器，已不再引用，文件留在目录里无害）。
+
 ---
 
 ## 5. 上架材料清单（规格 §21）
@@ -263,8 +285,9 @@ MII…
       到达后行变 `canceled`、`expires_at` 压到当时，plan 回 free。
 
 **Waffo 侧状态（2026-09-23）**：店铺 `STO_2gYlsri8wtsqFPiIEN6kOO` 业务详情已提交，**审核中（1–3 个工作日，邮件通知）**；
-审核通过前 `create-session` 会被 Waffo 以 403 `Store is not approved for production payments` 拒绝，网页端会看到
-「暂时无法发起支付」类提示，这不是我们的故障。域名验证已通过（`/.well-known/waffo-verify.txt`，由 lenscript-site 仓发布），
+审核通过前 `create-session` 会被 Waffo 以 403 `Store is not approved for production payments` 拒绝，网页端付费墙会在弹窗里提示
+「支付通道正在审核中，请稍后再试」，这不是我们的故障。后端把上游 403 翻成 `503 PAYMENTS_NOT_READY`（2026-09-23 PR 引入，**需要发版才生效**；
+发版前线上仍回 `503 VERIFICATION_UNAVAILABLE`「rejected the checkout」，前端对这句原话做了兼容，提示相同）。域名验证已通过（`/.well-known/waffo-verify.txt`，由 lenscript-site 仓发布），
 网站自检「未发现明显问题」。完整交接见 [`docs/HANDOVER-2026-09-23-waffo.md`](docs/HANDOVER-2026-09-23-waffo.md)。
 
 **排障**：`OPS.md` §5 表里有「网页端付了钱额度没到」与「用户要退款」两行。
