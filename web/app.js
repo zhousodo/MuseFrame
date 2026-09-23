@@ -8,9 +8,10 @@
 // copy via i18n.js. Free tier = N artworks after email registration; when they
 // are used up the paywall asks the user to email support (manual top-up).
 // Cache-busting: the edge caches modules for hours, so every local import carries
-// ?v=. The api.js specifier must be byte-identical here and in native.js:
-// './api.js' and './api.js?v=...' would be two module instances (two tokens).
-// Bump all of them together with the app.js ?v= in index.html.
+// ?v=. Bump the ?v= of a module whenever that file changes (and app.js's own ?v=
+// in index.html whenever app.js changes). The api.js specifier must stay
+// byte-identical here and in native.js: './api.js' and './api.js?v=...' would be
+// two module instances (two tokens).
 import { ensureSession, ensureAssetToken, setToken, clearToken, get, post, put, del, assetUrl, apiUrl, track, token } from './api.js?v=20260923b';
 import { deviceId, getAuthConfig, nativeSignIn, nativePurchase, isNative, platform, emailRequestCode, emailVerifyCode } from './native.js?v=20260923b';
 import { t, getLang, setLang, initLang } from './i18n.js?v=20260923b';
@@ -1306,9 +1307,11 @@ async function copyQQ() {
 }
 // QQ group first (fastest way to buy), email second. QR only where there is room.
 // With web checkout on, this is the secondary "questions / other ways" block.
-// The QR lives under /covers/: the edge only forwards a few root paths to the
-// app, and /covers/* is one of them (a root /qq-group.png is a 404 there).
-const QQ_QR = '/covers/qq-group.png';
+// The edge forwards only /app*, /v1/*, /admin.html and six root assets to the
+// app; everything else (including /covers/*) is the landing site's static
+// files, so web/qq-group.png is unreachable in production. The landing site
+// ships the same image (byte-identical) under this content-hashed name.
+const QQ_QR = '/qq-group.ba339a5b.png';
 function ContactBlock(kind = 'more') {
   const qq = supportQQ();
   const web = webBilling();
