@@ -97,13 +97,15 @@ type PurchaseListItem struct {
 	Platform        string
 	Status          string
 	ProviderOrderID *string
+	// OneTime（007）：一次性通行证（不续费、不可取消）。
+	OneTime bool
 }
 
 // ListPurchasesOfUser 订单历史，ORDER BY purchased_at DESC，无 LIMIT。
 func ListPurchasesOfUser(ctx context.Context, q Queryer, userID string) ([]PurchaseListItem, error) {
 	rows, err := q.Query(ctx,
 		`SELECT pu.id, p.display_name, p.product_type, pu.amount_minor, pu.currency, pu.purchased_at, pu.expires_at,
-		        pu.platform, pu.status, pu.provider_order_id
+		        pu.platform, pu.status, pu.provider_order_id, p.one_time
 		 FROM purchases pu JOIN products p ON p.id = pu.product_id
 		 WHERE pu.user_id = $1 ORDER BY pu.purchased_at DESC, pu.id ASC`, userID)
 	if err != nil {
@@ -114,7 +116,7 @@ func ListPurchasesOfUser(ctx context.Context, q Queryer, userID string) ([]Purch
 	for rows.Next() {
 		var it PurchaseListItem
 		if err := rows.Scan(&it.ID, &it.ProductName, &it.ProductType, &it.AmountMinor, &it.Currency, &it.PurchasedAt, &it.ExpiresAt,
-			&it.Platform, &it.Status, &it.ProviderOrderID); err != nil {
+			&it.Platform, &it.Status, &it.ProviderOrderID, &it.OneTime); err != nil {
 			return nil, err
 		}
 		out = append(out, it)

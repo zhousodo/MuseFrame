@@ -36,6 +36,7 @@ const (
 	CodeProviderNotConfigured  = "PROVIDER_NOT_CONFIGURED"
 	CodeVerificationUnavail    = "VERIFICATION_UNAVAILABLE"
 	CodePaymentsNotReady       = "PAYMENTS_NOT_READY" // 收款通道还没被支付平台放行（例如店铺仍在审核）
+	CodeTrialAlreadyUsed       = "TRIAL_ALREADY_USED" // 体验包（trial_*）每个账号只能买一次
 	CodeGenerationUnavailable  = "GENERATION_UNAVAILABLE"
 	CodeEmailSendFailed        = "EMAIL_SEND_FAILED"
 	CodeSMTPNotConfigured      = "SMTP_NOT_CONFIGURED"

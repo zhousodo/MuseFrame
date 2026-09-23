@@ -12,9 +12,9 @@
 // in index.html whenever app.js changes). The api.js specifier must stay
 // byte-identical here and in native.js: './api.js' and './api.js?v=...' would be
 // two module instances (two tokens).
-import { ensureSession, ensureAssetToken, setToken, clearToken, get, post, put, del, assetUrl, apiUrl, track, token } from './api.js?v=20260923b';
-import { deviceId, getAuthConfig, nativeSignIn, nativePurchase, isNative, platform, emailRequestCode, emailVerifyCode } from './native.js?v=20260923b';
-import { t, getLang, setLang, initLang } from './i18n.js?v=20260923b';
+import { ensureSession, ensureAssetToken, setToken, clearToken, get, post, put, del, assetUrl, apiUrl, track, token } from './api.js?v=20260923d';
+import { deviceId, getAuthConfig, nativeSignIn, nativePurchase, isNative, platform, emailRequestCode, emailVerifyCode } from './native.js?v=20260923d';
+import { t, getLang, setLang, initLang } from './i18n.js?v=20260923d';
 
 // ---------- tiny DOM helper ----------
 function h(tag, attrs, ...children) {
@@ -139,16 +139,52 @@ const nativeBilling = () => isNative() && !!(S.authConfig?.billing?.google || S.
 // billing.web, which is only true once the merchant key + store id are set.
 const webBilling = () => !isNative() && !!S.authConfig?.billing?.web && S.products.length > 0;
 
-// Catalogue helpers: Chinese UI shows the CNY price, English the USD price.
-// A product with no CNY price is simply not offered to Chinese-language users.
+// Catalogue helpers.
+//
+// Prices are per-market lists (priceMinor = USD cents, priceCnyMinor = CNY fen),
+// never a conversion. Which list is shown:
+//   - web checkout on: the paywall's USD / ¥ CNY switch (payCurrency()), default
+//     CNY for the Chinese UI and USD otherwise, remembered per browser;
+//   - otherwise (store app / email-to-buy): the UI language, as before.
+// A product with no price in the shown currency is simply not offered.
+const PAY_CURRENCY_KEY = 'mf.payCurrency';
+function payCurrency() {
+  if (S.payCurrency === 'USD' || S.payCurrency === 'CNY') return S.payCurrency;
+  let saved = null;
+  try { saved = localStorage.getItem(PAY_CURRENCY_KEY); } catch { /* storage blocked */ }
+  S.payCurrency = saved === 'USD' || saved === 'CNY' ? saved : (getLang() === 'zh' ? 'CNY' : 'USD');
+  return S.payCurrency;
+}
+function setPayCurrency(c) {
+  S.payCurrency = c;
+  try { localStorage.setItem(PAY_CURRENCY_KEY, c); } catch { /* storage blocked */ }
+  if (S.paywall) S.paywall.notice = null;
+  renderOverlay();
+}
+const displayCurrency = () => (webBilling() ? payCurrency() : (getLang() === 'zh' ? 'CNY' : 'USD'));
+const priceIn = (p, cur) => (cur === 'CNY' ? p.priceCnyMinor : p.priceMinor);
 function productPrice(p) {
-  if (getLang() === 'zh') return p.priceCnyMinor != null ? `¥${(p.priceCnyMinor / 100).toFixed(p.priceCnyMinor % 100 ? 2 : 0)}` : null;
-  return p.priceMinor != null ? `$${(p.priceMinor / 100).toFixed(2)}` : null;
+  const cur = displayCurrency();
+  const minor = priceIn(p, cur);
+  if (minor == null) return null;
+  return cur === 'CNY' ? `¥${(minor / 100).toFixed(minor % 100 ? 2 : 0)}` : `$${(minor / 100).toFixed(2)}`;
 }
 const productName = (p) => (getLang() === 'zh' ? (p.displayNameZh || p.displayName) : p.displayName);
-// Web checkout currency: CNY (WeChat Pay) only for packs shown to Chinese users
-// with a CNY price; subscriptions are USD-only on the provider side.
-const webCurrency = (p) => (p.productType === 'pack' && getLang() === 'zh' && p.priceCnyMinor != null ? 'CNY' : 'USD');
+// One-time pass (creator_pass_30): subscription-type (30 days of Creator) but a
+// single payment — never renews, cannot be canceled.
+const isPass = (p) => p.productType === 'subscription' && !!p.oneTime;
+// Where a product can be bought. Old servers send no `platforms` → no filtering.
+// googleProductId is never empty (the server falls back to internalKey), so it
+// cannot tell whether the Play Store has the product; `platforms` can.
+function soldHere(p) {
+  if (!Array.isArray(p.platforms)) return true;
+  if (isNative()) return p.platforms.includes(platform() === 'ios' ? 'ios' : 'android');
+  if (webBilling()) return p.platforms.includes('web');
+  return true;
+}
+// Web checkout currency is the switch; the server enforces the same rules
+// (CNY = WeChat Pay: packs + the one-time pass; USD: packs + renewing plans).
+const webCurrency = () => payCurrency();
 function fmtMoney(minor, cur) {
   if (minor == null) return '—';
   const c = (cur || 'USD').toUpperCase();
@@ -157,22 +193,39 @@ function fmtMoney(minor, cur) {
   const v = minor / 100;
   return sym + (c === 'CNY' ? v.toFixed(minor % 100 ? 2 : 0) : v.toFixed(2));
 }
-const webPrice = (p) => (webCurrency(p) === 'CNY' ? fmtMoney(p.priceCnyMinor, 'CNY') : fmtMoney(p.priceMinor, 'USD'));
-// With web checkout the subscription is always purchasable (USD), even when the
-// Chinese catalogue has no CNY price for it.
-const offeredProducts = () => S.products.filter(p => productPrice(p) !== null || (webBilling() && p.productType === 'subscription'));
-// The user's live web subscription, if any (drives "Manage subscription").
+const webPrice = (p) => fmtMoney(priceIn(p, webCurrency()), webCurrency());
+// What the price list offers in the shown currency. Waffo cannot bill a
+// subscription in CNY, so with web checkout CNY shows the one-time pass instead
+// of the renewing plans, and USD shows the renewing plans instead of the pass.
+function offeredProducts() {
+  const cur = displayCurrency();
+  const web = webBilling();
+  return S.products.filter((p) => {
+    if (!soldHere(p) || priceIn(p, cur) == null) return false;
+    if (isPass(p)) return cur === 'CNY';
+    if (web && cur === 'CNY' && p.productType === 'subscription') return false;
+    return true;
+  });
+}
+// The user's live renewing web subscription, if any (drives "Manage subscription").
 function activeWebSubscription() {
   const now = Date.now();
-  return (S.purchases || []).find(p => p.platform === 'waffo' && p.productType === 'subscription' && p.status === 'verified'
+  return (S.purchases || []).find(p => p.platform === 'waffo' && p.productType === 'subscription' && !p.oneTime && p.status === 'verified'
     && (!p.expiresAt || Date.parse(p.expiresAt) > now)) || null;
+}
+// The user's live one-time Creator pass, if any.
+function activeWebPass() {
+  const now = Date.now();
+  return (S.purchases || []).find(p => p.platform === 'waffo' && p.oneTime && p.status === 'verified'
+    && p.expiresAt && Date.parse(p.expiresAt) > now) || null;
 }
 function perImage(p) {
   if (!p.grantedUnits) return null;
-  const minor = getLang() === 'zh' ? p.priceCnyMinor : p.priceMinor;
+  const cur = displayCurrency();
+  const minor = priceIn(p, cur);
   if (minor == null) return null;
   const v = minor / 100 / p.grantedUnits;
-  return (getLang() === 'zh' ? '¥' : '$') + (v < 1 ? v.toFixed(2) : v.toFixed(1));
+  return (cur === 'CNY' ? '¥' : '$') + (v < 1 ? v.toFixed(2) : v.toFixed(1));
 }
 
 // ---------- data ----------
@@ -1000,7 +1053,8 @@ async function loadProfile() {
 function ProfileScreen() {
   const ent = S.ent || { plan: 'free', availableUnits: 0 };
   const isFree = ent.plan === 'free';
-  const planName = isFree ? t('Free account') : (S.products.find(p => p.internalKey === ent.plan)?.displayName || 'Creator');
+  const planProduct = S.products.find(p => p.internalKey === ent.plan);
+  const planName = isFree ? t('Free account') : ((planProduct && productName(planProduct)) || 'Creator');
   const rows = [
     isNative() && !isFree && [t('Manage subscription'), () => openPaywall('manage')],
     !isNative() && activeWebSubscription() && [t('Manage subscription · cancel'), cancelWebSubscription],
@@ -1045,7 +1099,9 @@ function ProfileScreen() {
               : t('Register with your email to receive {n} free artworks.', { n: freeUnits() }))
             : (activeWebSubscription()?.expiresAt
               ? t('All directions unlocked · priority creation · renews {date}', { date: fmtDate(activeWebSubscription().expiresAt, undefined) })
-              : t('All directions unlocked · priority creation'))),
+              : activeWebPass()
+                ? t('All directions unlocked · pass valid until {date}', { date: fmtDate(activeWebPass().expiresAt, undefined) })
+                : t('All directions unlocked · priority creation'))),
         isFree && h('button', { class: 'btn', style: { marginTop: '12px', height: '42px', borderRadius: '10px', fontSize: '13.5px' }, onClick: () => signedIn() ? openPaywall('profile') : openAuth('profile') },
           signedIn() ? t('See packs & prices') : t('Register'))),
       h('div', { class: 'panel', style: { marginTop: '16px', overflow: 'hidden' } },
@@ -1222,7 +1278,7 @@ async function webCheckout(p) {
   if (checkoutBusy) return;
   checkoutBusy = true;
   if (S.paywall) { S.paywall.busy = p.internalKey; S.paywall.notice = null; renderOverlay(); }
-  const currency = webCurrency(p);
+  const currency = webCurrency();
   try {
     track('checkout_started', { productId: p.internalKey, currency });
     const res = await post('/v1/purchases/web/checkout', { productKey: p.internalKey, currency });
@@ -1231,6 +1287,7 @@ async function webCheckout(p) {
     checkoutBusy = false;
     if (S.paywall) S.paywall.busy = null;
     if (e.code === 'AUTH_REQUIRED') openAuth(S.screen);
+    else if (e.code === 'TRIAL_ALREADY_USED') toast(t('The trial pack can only be bought once per account'), 3200);
     else if (paymentsNotReady(e)) paywallNotice(t('Payments are being activated — please try again later'));
     else if (e.code === 'PROVIDER_NOT_CONFIGURED') paywallNotice(t('Online payment is not open yet'));
     else if (e.code === 'VERIFICATION_UNAVAILABLE') paywallNotice(t('Payment provider unavailable — please try again in a moment'));
@@ -1349,7 +1406,9 @@ function PaywallSheet() {
   } else if (premium) {
     title = t('Premium direction');
     body = webBilling()
-      ? t('Premium directions come with Creator. Subscribe below — pay online, unlocked as soon as the payment is confirmed.')
+      ? (payCurrency() === 'CNY'
+        ? t('Premium directions come with Creator. Get the 30-day pass below — pay by WeChat, unlocked as soon as the payment is confirmed.')
+        : t('Premium directions come with Creator. Subscribe below — pay online, unlocked as soon as the payment is confirmed.'))
       : t('Premium directions come with Creator. Pick the plan below, then join our QQ group or email us — we enable it on your account.');
   } else if ((S.ent?.availableUnits || 0) > 0) {
     title = t('Your artworks');
@@ -1371,7 +1430,8 @@ function PaywallSheet() {
       h('div', { style: { display: 'flex', alignItems: 'center', gap: '12px', paddingBottom: '8px' } },
         h('div', { style: { width: '44px', height: '55px', borderRadius: '8px', flex: 'none', background: artBg(S.draft.style) || 'linear-gradient(135deg,#1C49D8,#0A1C52)', backgroundSize: 'cover' } }),
         h('div', { style: { flex: 1, font: '600 19px/1.25 var(--serif)' } }, title),
-        h('button', { class: 'iconbtn', style: { width: '30px', height: '30px', background: 'var(--canvas)', color: 'var(--ink-muted)', fontSize: '13px' }, onClick: close, 'aria-label': t('Close') }, '✕')),
+        !guest && webBilling() && CurrencySwitch(),
+        h('button', { class: 'iconbtn', style: { width: '30px', height: '30px', flex: 'none', background: 'var(--canvas)', color: 'var(--ink-muted)', fontSize: '13px' }, onClick: close, 'aria-label': t('Close') }, '✕')),
       h('div', { style: { font: '400 13px/1.55 var(--sans)', color: 'var(--ink-muted)', paddingBottom: '16px' } }, body),
       guest
         ? [
@@ -1392,47 +1452,84 @@ function PaywallSheet() {
   );
 }
 
-// Price list (email-to-buy). Packs first, then the Creator plan; the Premium
+// Price list. Order: packs by size (the 3-artwork trial first), then the
+// one-time Creator pass, then the renewing plans (monthly, annual). The Premium
 // context leads with Creator since packs alone do not unlock those directions.
+// With web checkout each row is a buy button; otherwise it is email/QQ-to-buy.
 function Catalogue(premiumFirst) {
   let items = offeredProducts();
   if (!items.length) return null;
   const packs = items.filter(p => p.productType === 'pack').sort((a, b) => a.grantedUnits - b.grantedUnits);
-  const subs = items.filter(p => p.productType === 'subscription');
+  const subs = items.filter(p => p.productType === 'subscription')
+    .sort((a, b) => (isPass(b) - isPass(a)) || ((a.period === 'year') - (b.period === 'year')) || (a.priceMinor - b.priceMinor));
   items = premiumFirst ? [...subs, ...packs] : [...packs, ...subs];
   const web = webBilling();
+  const cur = displayCurrency();
+  const monthly = S.products.find(p => p.productType === 'subscription' && !p.oneTime && p.period === 'month');
+  const badge = (text, strong) => h('span', { class: 'plan-badge' + (strong ? ' strong' : '') }, text);
   return h('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px', paddingBottom: '14px' } },
     items.map(p => {
       const sub = p.productType === 'subscription';
+      const pass = isPass(p);
+      const renewing = sub && !pass;
       const price = web ? webPrice(p) : productPrice(p);
-      const each = web && !sub && webCurrency(p) === 'USD' && p.grantedUnits
-        ? fmtMoney(Math.round(p.priceMinor / p.grantedUnits), 'USD') : perImage(p);
+      const each = perImage(p);
+      let line;
+      if (pass) line = t('{n} artworks + Premium + high-res · one-time, no auto-renewal', { n: p.grantedUnits });
+      else if (sub) line = t('{n} artworks every {period} · all directions · high tier', { n: p.grantedUnits, period: t('period.' + p.period) });
+      else line = t('{n} artworks · {each} each · never expire', { n: p.grantedUnits, each });
+      // Annual: "≈ $5/mo · save 37%" against the monthly plan in the same currency.
+      let deal = null;
+      if (renewing && p.period === 'year' && monthly && priceIn(monthly, cur) && priceIn(p, cur)) {
+        const perMonth = Math.round(priceIn(p, cur) / 12);
+        const pct = Math.round((1 - priceIn(p, cur) / (priceIn(monthly, cur) * 12)) * 100);
+        const perMonthText = cur === 'CNY' ? fmtMoney(perMonth, 'CNY') : (perMonth % 100 ? fmtMoney(perMonth, 'USD') : '$' + (perMonth / 100));
+        if (pct > 0) deal = t('≈ {price}/mo · save {pct}%', { price: perMonthText, pct });
+      }
+      const isTrial = p.productType === 'pack' && /^trial_/.test(p.internalKey);
+      const bestValue = p.internalKey === 'pack_30';
       const info = h('div', { style: { flex: 1, minWidth: 0 } },
-        h('div', { style: { font: '600 14px var(--sans)' } }, productName(p), sub && h('span', { style: { font: '600 9.5px var(--sans)', letterSpacing: '.5px', color: 'var(--cobalt)', marginLeft: '8px' } }, t('PREMIUM + HIGH-RES'))),
-        h('div', { style: { font: '400 11.5px var(--sans)', color: 'var(--ink-muted)' } },
-          sub ? t('{n} artworks every {period} · all directions · high tier', { n: p.grantedUnits, period: t('period.' + p.period) })
-            : t('{n} artworks · {each} each · never expire', { n: p.grantedUnits, each })));
+        h('div', { style: { font: '600 14px var(--sans)' } }, productName(p),
+          renewing && h('span', { style: { font: '600 9.5px var(--sans)', letterSpacing: '.5px', color: 'var(--cobalt)', marginLeft: '8px' } }, t('PREMIUM + HIGH-RES')),
+          isTrial && badge(t('Try 3 first')),
+          bestValue && badge(t('Best value'), true)),
+        h('div', { style: { font: '400 11.5px var(--sans)', color: 'var(--ink-muted)' } }, line),
+        deal && h('div', { style: { font: '600 11px var(--sans)', color: 'var(--success)', paddingTop: '2px' } }, deal),
+        isTrial && h('div', { style: { font: '400 10.5px var(--sans)', color: 'var(--ink-muted)', paddingTop: '2px' } }, t('One per account')));
       const priceBlock = (hint) => h('div', { style: { textAlign: 'right', flex: 'none' } },
-        h('div', { style: { font: '600 15px var(--sans)' } }, price, sub && h('span', { style: { font: '400 11px var(--sans)', color: 'var(--ink-muted)' } }, ' / ' + t('period.' + p.period))),
+        h('div', { style: { font: '600 15px var(--sans)' } }, price,
+          renewing && h('span', { style: { font: '400 11px var(--sans)', color: 'var(--ink-muted)' } }, ' / ' + t('period.' + p.period)),
+          pass && h('span', { style: { font: '400 11px var(--sans)', color: 'var(--ink-muted)' } }, ' / ' + t('30 days'))),
         hint);
+      const rowClass = 'plan-row' + ((renewing && p.period === 'month') || pass || bestValue ? ' selected' : '');
       if (!web) {
-        return h('a', { class: 'plan-row' + (sub ? ' selected' : ''), href: supportMailto('buy', p), style: { textDecoration: 'none', color: 'inherit' } },
+        return h('a', { class: rowClass, href: supportMailto('buy', p), style: { textDecoration: 'none', color: 'inherit' } },
           info, priceBlock(h('div', { style: { font: '600 11px var(--sans)', color: 'var(--cobalt)' } }, supportQQ() ? t('QQ / email to buy') : t('Email to buy'))));
       }
       // Web checkout: the whole row is the buy action; the button is the primary CTA.
-      return h('div', { class: 'plan-row' + (sub ? ' selected' : ''), style: { cursor: 'pointer', alignItems: 'center' }, onClick: () => webCheckout(p) },
+      return h('div', { class: rowClass, style: { cursor: 'pointer', alignItems: 'center' }, onClick: () => webCheckout(p) },
         info,
-        priceBlock(h('div', { style: { font: '400 10.5px/1.35 var(--sans)', color: 'var(--ink-muted)', maxWidth: '112px', marginLeft: 'auto' } }, webCurrency(p) === 'CNY' ? t('WeChat Pay') : t('Card · Apple Pay · Google Pay'))),
+        priceBlock(h('div', { style: { font: '400 10.5px/1.35 var(--sans)', color: 'var(--ink-muted)', maxWidth: '112px', marginLeft: 'auto' } }, cur === 'CNY' ? t('WeChat Pay') : t('Card · Apple Pay · Google Pay'))),
         h('button', { class: 'btn small', disabled: S.paywall?.busy ? true : null, style: { flex: 'none', width: 'auto', padding: '0 14px', height: '36px', marginLeft: '10px' }, onClick: (e) => { e.stopPropagation(); webCheckout(p); } },
-          S.paywall?.busy === p.internalKey ? t('Opening…') : (sub ? t('Subscribe') : t('Buy'))));
+          S.paywall?.busy === p.internalKey ? t('Opening…') : (renewing ? t('Subscribe') : t('Buy'))));
     }));
+}
+
+// USD / ¥ CNY switch in the paywall header (web checkout only).
+function CurrencySwitch() {
+  const cur = payCurrency();
+  const opt = (c, label) => h('button', {
+    type: 'button', class: cur === c ? 'on' : null, 'aria-pressed': cur === c ? 'true' : 'false',
+    onClick: (e) => { e.stopPropagation(); if (cur !== c) setPayCurrency(c); },
+  }, label);
+  return h('div', { class: 'cur-switch', role: 'group', 'aria-label': t('Currency') }, opt('USD', 'USD'), opt('CNY', '¥ CNY'));
 }
 
 // Store purchases (Android/iOS only, and only once billing is configured
 // server-side). Prices come from the server catalogue; the web never shows them.
 function StorePlans(close) {
-  const plans = S.products.filter(p => p.productType === 'subscription');
-  const mini = S.products.filter(p => p.productType === 'pack').sort((a, b) => a.grantedUnits - b.grantedUnits)[0];
+  const plans = S.products.filter(p => p.productType === 'subscription' && soldHere(p));
+  const mini = S.products.filter(p => p.productType === 'pack' && soldHere(p)).sort((a, b) => a.grantedUnits - b.grantedUnits)[0];
   const sel = plans.find(p => p.internalKey === S.payPlan) || plans[0];
   const price = (m, cur, p) => (p && productPrice(p)) || `${cur === 'CNY' ? '¥' : '$'}${(m / 100).toFixed(2)}`;
   const buy = async (key) => {

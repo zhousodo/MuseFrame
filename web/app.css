@@ -191,6 +191,13 @@ html.native #phone { width: 100%; height: 100vh; height: 100dvh; max-height: non
 .plan-row.selected { border: 2px solid var(--cobalt); background: var(--cobalt-soft); padding: 12px 13px; }
 .radio { width: 18px; height: 18px; border-radius: 999px; border: 2px solid var(--line); background: #fff; flex: none; }
 .plan-row.selected .radio { border: 5px solid var(--cobalt); }
+/* price list v2: small tier badges + the paywall's USD / CNY switch */
+.plan-badge { display: inline-block; font: 600 9.5px/1 var(--sans); letter-spacing: .4px; color: var(--cobalt); background: var(--cobalt-soft); border-radius: 999px; padding: 3px 7px; margin-left: 8px; vertical-align: 1px; white-space: nowrap; }
+.plan-badge.strong { color: #fff; background: var(--cobalt); }
+.cur-switch { display: inline-flex; flex: none; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 999px; background: var(--canvas); }
+.cur-switch button { border: 0; background: none; cursor: pointer; font: 600 11px/1 var(--sans); color: var(--ink-muted); padding: 6px 9px; border-radius: 999px; white-space: nowrap; }
+.cur-switch button.on { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+.cur-switch button:focus-visible { outline: 2px solid var(--cobalt); outline-offset: 1px; }
 
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
 

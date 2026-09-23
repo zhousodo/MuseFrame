@@ -157,6 +157,8 @@ type PurchaseItem struct {
 	Status          string  `json:"status"`
 	ProviderOrderID *string `json:"providerOrderId"`
 	ProductType     string  `json:"productType"`
+	// OneTime（2026-09-23 价目表 v2 追加）：一次性通行证 —— 网页端据此不显示「管理订阅」。
+	OneTime bool `json:"oneTime"`
 }
 
 // hListPurchases 是订单历史，ORDER BY purchased_at DESC，无 LIMIT。
@@ -175,6 +177,7 @@ func (a *App) hListPurchases(c *Ctx) (any, error) {
 			ID: p.ID, Product: p.ProductName, AmountMinor: p.AmountMinor, Currency: p.Currency,
 			PurchasedAt: store.ISO(p.PurchasedAt), ExpiresAt: store.ISOPtr(p.ExpiresAt),
 			Platform: p.Platform, Status: p.Status, ProviderOrderID: p.ProviderOrderID, ProductType: p.ProductType,
+			OneTime: p.OneTime,
 		})
 	}
 	return map[string]any{"purchases": out}, nil

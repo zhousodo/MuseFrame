@@ -132,7 +132,7 @@ go test ./... -count=1
 cmd/museframe-api       服务主程序（含 healthcheck 子命令）
 cmd/museframe-assets    资产迁移 + sha256 回填 + 四数字交叉校验
 cmd/museframe-waffo-seed 本地商品 ↔ Waffo 商品号映射 / 建商品（生产四个已固化在 006，平时不用跑）
-internal/apierr         统一错误信封与 26 个错误码
+internal/apierr         统一错误信封与 27 个错误码
 internal/aigc           AI 生成内容标识：显式水印（内嵌 GB2312 子集字体）+ 隐式 EXIF/XMP
 internal/cfgstore       运行时配置（🔴 密钥只走环境变量）
 internal/config         进程配置（环境变量，硬校验）
@@ -156,7 +156,9 @@ migrations/             001_init.sql（24 表 / 58 索引）、002_grants.sql（
                         005_free_grant_ip.sql（free_grants.ip 明文客户端地址，可空、幂等、
                         加一列对正在跑的旧镜像完全透明，可在发版前单独执行）、
                         006_waffo.sql（products.waffo_product_id、purchases.provider_order_id 两可空列
-                        + webhook_events 表 + 四个商品的映射回填；同样幂等、可在发版前执行 → 25 表 / 61 索引）
+                        + webhook_events 表 + 四个商品的映射回填；同样幂等、可在发版前执行 → 25 表 / 61 索引）、
+                        007_pricing_v2.sql（价目表 v2：products.one_time 一列 + 改价 + trial_3 / creator_pass_30
+                        两个新商品 + creator_annual 上架 + 三个新 Waffo 映射；幂等、不加表 / 索引）
 deploy/                 Dockerfile、docker-compose.yml、project.env.example
 ```
 

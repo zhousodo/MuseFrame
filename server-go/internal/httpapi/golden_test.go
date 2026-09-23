@@ -32,10 +32,11 @@ func TestGoldenProductPricing(t *testing.T) {
 		minor string
 		cny   string
 	}{
-		{"creator_monthly", "799", "4900"},
+		// 行序：加购包（价格升序）→ 一次性通行证 → 续费订阅（2026-09-23 价目表 v2 起）。
 		{"pack_10", "499", "2900"},
 		{"pack_30", "999", "6900"},
 		{"pack_100", "2999", "19900"},
+		{"creator_monthly", "799", "4900"},
 	}
 	for i, w := range want {
 		p := raw.Products[i]
@@ -73,7 +74,8 @@ func TestGoldenProductOrderStableAfterUpdate(t *testing.T) {
 		}
 		return keys
 	}
-	want := []string{"creator_monthly", "pack_10", "pack_30", "pack_100"}
+	// 2026-09-23 价目表 v2 起的行序：加购包 → 一次性通行证 → 续费订阅（见 store.ListActiveProducts）。
+	want := []string{"pack_10", "pack_30", "pack_100", "creator_monthly"}
 	before := order()
 	for i := range want {
 		if before[i] != want[i] {
