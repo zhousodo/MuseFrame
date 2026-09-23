@@ -68,9 +68,38 @@ func waffoLanguage(locale string) string {
 	}
 }
 
-// webCheckoutCurrencies 是网页端允许的币种。CNY 只对加购包开放（文档：CNY 仅微信支付、
-// 且不支持订阅），订阅恒为 USD。
+// webCheckoutCurrencies 是网页端允许的币种。
+//
+// 币种规则（2026-09-23 价目表 v2）：
+//   - CNY（仅微信支付、只能是一次性订单）：加购包，以及一次性通行证（products.one_time，
+//     即 creator_pass_30）—— 通行证就是为「Waffo 不能按 CNY 扣订阅」准备的替代品。
+//     续费订阅（creator_monthly / creator_annual）按 CNY 一律 422。
+//   - USD：加购包与续费订阅。一次性通行证按 USD 一律 422（"only sold in CNY"），
+//     让 USD 买家走月订 / 年订那条正路，而不是买一个不续费的月订替身。
 var webCheckoutCurrencies = map[string]bool{"USD": true, "CNY": true}
+
+// isTrialProduct：体验包（trial_*）每个账号只能买一次（任意平台的已核验购买都算）。
+func isTrialProduct(p *store.Product) bool {
+	return p.ProductType == "pack" && strings.HasPrefix(p.InternalKey, "trial_")
+}
+
+// webCheckoutAmount 按上面的币种规则给出本单金额（minor），不合规则时回 422。
+func webCheckoutAmount(p *store.Product, currency string) (int64, error) {
+	oneTimeSub := p.ProductType == "subscription" && p.OneTime
+	if currency == "CNY" {
+		if p.ProductType != "pack" && !oneTimeSub {
+			return 0, apierr.New(422, apierr.CodeValidation, "CNY checkout is only available for packs and the 30-day pass.")
+		}
+		if p.PriceCnyMinor == nil {
+			return 0, apierr.New(422, apierr.CodeValidation, "This product has no CNY price.")
+		}
+		return *p.PriceCnyMinor, nil
+	}
+	if oneTimeSub {
+		return 0, apierr.New(422, apierr.CodeValidation, "This product is only sold in CNY.")
+	}
+	return p.PriceMinor, nil
+}
 
 // hWebCheckout 是 POST /v1/purchases/web/checkout。
 func (a *App) hWebCheckout(c *Ctx) (any, error) {
@@ -107,15 +136,20 @@ func (a *App) hWebCheckout(c *Ctx) (any, error) {
 	if product.WaffoProductID == nil || strings.TrimSpace(*product.WaffoProductID) == "" {
 		return nil, apierr.New(http.StatusNotImplemented, apierr.CodeProviderNotConfigured, "This product is not available for web checkout yet.")
 	}
-	amount := product.PriceMinor
-	if currency == "CNY" {
-		if product.ProductType != "pack" {
-			return nil, apierr.New(422, apierr.CodeValidation, "CNY checkout is only available for packs.")
+	amount, err := webCheckoutAmount(product, currency)
+	if err != nil {
+		return nil, err
+	}
+	if isTrialProduct(product) {
+		// 🔴 只挡「已核验」的那一笔：放弃付款留下的 pending 行不算用过。两个并发结账都放行、
+		// 两单都付了的极端情况下照常发放（钱已经收了），不在 webhook 里拒。
+		used, err := store.HasVerifiedPurchaseOfProduct(ctx, a.st.Q(), u.ID, product.ID)
+		if err != nil {
+			return nil, err
 		}
-		if product.PriceCnyMinor == nil {
-			return nil, apierr.New(422, apierr.CodeValidation, "This product has no CNY price.")
+		if used {
+			return nil, apierr.New(409, apierr.CodeTrialAlreadyUsed, "The trial pack can only be bought once per account.")
 		}
-		amount = *product.PriceCnyMinor
 	}
 
 	// 先落 pending 行再出网（与 Play 路径同一次序）：Waffo 那边一旦建了会话、买家付了钱，

@@ -47,12 +47,14 @@ func SetPurchaseStatusExpiry(ctx context.Context, q Queryer, id, status string, 
 }
 
 // ActiveWaffoSubscription 取用户当前有效的 Waffo 订阅（已核验、未到期、带平台订单号）。
+// 一次性通行证（products.one_time）不算：它在 Waffo 那边是一次性订单，没有可取消的订阅，
+// 拿它的 ORD_ 去调 cancel-order 只会被拒。
 func ActiveWaffoSubscription(ctx context.Context, q Queryer, userID string, now time.Time) (*Purchase, error) {
 	return scanPurchase(q.QueryRow(ctx, `
 		SELECT `+purchaseColsPU+` FROM purchases pu
 		JOIN products p ON p.id = pu.product_id
 		WHERE pu.user_id = $1 AND pu.platform = 'waffo' AND pu.status = 'verified'
-		  AND p.product_type = 'subscription' AND pu.provider_order_id IS NOT NULL
+		  AND p.product_type = 'subscription' AND NOT p.one_time AND pu.provider_order_id IS NOT NULL
 		  AND (pu.expires_at IS NULL OR pu.expires_at > $2)
 		ORDER BY pu.purchased_at DESC LIMIT 1`, userID, now))
 }
@@ -140,4 +142,13 @@ func ClaimWebhookEvent(ctx context.Context, q Queryer, id, provider, eventType, 
 func MarkWebhookEventProcessed(ctx context.Context, q Queryer, id string, t time.Time, note *string) error {
 	_, err := q.Exec(ctx, `UPDATE webhook_events SET processed_at = $2, error = $3 WHERE id = $1`, id, t, note)
 	return err
+}
+
+// HasVerifiedPurchaseOfProduct 判断用户是否已有该商品的一笔已核验购买（任意平台）。
+// 体验包限购一次用（trial_*）。
+func HasVerifiedPurchaseOfProduct(ctx context.Context, q Queryer, userID, productID string) (bool, error) {
+	var ok bool
+	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM purchases
+		WHERE user_id = $1 AND product_id = $2 AND status = 'verified')`, userID, productID).Scan(&ok)
+	return ok, err
 }

@@ -168,7 +168,7 @@ server-go/                🟢 线上后端（Go 1.26 + PostgreSQL）—— 详�
   internal/ledger         append-only 额度台账
   internal/worker         生成队列 + 质量闸
   internal/{provider,imaging,oidc,play,mailer,ratelimit,metrics,netx,logx,apierr,config}
-  migrations/             001_init.sql（24 表 / 58 索引）… 006_waffo.sql（+webhook_events 表、两列、三索引 → 25 表 / 61 索引）
+  migrations/             001_init.sql（24 表 / 58 索引）… 006_waffo.sql（+webhook_events 表、两列、三索引 → 25 表 / 61 索引）· 007_pricing_v2.sql（价目表 v2，+products.one_time 一列）
   deploy/                 Dockerfile · Dockerfile.migrate · docker-compose.yml · project.env.example
   docs/admin-guide.html   运营后台使用指南（7 分组 / 15 视图 / 37 路由 / 59 配置项）
 web/                      🟢 线上 SPA + 后台静态壳（bind-mount 进容器，不在镜像里）

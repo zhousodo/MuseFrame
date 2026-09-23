@@ -208,6 +208,10 @@ ssh prodsrv "sudo cp -p $D/<f> $D/<f>.bak-$TS-g$SHA && sudo install -m 640 -o ub
 - **2026-09-23 12:28Z** 网页端同步（PR「付费墙支付入口 / 退出登录 / 二维码」）：`app.js`（`?v=20260923c`）、`app.css`、`i18n.js`、
   `native.js`、`index.html`（后三个模块 `?v=20260923b`），备份 `*.bak-20260923T122638Z-g210f6946` 与 `*.bak-20260923T122837Z-gf3005254`。
   过程中曾装过一份 `covers/qq-group.png`（后证实 `/covers/*` 不到容器，已不再引用，文件留在目录里无害）。
+- **2026-09-23 13:13Z** 网页端同步（价目表 v2）：`app.js` `app.css` `i18n.js` `native.js` `index.html`，模块 `?v=20260923d`，
+  备份 `*.bak-20260923T131300Z-g9b571e3d`；公网带 `?v=` 的 curl 与仓库 sha256 逐个一致。
+- **2026-09-23 13:16Z** 网页端同步（`?auth=1` 深链）：`app.js`（`?v=20260923e`）、`index.html`，备份 `*.bak-20260923T131633Z-g88c6292c`；
+  sha256 一致。其余模块仍是 `?v=20260923d`。
 
 ---
 
@@ -236,14 +240,22 @@ ssh prodsrv "sudo cp -p $D/<f> $D/<f>.bak-$TS-g$SHA && sudo install -m 640 -o ub
 
 **已经做好的（不用再做）**：Dashboard 上 prod 模式的四个商品与 webhook 都已登记（Raw 格式、全部 14 种事件、
 URL `https://museframe.lenscript.cn/v1/webhooks/waffo`）；生产 webhook 验签公钥已内置在
-`internal/waffo/keys.go`；四个商品号已写进 `migrations/006_waffo.sql`：
+`internal/waffo/keys.go`；商品号写在 `migrations/006_waffo.sql`（老四个）与 `007_pricing_v2.sql`（新三个）。
+**价目表 v2（2026-09-23 起，所有者拍板；分市场定价，不是汇率换算）**，行序即 `GET /v1/products` 的行序：
 
-| internal_key | waffo_product_id | 类型 | 价格 |
-|---|---|---|---|
-| `pack_10` | `PROD_3l2au9D4bKq3SWJtHOeknD` | 一次性 | USD 4.99 / CNY 29.00 |
-| `pack_30` | `PROD_3MGCYkNJsjqqPpM8HlwvXN` | 一次性 | USD 9.99 / CNY 69.00 |
-| `pack_100` | `PROD_6IYxsqbH1ql6R5ZyAoyvxA` | 一次性 | USD 29.99 / CNY 199.00 |
-| `creator_monthly` | `PROD_2V2oX2au6mKplqg3nHesbR` | 订阅（按月） | USD 7.99 / 月（无试用） |
+| internal_key | waffo_product_id | Waffo 类型 | 张数 | USD | CNY | 网页端怎么卖 |
+|---|---|---|---|---|---|---|
+| `trial_3` | `PROD_1ljuEsEEljhWUDU9ReU9Js` | 一次性 | 3 | 1.99 | 9.90 | USD / CNY；**每账号限购一次**（409 `TRIAL_ALREADY_USED`） |
+| `pack_10` | `PROD_3l2au9D4bKq3SWJtHOeknD` | 一次性 | 10 | 5.99 | 19.90 | USD / CNY |
+| `pack_30` | `PROD_3MGCYkNJsjqqPpM8HlwvXN` | 一次性 | 30 | 12.99 | 49.00 | USD / CNY（前端标「最划算」） |
+| `pack_100` | `PROD_6IYxsqbH1ql6R5ZyAoyvxA` | 一次性 | 100 | 34.99 | 129.00 | USD / CNY |
+| `creator_pass_30` | `PROD_0kjLl2SI11Y9Cp4R4JntHM` | 一次性（SaaS） | 30 | 7.99 | 39.00 | **只按 CNY**（微信）；30 天 Creator + 30 张随之到期，不续费；USD 下单 422 |
+| `creator_monthly` | `PROD_2V2oX2au6mKplqg3nHesbR` | 订阅 · 月 | 30 | 7.99 | (49.00，仅 Play) | 只按 USD |
+| `creator_annual` | `PROD_3D1CEZRO5lunet0eHPwHpG` | 订阅 · 年（无试用） | 360 | 59.99 | — | 只按 USD；每期开始发 360 张，随该期到期（+48h 宽限） |
+
+加购包额度永不过期（`pack_credit_expiry_days=0`）。`products.one_time=true` 只有 `creator_pass_30`：
+它是订阅型商品（`UserPlan` 期间内报 creator）但走 `order.completed`，不进「管理 / 取消订阅」。
+`trial_3` / `creator_pass_30` 没有 Play 商品（`google_product_id` 为 NULL），`/v1/products` 的 `platforms` 不含 `android`，原生端不展示。
 
 商户号 `MER_4Dq9KxGzXARmX7Pm0K4968`，店铺 `STO_2gYlsri8wtsqFPiIEN6kOO`（都不是密钥）。
 
@@ -283,6 +295,14 @@ MII…
       `expires_at` = 本期末 + 48h 宽限、发 30 张（键 `grant:purchase:<id>:<periodEnd>`）→ 在网页端
       「管理订阅 · 取消」→ `subscription.canceling` 到达（权益保留）→ 期末 `subscription.canceled`
       到达后行变 `canceled`、`expires_at` 压到当时，plan 回 free。
+
+- [x] **价目表 v2 上线（2026-09-23 13:08–13:17 UTC）**：迁移 `007_pricing_v2.sql` 13:08Z 在生产执行（§3 做法，`rc=0`；
+      pack 三行的新价协调人已先手工 UPDATE 过，007 的绝对赋值与之一致）；自检 25 张表 / 64 个索引不变，8 行商品与上表一致
+      （`mini_pack` 仍下架）。镜像 **`museframe-api:20260923T131149Z-g9b571e3d`**（源码 `9b571e3d`），`platformctl deploy` 13:12:30Z
+      成功（健康检查 3s），开机日志 `configured:true, webhookKey:true, mode:prod`；公网 `/v1/health` 200、`billing.web=true`、
+      `GET /v1/products` 7 行新价新序、无签名 webhook 401、匿名 checkout 401。SPA 同步见 §4 的 13:13Z / 13:16Z 两行。
+      上一版 tag `20260923T123244Z-g01c245d2` 仍在生产机，可 rollback（回滚镜像不认识 `one_time`，但列有默认值、不会报错）。
+      **未做真实购买**（按所有者要求）。
 
 **Waffo 侧状态（2026-09-23）**：店铺 `STO_2gYlsri8wtsqFPiIEN6kOO` 业务详情已提交，**审核中（1–3 个工作日，邮件通知）**；
 审核通过前 `create-session` 会被 Waffo 以 403 `Store is not approved for production payments` 拒绝，网页端付费墙会在弹窗里提示

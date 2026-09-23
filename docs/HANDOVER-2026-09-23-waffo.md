@@ -20,11 +20,12 @@
 | 环境 | prod（API Key 与环境绑定；测试模式另建 key） |
 | 生产 API key | `museframe-prod-server`（2026-09-23 所有者创建，「允许再次下载私钥」已开） |
 | Webhook（生产） | Raw 格式、全部 14 种事件 → `https://museframe.lenscript.cn/v1/webhooks/waffo`；平台级 LIVE 验签公钥已内置 `internal/waffo/keys.go` |
-| 商品（生产模式） | `pack_10` → `PROD_3l2au9D4bKq3SWJtHOeknD`（USD 4.99 / CNY 29）· `pack_30` → `PROD_3MGCYkNJsjqqPpM8HlwvXN`（9.99 / 69）· `pack_100` → `PROD_6IYxsqbH1ql6R5ZyAoyvxA`（29.99 / 199）· `creator_monthly` → `PROD_2V2oX2au6mKplqg3nHesbR`（USD 7.99/月，无试用） |
+| 商品（生产模式，价目表 v2，2026-09-23 起） | `trial_3` → `PROD_1ljuEsEEljhWUDU9ReU9Js`（3 张，USD 1.99 / CNY 9.90，每账号一次）· `pack_10` → `PROD_3l2au9D4bKq3SWJtHOeknD`（5.99 / 19.90）· `pack_30` → `PROD_3MGCYkNJsjqqPpM8HlwvXN`（12.99 / 49）· `pack_100` → `PROD_6IYxsqbH1ql6R5ZyAoyvxA`（34.99 / 129）· `creator_pass_30` → `PROD_0kjLl2SI11Y9Cp4R4JntHM`（一次性，30 天 Creator + 30 张，网页端只卖 CNY 39）· `creator_monthly` → `PROD_2V2oX2au6mKplqg3nHesbR`（USD 7.99/月，无试用）· `creator_annual` → `PROD_3D1CEZRO5lunet0eHPwHpG`（USD 59.99/年，360 张/年，无试用）。完整表见 DEPLOY.md §6 |
 | 商品的 successUrl | `https://museframe.lenscript.cn/app?checkout=success` |
 
 Waffo 的币种限制：一次性商品可 USD/EUR/GBP/HKD/JPY/CNY，**CNY 只能微信支付且单笔 ≤ ¥1000**；**订阅不能用 CNY**。
-所以网页端：点数包按界面语言给 CNY（微信）或 USD，订阅一律 USD。
+所以网页端（价目表 v2）：付费墙有 USD / ¥ CNY 切换（中文界面默认 CNY，记在 localStorage `mf.payCurrency`）；
+CNY = 加购包 + 30 天通行证（替代不能按 CNY 扣的订阅），USD = 加购包 + 月订 / 年订；服务端同一套规则（`public_waffo.go` 的 `webCheckoutAmount`）。
 
 ## 3. 线上状态（2026-09-22 17:45 UTC 起）
 
