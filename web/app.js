@@ -1134,6 +1134,8 @@ function AuthScreen() {
     const dest = S.authReturn && S.authReturn !== 'auth' ? S.authReturn : 'discover';
     if (dest === 'projects') openProjects();
     else { if (dest === 'profile') loadProfile(); go(dest); }
+    // Arrived via ?auth=1: once signed in, land on the plan picker.
+    if (S.authThenPaywall) { S.authThenPaywall = false; if (signedIn()) openPaywall('link:auth'); }
   };
   return shell(null,
     topbar(t('Sign in / Register'), back),
@@ -1684,9 +1686,22 @@ function applyDeepLinks() {
     if (S.screen === 'onboarding') S.screen = 'discover';
     S.paywall = { context: 'link:' + params.get('plan') };
   }
-  if (params.get('auth') === '1' && !signedIn()) {
-    if (S.screen === 'onboarding') S.screen = 'discover';
-    S.authReturn = S.screen; S.screen = 'auth';
+  // ?auth=1 (the landing page's price cards): signed out → sign-in, then the
+  // plan picker; signed in → straight to the plan picker. The marker is stripped
+  // so a reload or a shared URL does not reopen it.
+  if (params.get('auth') === '1') {
+    try {
+      const u = new URL(location.href);
+      u.searchParams.delete('auth');
+      history.replaceState(null, '', u.pathname + (u.search || '') + u.hash);
+    } catch { /* ignore */ }
+    if (S.screen === 'onboarding') { S.screen = 'discover'; localStorage.setItem('mf.onboarded', '1'); }
+    if (signedIn()) {
+      S.paywall = { context: 'link:auth' };
+    } else {
+      S.authThenPaywall = true;
+      S.authReturn = S.screen; S.screen = 'auth';
+    }
   }
 }
 
