@@ -12,6 +12,7 @@ import "fmt"
 //
 // ⚠️ 契约 11 号文件第三章写的是「共 26 个」，但它自己列出的名字**只有 25 个**。
 // 这里按**实际枚举出的 25 个**落地，差异已在 45 号报告里标出。
+// 2026-09-23 为网页收款新增 PAYMENTS_NOT_READY，共 26 个。
 const (
 	CodeValidation             = "VALIDATION"
 	CodeAuthRequired           = "AUTH_REQUIRED"
@@ -34,6 +35,7 @@ const (
 	CodePurchaseAlreadyClaimed = "PURCHASE_ALREADY_CLAIMED"
 	CodeProviderNotConfigured  = "PROVIDER_NOT_CONFIGURED"
 	CodeVerificationUnavail    = "VERIFICATION_UNAVAILABLE"
+	CodePaymentsNotReady       = "PAYMENTS_NOT_READY" // 收款通道还没被支付平台放行（例如店铺仍在审核）
 	CodeGenerationUnavailable  = "GENERATION_UNAVAILABLE"
 	CodeEmailSendFailed        = "EMAIL_SEND_FAILED"
 	CodeSMTPNotConfigured      = "SMTP_NOT_CONFIGURED"

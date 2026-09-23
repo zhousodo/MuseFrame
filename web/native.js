@@ -1,7 +1,7 @@
 // Native bridge: sign-in, purchases, device identity. In the packaged app these
 // use Capacitor plugins (auto-registered on window.Capacitor.Plugins — no
 // bundler needed); in the browser they degrade gracefully.
-import { post, apiUrl } from './api.js';
+import { post, apiUrl } from './api.js?v=20260923b'; // keep identical to app.js's api.js specifier
 
 const P = () => window.Capacitor?.Plugins || {};
 export const isNative = () => !!window.Capacitor?.isNativePlatform?.();
