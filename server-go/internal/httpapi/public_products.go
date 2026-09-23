@@ -1,6 +1,10 @@
 package httpapi
 
-import "museframe-api/internal/store"
+import (
+	"strings"
+
+	"museframe-api/internal/store"
+)
 
 // ProductItem 是 GET /v1/products 的一行。
 //
@@ -22,16 +26,45 @@ type ProductItem struct {
 	Period          *string `json:"period"`
 	GoogleProductID string  `json:"googleProductId"`
 	AppleProductID  string  `json:"appleProductId"`
+	// 以下两项是 2026-09-23 价目表 v2 的非破坏性追加（旧客户端忽略即可）。
+	//
+	// OneTime：订阅型商品是一次性通行证（creator_pass_30：30 天 Creator，不续费、不可取消）。
+	OneTime bool `json:"oneTime"`
+	// Platforms：这个商品能在哪些渠道买 —— "web"（配了 Waffo 商品）、"android"（库里配了
+	// google_product_id）、"ios"（配了 apple_product_id）。
+	// 🔴 googleProductId / appleProductId 为兼容 Node 版，库里为 NULL 时回落成 internal_key，
+	// 所以**不能**拿它们非空来判断商店里有没有这个商品；原生端按 platforms 过滤。
+	Platforms []string `json:"platforms"`
 }
 
 // zhProductNames 对应 Node 版 styles.js 的 PRODUCTS 里的 displayNameZh。
 // 库里没有这一列（products 表无 display_name_zh），Node 版也是代码里的静态表，
 // 所以这里照搬；命中不到时回落 display_name（与 Node 的 `|| p.display_name` 一致）。
 var zhProductNames = map[string]string{
+	"trial_3":         "3 张体验包",
 	"pack_10":         "10 张包",
 	"pack_30":         "30 张包",
 	"pack_100":        "100 张包",
+	"creator_pass_30": "Creator 30 天通行证",
 	"creator_monthly": "Creator 月订",
+	"creator_annual":  "Creator 年订",
+}
+
+func nonEmpty(s *string) bool { return s != nil && strings.TrimSpace(*s) != "" }
+
+// productPlatforms 见 ProductItem.Platforms。顺序固定 web → android → ios。
+func productPlatforms(p store.Product) []string {
+	out := make([]string, 0, 3)
+	if nonEmpty(p.WaffoProductID) {
+		out = append(out, "web")
+	}
+	if nonEmpty(p.GoogleProductID) {
+		out = append(out, "android")
+	}
+	if nonEmpty(p.AppleProductID) {
+		out = append(out, "ios")
+	}
+	return out
 }
 
 func productItem(p store.Product) ProductItem {
@@ -53,6 +86,7 @@ func productItem(p store.Product) ProductItem {
 		PriceMinor: p.PriceMinor, PriceCnyMinor: p.PriceCnyMinor,
 		Currency: p.Currency, Period: p.Period,
 		GoogleProductID: google, AppleProductID: apple,
+		OneTime: p.OneTime, Platforms: productPlatforms(p),
 	}
 }
 

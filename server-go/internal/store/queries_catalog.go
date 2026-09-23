@@ -95,13 +95,13 @@ func StyleExists(ctx context.Context, q Queryer, id string) (bool, error) {
 // ---- 商品 ------------------------------------------------------------------
 
 const productCols = `id, internal_key, product_type, display_name, granted_units, price_minor, currency,
-	period, feature_flags, active, google_product_id, apple_product_id, price_cny_minor, waffo_product_id`
+	period, feature_flags, active, google_product_id, apple_product_id, price_cny_minor, waffo_product_id, one_time`
 
 func scanProduct(row interface{ Scan(...any) error }) (*Product, error) {
 	var p Product
 	err := row.Scan(&p.ID, &p.InternalKey, &p.ProductType, &p.DisplayName, &p.GrantedUnits, &p.PriceMinor,
 		&p.Currency, &p.Period, &p.FeatureFlags, &p.Active, &p.GoogleProductID, &p.AppleProductID, &p.PriceCnyMinor,
-		&p.WaffoProductID)
+		&p.WaffoProductID, &p.OneTime)
 	if err != nil {
 		return nil, err
 	}
@@ -111,14 +111,18 @@ func scanProduct(row interface{ Scan(...any) error }) (*Product, error) {
 // ListActiveProducts 上架商品目录。
 //
 // 🔴 行序是契约。Node 版的 SQL 是 `SELECT * FROM products WHERE active = 1`，
-// **没有 ORDER BY**，行序恰好等于 SQLite rowid（插入顺序），实测为
-// creator_monthly, pack_10, pack_30, pack_100。
-// PG 的堆表顺序会随 UPDATE 漂，所以必须显式固定。下面这个排序键
-// （订阅在前 → 价格升序 → internal_key）在当前目录上**逐字复现**线上行序，
-// 且对新商品仍然确定。见 45 号报告的「排序黄金测试」。
+// **没有 ORDER BY**，行序恰好等于 SQLite rowid（插入顺序）；PG 的堆表顺序会随
+// UPDATE 漂，所以必须显式固定（见「排序黄金测试」）。
+//
+// 2026-09-23 价目表 v2（007）改了排序键，**有意**改变了原来「订阅在前」的行序：
+// 加购包（价格升序）→ 一次性通行证（one_time）→ 续费订阅（价格升序）→ internal_key 兜底。
+// 在新目录上即 trial_3, pack_10, pack_30, pack_100, creator_pass_30, creator_monthly, creator_annual。
+// 客户端不依赖跨类型的行序（web/app.js 按类型分组、包按张数排；原生端 StorePlans 默认选
+// S.payPlan = creator_monthly），所以对已装机的旧 APK 无影响。
 func ListActiveProducts(ctx context.Context, q Queryer) ([]Product, error) {
 	return queryProducts(ctx, q, `SELECT `+productCols+` FROM products WHERE active = true
-		ORDER BY CASE product_type WHEN 'subscription' THEN 0 ELSE 1 END ASC, price_minor ASC, internal_key ASC`)
+		ORDER BY CASE WHEN product_type = 'pack' THEN 0 WHEN one_time THEN 1 ELSE 2 END ASC,
+		         price_minor ASC, internal_key ASC`)
 }
 
 // ListAllProducts 管理后台商品列表：ORDER BY product_type, price_minor（+ internal_key 兜底确定性）。

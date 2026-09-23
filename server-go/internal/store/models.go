@@ -114,6 +114,9 @@ type Product struct {
 	PriceCnyMinor   *int64
 	// WaffoProductID 是 Waffo Pancake 上对应的商品（PROD_xxx），NULL = 网页端不可买。
 	WaffoProductID *string
+	// OneTime（007）：订阅型商品是「一次性购买、不续费」的通行证（creator_pass_30）。
+	// 付款走 order.completed，到期 = periodExpiry；不进「管理 / 取消订阅」。
+	OneTime bool
 }
 
 // Purchase 对应 purchases 表。

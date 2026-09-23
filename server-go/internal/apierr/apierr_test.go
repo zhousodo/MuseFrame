@@ -3,14 +3,14 @@ package apierr
 import "testing"
 
 // 错误码全集：按源码抛点穷举原是 25 个（契约写「26 个」但只列了 25 个名字）；
-// 2026-09-23 新增 PAYMENTS_NOT_READY 后为 26 个。
+// 2026-09-23 新增 PAYMENTS_NOT_READY 后为 26 个；同日价目表 v2 新增 TRIAL_ALREADY_USED 后为 27 个。
 func TestErrorCodeSet(t *testing.T) {
 	codes := []string{
 		CodeValidation, CodeAuthRequired, CodeAuthInvalid, CodeNotFound, CodeStyleUnavailable,
 		CodeAssetNotReady, CodeAssetUnsupported, CodeStorageQuotaExceeded, CodeInsufficientEntitle,
 		CodeIdempotencyKeyRequired, CodeIdempotencyConflict, CodeIdempotencyMismatch, CodeAmbiguous,
 		CodeRateLimited, CodeCodeInvalid, CodeCodeExpired, CodeCodeLocked, CodePurchaseInvalid,
-		CodePurchaseAlreadyClaimed, CodeProviderNotConfigured, CodeVerificationUnavail, CodePaymentsNotReady,
+		CodePurchaseAlreadyClaimed, CodeProviderNotConfigured, CodeVerificationUnavail, CodePaymentsNotReady, CodeTrialAlreadyUsed,
 		CodeGenerationUnavailable, CodeEmailSendFailed, CodeSMTPNotConfigured, CodeInternal,
 	}
 	seen := map[string]bool{}
@@ -23,8 +23,8 @@ func TestErrorCodeSet(t *testing.T) {
 		}
 		seen[c] = true
 	}
-	if len(seen) != 26 {
-		t.Fatalf("错误码全集应为 26 个，实际 %d", len(seen))
+	if len(seen) != 27 {
+		t.Fatalf("错误码全集应为 27 个，实际 %d", len(seen))
 	}
 }
 
