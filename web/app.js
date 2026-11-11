@@ -446,7 +446,7 @@ function DiscoverScreen() {
   return shell('discover',
     h('div', { class: 'scroll', style: { paddingBottom: '110px' } },
       h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'max(22px, env(safe-area-inset-top)) 20px 2px' } },
-        h('div', { class: 'kicker' }, `${hero.edition} · ${t('AUG 2026')}`),
+        h('div', { class: 'kicker' }, galleryOnly ? hero.edition : `${hero.edition} · ${t('AUG 2026')}`),
         !galleryOnly && !isWeb() && h('button', { class: 'pillbtn', onClick: () => openPaywall('badge') }, unitsBadgeText()),
       ),
       h('div', { class: 'page-title', style: { padding: '4px 20px 16px' } }, t('Discover')),
@@ -1604,8 +1604,8 @@ function StyleDetailSheet() {
           h('div', { class: 'card-tags', style: { paddingTop: '8px' } }, t('Works best with — ') + c.suitabilityTags.map(tagLabel).join(' · ')),
           c.premium && h('div', { style: { paddingTop: '8px' } }, h('span', { style: { font: '600 9px var(--sans)', letterSpacing: '.6px', background: 'var(--canvas)', border: '1px solid var(--line)', borderRadius: '999px', padding: '3px 7px' } }, 'PREMIUM')))),
       h('div', { style: { font: '400 12.5px/1.6 var(--sans)', color: 'var(--ink-muted)', padding: '14px 0' } },
-        t('An original MuseFrame direction. Identity, pose and key objects are preserved; light, color and texture follow the direction. May change: background detail, fine texture.')),
-      locked && h('div', { style: { font: '500 11.5px/1.5 var(--sans)', color: 'var(--warning)', background: 'var(--warning-soft)', borderRadius: '10px', padding: '9px 12px', marginBottom: '12px' } },
+        galleryOnly ? (c.intentSummary || c.shortCaption) : t('An original MuseFrame direction. Identity, pose and key objects are preserved; light, color and texture follow the direction. May change: background detail, fine texture.')),
+      !galleryOnly && locked && h('div', { style: { font: '500 11.5px/1.5 var(--sans)', color: 'var(--warning)', background: 'var(--warning-soft)', borderRadius: '10px', padding: '9px 12px', marginBottom: '12px' } },
         t('Premium direction — opened on request.')),
       !galleryOnly && h('button', {
         class: 'btn', onClick: () => {
