@@ -109,7 +109,7 @@ const S = {
   emailLogin: null,
 };
 // Onboarding is a phone-app ritual; the website goes straight to the gallery.
-if (S.layout === 'phone' && !localStorage.getItem('mf.onboarded')) S.screen = 'onboarding';
+if (!galleryOnly && S.layout === 'phone' && !localStorage.getItem('mf.onboarded')) S.screen = 'onboarding';
 applyLayout();
 
 function newDraft() {
@@ -338,7 +338,7 @@ function shell(active, ...children) {
   return h('div', { class: 'screen' + (extra ? ' ' + extra : '') },
     isWeb() && webnav(active),
     ...children,
-    isWeb() && active && webfooter(),
+    !galleryOnly && isWeb() && active && webfooter(),
     !isWeb() && active && tabbar(active),
   );
 }
