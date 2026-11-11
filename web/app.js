@@ -12,9 +12,15 @@
 // in index.html whenever app.js changes). The api.js specifier must stay
 // byte-identical here and in native.js: './api.js' and './api.js?v=...' would be
 // two module instances (two tokens).
-import { ensureSession, ensureAssetToken, setToken, clearToken, get, post, put, del, assetUrl, apiUrl, track, token } from './api.js?v=20260923d';
+import { ensureSession, ensureAssetToken, setToken, clearToken, get, post, put, del, assetUrl, apiUrl, track as legacyTrack, token } from './api.js?v=20260923d';
 import { deviceId, getAuthConfig, nativeSignIn, nativePurchase, isNative, platform, emailRequestCode, emailVerifyCode } from './native.js?v=20260923d';
 import { t, getLang, setLang, initLang } from './i18n.js?v=20260923d';
+
+// The website currently offers the published gallery while account, purchase
+// and generation services are unavailable. Native builds retain their API.
+const galleryOnly = !isNative();
+const galleryNotice = () => getLang() === 'zh' ? '当前可浏览风格，创作与账号功能暂不可用。' : 'Browse the gallery; creation and account features are currently unavailable.';
+const track = (...args) => { if (!galleryOnly) legacyTrack(...args); };
 
 // ---------- tiny DOM helper ----------
 function h(tag, attrs, ...children) {
@@ -233,6 +239,14 @@ function perImage(p) {
 // only after the stored bearer has been validated as a registered account.
 const NO_SESSION_ENT = { plan: 'free', availableUnits: 0, freeCompletedImagesRemaining: 0, features: {} };
 async function loadCore() {
+  if (galleryOnly) {
+    const response = await fetch('/v1/products/museframe/public/discover', { credentials: 'omit' });
+    if (!response.ok) throw new Error(`Gallery HTTP ${response.status}`);
+    S.discover = await response.json();
+    S.ent = NO_SESSION_ENT;
+    S.products = [];
+    return;
+  }
   const [discover, products, ent] = await Promise.all([
     get('/v1/discover'), get('/v1/products'),
     token ? get('/v1/entitlements/me').catch(() => NO_SESSION_ENT) : Promise.resolve(NO_SESSION_ENT),
@@ -276,6 +290,7 @@ function topbar(title, onBack, opts = {}) {
 }
 
 function tabbar(active) {
+  if (galleryOnly) return h('div', { class: 'tabbar' }, h('button', { class: 'tab active', onClick: () => go('discover') }, t('Discover')), h('button', { class: 'tab', onClick: toggleLang }, getLang() === 'zh' ? 'EN' : '中文'));
   const tab = (id, icon, label, onClick) =>
     h('button', { class: 'tab' + (active === id ? ' active' : ''), onClick }, svg(icon), h('div', null, label));
   return h('div', { class: 'tabbar' },
@@ -289,6 +304,7 @@ function tabbar(active) {
 
 // Website chrome: brand, section nav, language, quota badge, sign-in, create.
 function webnav(active) {
+  if (galleryOnly) return h('header', { class: 'webnav' }, h('button', { class: 'brand', onClick: () => go('discover') }, 'MUSEFRAME'), h('div', { class: 'spacer' }), h('button', { class: 'lang', onClick: toggleLang }, getLang() === 'zh' ? 'EN' : '中文'));
   const nav = (id, label, onClick) => h('button', { class: active === id ? 'active' : '', onClick }, label);
   return h('header', { class: 'webnav' },
     h('button', { class: 'brand', onClick: () => go('discover') }, 'MUSEFRAME'),
@@ -426,14 +442,15 @@ function DiscoverScreen() {
     return shell(null, h('div', { style: { margin: 'auto', padding: '80px 0' } }, h('div', { class: 'spinner' })));
   }
   const hero = d.heroExhibition;
-  const guestNudge = !signedIn();
+  const guestNudge = !galleryOnly && !signedIn();
   return shell('discover',
     h('div', { class: 'scroll', style: { paddingBottom: '110px' } },
       h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'max(22px, env(safe-area-inset-top)) 20px 2px' } },
         h('div', { class: 'kicker' }, `${hero.edition} · ${t('AUG 2026')}`),
-        !isWeb() && h('button', { class: 'pillbtn', onClick: () => openPaywall('badge') }, unitsBadgeText()),
+        !galleryOnly && !isWeb() && h('button', { class: 'pillbtn', onClick: () => openPaywall('badge') }, unitsBadgeText()),
       ),
       h('div', { class: 'page-title', style: { padding: '4px 20px 16px' } }, t('Discover')),
+      galleryOnly && h('p', { style: { padding: '0 20px', color: 'var(--ink-muted)' } }, galleryNotice()),
       // hero exhibition
       h('div', { style: { padding: isWeb() ? 0 : '0 20px' } },
         h('div', { class: 'hero' },
@@ -459,7 +476,7 @@ function DiscoverScreen() {
         h('button', { class: 'btn small', style: { width: 'auto', padding: '0 16px', flex: 'none' }, onClick: () => openAuth('discover') }, t('Register')),
       ),
       // for-your-photo card
-      h('div', { style: { margin: isWeb() ? '14px 0 0' : '14px 20px 0', display: 'flex', alignItems: 'center', gap: '12px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '14px', padding: '12px 14px' } },
+      !galleryOnly && h('div', { style: { margin: isWeb() ? '14px 0 0' : '14px 20px 0', display: 'flex', alignItems: 'center', gap: '12px', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '14px', padding: '12px 14px' } },
         h('div', { style: { width: '46px', height: '46px', borderRadius: '10px', flex: 'none', background: S.draft.previewUrl ? `url(${S.draft.previewUrl}) center/cover` : 'linear-gradient(170deg,#B9AE9A 0%,#8E8878 45%,#544F45 100%)', filter: S.draft.previewUrl ? 'none' : 'blur(1px)' } }),
         h('div', { style: { flex: 1, minWidth: 0 } },
           h('div', { style: { font: '600 13.5px var(--sans)' } }, t('For your photo')),
@@ -476,7 +493,7 @@ function DiscoverScreen() {
         h('div', { class: 'hrow' },
           sh.styles.map(c => styleCardEl(c, { width: '146px', onClick: () => selectStyle(c, 'discover') }))),
       )),
-      h('div', { style: { textAlign: 'center', font: '400 11px var(--sans)', color: 'var(--ink-muted)', padding: '34px 20px 8px' } },
+      !galleryOnly && h('div', { style: { textAlign: 'center', font: '400 11px var(--sans)', color: 'var(--ink-muted)', padding: '34px 20px 8px' } },
         h('button', { class: 'linkbtn', style: { color: 'var(--ink-muted)', fontWeight: 400, fontSize: '11px' }, onClick: () => openInfo('about') }, t('About our styles')), ' · ',
         h('button', { class: 'linkbtn', style: { color: 'var(--ink-muted)', fontWeight: 400, fontSize: '11px' }, onClick: () => openInfo('privacy') }, t('Privacy')), ' · ',
         h('a', { class: 'linkbtn', style: { color: 'var(--ink-muted)', fontWeight: 400, fontSize: '11px', textDecoration: 'none' }, href: `mailto:${supportEmail()}` }, t('Contact us')),
@@ -505,7 +522,7 @@ function ExhibitionScreen() {
           onClick: () => { S.draft.style = c; S.detail = c; render(); },
         }))),
     ),
-    h('div', { class: 'bottom-bar' },
+    !galleryOnly && h('div', { class: 'bottom-bar' },
       h('button', { class: 'btn', onClick: () => startImport('exhibition') }, t('Choose a photo'))),
   );
 }
@@ -1590,7 +1607,7 @@ function StyleDetailSheet() {
         t('An original MuseFrame direction. Identity, pose and key objects are preserved; light, color and texture follow the direction. May change: background detail, fine texture.')),
       locked && h('div', { style: { font: '500 11.5px/1.5 var(--sans)', color: 'var(--warning)', background: 'var(--warning-soft)', borderRadius: '10px', padding: '9px 12px', marginBottom: '12px' } },
         t('Premium direction — opened on request.')),
-      h('button', {
+      !galleryOnly && h('button', {
         class: 'btn', onClick: () => {
           S.draft.style = c; S.detail = null; renderOverlay();
           S.draft.assetId ? go('configure') : startImport(S.screen);
@@ -1682,6 +1699,7 @@ function applyDeepLinks() {
     S.screen = 'exhibition';
     track('exhibition_opened', { slug, source: 'link' });
   }
+  if (galleryOnly) return;
   if (params.get('plan')) {
     if (S.screen === 'onboarding') S.screen = 'discover';
     S.paywall = { context: 'link:' + params.get('plan') };
@@ -1710,6 +1728,14 @@ async function bootApp() {
   S.bootError = false;
   render(); // paint loader immediately
   try {
+    if (galleryOnly) {
+      await loadCore();
+      if (!S.discover.heroExhibition) { S.discover = null; throw new Error('Gallery is empty'); }
+      applyDeepLinks();
+      S.booted = true;
+      render();
+      return;
+    }
     const session = await ensureSession();
     if (session === 'account') {
       // A validated server session is authoritative; repair an older client's
