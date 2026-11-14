@@ -1,5 +1,9 @@
 # MuseFrame — Curated image making (MVP)
 
+> **生产状态更新（2026-11-15）**：后端已退役，生产后端容器已移除；公网 `/v1/health` 返回 **410**。MuseFrame 静态首页仍返回 **200**。Foundation 是独立服务，未据此验证 MuseFrame 内容、账户或生成能力已迁入。本文后续生产运行/发版记录是对应时点的历史，不是当前服务可用性证明。最新边界见 [Foundation 生产服务清单](https://github.com/zhousodo/App-foundation/blob/develop/docs/ops/production-service-inventory-2026-11-14.md) / [退役滚动更新 PR #81](https://github.com/zhousodo/App-foundation/pull/81)。
+
+---
+
 A working full-stack implementation of the **MuseFrame Gallery MVP Implementation Spec v1.0**:
 a curated-gallery photo app where users pick a *direction*, not a prompt — one photo in,
 one identity-preserving artwork out, saved in about two minutes.

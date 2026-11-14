@@ -1,3 +1,6 @@
+> **生产状态更新（2026-11-15）**：MuseFrame 后端已退役，生产后端容器已移除；`https://museframe.lenscript.cn/v1/health` 返回 **410**。静态首页仍保留且返回 **200**。Foundation 是独立服务，Foundation 路由不证明 MuseFrame 产品内容、账户或生成 API 已迁入/可用。下文的代码结构说明仍适用于源码，但不代表当前生产运行状态；运维与发版命令已停用，详见 [Foundation 生产服务清单](https://github.com/zhousodo/App-foundation/blob/develop/docs/ops/production-service-inventory-2026-11-14.md) 和[退役滚动更新 PR #81](https://github.com/zhousodo/App-foundation/pull/81)。
+
+---
 # 在本仓工作的规矩（AGENTS.md）
 
 面向任何在这个仓库里改东西的人或 agent。先读这一页，再动手。
@@ -12,12 +15,12 @@
 
 | 目录 | 状态 |
 |---|---|
-| `server-go/` | 🟢 **线上就是它**（Go 1.26 + PostgreSQL）。容器 `museframe-api-go`。所有后端改动写在这里 |
-| `web/` | 🟢 线上的 SPA 与运营后台静态壳。`web/admin.html` 与生产机上那一份必须逐字节一致（见 §5） |
-| `server/` | 🔴 **已退役**的 Node + SQLite 实现。容器 `museframe-api` 已停（**只停不删**），数据与镜像保留到 **2026-10-11** 作回滚兜底。不要在这里改功能，也不要删它 |
-| 仓库根的 `Dockerfile` / `docker-compose.yml` / `package.json` | 属于已退役的 Node 栈，同样保留到 10-11。生产用的是 `server-go/deploy/` 那一套 |
+| `server-go/` | 源码保留（Go 1.26 + PostgreSQL）；**生产服务已退役，容器已移除**。后端源码改动仍写在这里，但不表示生产在运行 |
+| `web/` | 静态站点源码保留；主页 HTTP 200。Foundation 是独立服务，旧线上后台/API 未由此恢复 |
+| `server/` | 🔴 **历史** Node + SQLite 实现。生产已完成退役且旧后端容器已移除；不要将其当作服务或回滚点 |
+| 仓库根的 `Dockerfile` / `docker-compose.yml` / `package.json` | 历史 Node 栈文件，不用于当前生产部署 |
 
-**新功能一律进 `server-go/`。** 往 `server/` 里加代码等于往一个不接流量的进程里加代码。
+**新功能一律进 `server-go/`。** 往 `server/` 里加代码等于往一个不接流量的进程里加代码；不要把这条源码维护规则误读成生产后端仍在运行。
 
 ---
 
