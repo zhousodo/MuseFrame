@@ -1,3 +1,6 @@
+> **生产状态更新（2026-11-15）**：MuseFrame 后端已退役，生产后端容器已移除；`https://museframe.lenscript.cn/v1/health` 返回 **410**。MuseFrame 静态首页仍保留且返回 **200**。Foundation 是独立服务；其公开路由不证明 MuseFrame 产品内容、账户或生成 API 已迁入/可用。此前本文件中关于旧后端部署、健康检查、回滚和密钥管理的命令为历史操作说明，当前不得据此操作或宣称服务恢复。详见[Foundation 生产服务清单（2026-11-14）](https://github.com/zhousodo/App-foundation/blob/develop/docs/ops/production-service-inventory-2026-11-14.md)与[退役滚动更新 PR #81](https://github.com/zhousodo/App-foundation/pull/81)。
+
+---
 # MuseFrame 运维手册（留影）
 
 发版看 [`DEPLOY.md`](DEPLOY.md)；运营后台逐页说明看
